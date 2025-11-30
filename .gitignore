@@ -1,0 +1,19 @@
+# 忽略编译生成目录
+build/
+bin/
+lib/
+
+# 忽略系统文件
+.DS_Store
+
+# 忽略 VSCode 配置 (可选，如果你想保留个人配置就删掉这行)
+.vscode/
+
+# 忽略 CMake 临时文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# 忽略 ffmpeg 工具包（太大了）
+tools/ffmpeg/
