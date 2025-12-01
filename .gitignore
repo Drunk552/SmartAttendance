@@ -1,0 +1,16 @@
+# 编译生成文件
+build/
+bin/
+lib/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# 系统&编辑器文件
+.DS_Store
+.vscode/
+
+# 项目大文件（必须忽略）
+tools/ffmpeg/
+libs/lvgl/third_party/lvgl-9.3.0.zip
