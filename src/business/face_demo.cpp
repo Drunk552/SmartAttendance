@@ -9,76 +9,111 @@
 #include <string>
 #include <filesystem>
 #include <algorithm>
-#include "face_demo.h" // 记得引入头文件
-#include "lvgl.h" // 如果将来要把图像转给 LVGL，这里以后需要加逻辑
+#include "face_demo.h" // 人脸识别演示模块的头文件
+#include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 
 using namespace cv;
 using namespace cv::face;
 using std::cout; using std::endl;
 
 // ==========================================
-// 1. 全局静态变量 (原本在 main 中的局部变量)
+// 1. 全局静态变量 原本在 main 中的局部变量)
 // ==========================================
-// 这些变量必须提出来，否则每次函数调用结束它们就消失了
-static VideoCapture cap;
-static CascadeClassifier face_cas;
-static Ptr<LBPHFaceRecognizer> recog;
-// [修改前]
-// static std::vector<Mat> samples;
-//修改后
-static std::vector<Mat> face_samples;
-static std::vector<int> labels;
-static std::vector<std::string> names = {"user1","user2","user3","user4","user5"};
-static int current_id = 0;
-static bool trained = false;
-static bool show_recognition = false;
+
+static VideoCapture cap;// 视频捕获对象，用于读取摄像头或视频流
+static CascadeClassifier face_cas;// Haar级联分类器，用于人脸检测
+static Ptr<LBPHFaceRecognizer> recog; // LBPH人脸识别器对象
+static std::vector<Mat> face_samples;// 存储所有人脸训练样本（预处理后的灰度图像）
+static std::vector<int> labels;// 对应的标签ID（与face_samples一一对应）
+static std::vector<std::string> names = {"user1","user2","user3","user4","user5"};// 用户名映射
+static int current_id = 0;// 当前选中的用户ID（用于采集样本）
+static bool trained = false;// 标识是否已完成训练
+static bool show_recognition = false;// 控制是否显示识别结果
 
 // ==========================================
 // 2. 辅助函数 (保持不变)
 // ==========================================
 // 级联文件查找
+
+/**
+ * @brief 查找Haar级联分类器XML文件的路径
+ * @return 找到的文件路径，如果找不到则返回空字符串
+ * @note 在多个预设路径中查找人脸检测器文件
+ */
+
 static std::string find_cascade() {
     namespace fs = std::filesystem;
     std::vector<std::string> paths = {
-        "./haarcascade_frontalface_default.xml",
-        "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
-        "/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml"
+        "./haarcascade_frontalface_default.xml",// 当前目录
+        "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",// OpenCV4路径
+        "/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml",//OpenCV路径
     };
     for (auto &p : paths) if (fs::exists(p)) return p;
     return "";
 }
 
+/**
+ * @brief 在图像中检测人脸
+ * @param frame 输入图像
+ * @param face 输出参数，检测到的人脸矩形区域
+ * @param cas 人脸检测器（Haar级联分类器）
+ * @return true-检测到人脸，false-未检测到人脸
+ * @note 检测最大的人脸区域，适合单人脸场景
+ */
+
 static bool detect_face(const Mat& frame, Rect& face, CascadeClassifier& cas) {
-    std::vector<Rect> faces;
-    Mat gray; cvtColor(frame, gray, COLOR_BGR2GRAY);
-    equalizeHist(gray, gray);
-    cas.detectMultiScale(gray, faces, 1.1, 3, 0, Size(80,80));
-    if (faces.empty()) return false;
+    std::vector<Rect> faces;// 存储所有检测到的人脸
+    Mat gray; cvtColor(frame, gray, COLOR_BGR2GRAY);// 转为灰度图（Haar检测需要灰度图）
+    equalizeHist(gray, gray);// 直方图均衡化，增强对比度
+    cas.detectMultiScale(gray, faces, 1.1, 3, 0, Size(80,80));// 检测人脸，参数：1.1-缩放因子，3-最小邻居数，0-标志，Size(80,80)-最小人脸尺寸
+    if (faces.empty()) return false;// 未检测到人脸
     face = *std::max_element(faces.begin(), faces.end(),
-                             [](const Rect& a, const Rect& b){return a.area()<b.area();});
+                             [](const Rect& a, const Rect& b){return a.area()<b.area();}); // 选择面积最大的人脸（假设场景中只有一个人）
     return true;
 }
 
+/**
+ * @brief 预处理人脸图像
+ * @param frame 原始图像
+ * @param roi 人脸区域矩形
+ * @return 预处理后的人脸图像（128x128灰度图，直方图均衡化）
+ * @note 包括裁剪边界、尺寸归一化、直方图均衡化
+ */
+
 static Mat preprocess_face(const Mat& frame, const Rect& roi) {
-    Mat gray, crop = frame(roi).clone();
-    cvtColor(crop, gray, COLOR_BGR2GRAY);
+    Mat gray, crop = frame(roi).clone();// 克隆人脸区域，避免修改原图
+    cvtColor(crop, gray, COLOR_BGR2GRAY);// 转为灰度图
     const int w = crop.cols, h = crop.rows;
-    const int mx = std::max(0, w / 20);   // 5%
-    const int my = std::max(0, h / 20);   // 5%
+    const int mx = std::max(0, w / 20);   // 计算5%的边界（左右）
+    const int my = std::max(0, h / 20);   // 计算5%的边界（上下）
     const int x  = mx, y = my;
-    const int ww = std::max(1, w - 2 * mx);
-    const int hh = std::max(1, h - 2 * my);
-    Rect tight = (Rect(x, y, ww, hh) & Rect(0, 0, w, h));
+    const int ww = std::max(1, w - 2 * mx);//裁剪后的宽度
+    const int hh = std::max(1, h - 2 * my);//裁剪后的高度
+    Rect tight = (Rect(x, y, ww, hh) & Rect(0, 0, w, h));// 确保不越界
     Mat face = gray(tight);
-    resize(face, face, Size(128, 128));
-    equalizeHist(face, face);
+    resize(face, face, Size(128, 128)); // 统一尺寸为128x128
+    equalizeHist(face, face);// 直方图均衡化，增强对比度
     return face;
 }
 
 // —— 新增：通过 GStreamer 打开 SDP 推流 ——
 // 返回已打开的 VideoCapture；失败则返回未打开的对象
+
+/**
+ * @brief 通过GStreamer打开SDP推流
+ * @param sdp_path SDP文件路径
+ * @return 已打开的VideoCapture对象，如果失败则返回未打开的对象
+ * @note 用于接收网络视频流，配置为低延迟模式
+ */
+
 static VideoCapture open_sdp_stream(const std::string& sdp_path) {
-    // 低延迟、只取最新帧
+    // GStreamer管道配置：
+    // filesrc: 从文件读取SDP描述
+    // sdpdemux: 解析SDP，提取媒体流
+    // rtpjitterbuffer: 抖动缓冲，latency=0表示最低延迟
+    // rtpvrawdepay: RTP载荷解析
+    // videoconvert: 格式转换
+    // appsink: 输出到OpenCV，配置为异步、丢弃旧帧、只保留最新一帧
     std::string pipe =
         "filesrc location=" + sdp_path + " ! sdpdemux "
         "! rtpjitterbuffer latency=0 "
@@ -86,28 +121,35 @@ static VideoCapture open_sdp_stream(const std::string& sdp_path) {
         "! video/x-raw,format=BGR "
         "! appsink sync=false drop=true max-buffers=1";
 
-    VideoCapture cap(pipe, cv::CAP_GSTREAMER);
+    VideoCapture cap(pipe, cv::CAP_GSTREAMER);// 使用GStreamer后端
     return cap;
 }
 
 // ==========================================
 // 3. 业务初始化函数 (替代 main 的前半部分)
 // ==========================================
+
+/**
+ * @brief 业务模块初始化函数
+ * @return true-初始化成功，false-初始化失败
+ * @note 初始化所有组件：人脸检测器、视频源、识别器
+ */
+
 bool business_init() {
-    // 1) 加载人脸检测器
+    //加载人脸检测器（Haar级联分类器）
     std::string cascade_path = find_cascade();
     if (cascade_path.empty() || !face_cas.load(cascade_path)) {
         std::cerr << "找不到/加载失败: haarcascade_frontalface_default.xml\n";
         return false;
     }
 
-    // 2) 打开视频输入 (默认尝试打开 SDP)
+    //打开视频输入 (默认尝试打开 SDP)
     std::string sdp = "/tmp/yuyv.sdp"; // 硬编码默认路径，或从配置读取
-    cap = open_sdp_stream(sdp);
+    cap = open_sdp_stream(sdp);// 尝试打开GStreamer流
     
     if (!cap.isOpened()) {
         std::cerr << "[WARN] 打不开 SDP 推流，回退到摄像头 0。\n";
-        cap.open(0);
+        cap.open(0);// 回退到默认摄像头（索引0）
     }
     
     if (!cap.isOpened()) {
@@ -115,15 +157,15 @@ bool business_init() {
         return false;
     }
 
-    // 3) 初始化识别器
-    recog = LBPHFaceRecognizer::create(1,8,8,8, 80.0);
+    //初始化LBPH人脸识别器
+    recog = LBPHFaceRecognizer::create(1,8,8,8, 80.0);// 参数：半径=1, 邻域=8, 网格X=8, 网格Y=8, 阈值=80.0
     
     // 初始化变量状态
-    current_id = 0;
-    trained = false;
-    show_recognition = false;
-    face_samples.clear();
-    labels.clear();
+    current_id = 0;// 默认选择第一个用户
+    trained = false;// 未训练状态
+    show_recognition = false;// 不显示识别结果
+    face_samples.clear();// 清空样本
+    labels.clear();// 清空标签
 
     cout << "业务模块初始化成功。操作说明：\n"
          << "  [1~5] 切换ID, [c] 采集, [t] 训练, [r] 识别开关, [q] 退出程序\n";
@@ -131,35 +173,76 @@ bool business_init() {
     return true;
 }
 
+/**
+ * @brief 保存图像到数据层
+ * @param image 要保存的图像（灰度图或彩色图）
+ * @return true-保存成功，false-保存失败
+ * @note 这只是示例函数，需要根据实际数据层接口实现
+ */
+
+ bool data_saveImage(const cv::Mat& image) {
+    if(image.empty()){
+        std::cerr << "[ERR] 无法保存,图像为空\n";
+        return false;
+     } 
+
+     time_t now = time(0);
+     struct  tm* timeinfo = localtime(&now);
+     char filename[100];
+     strftime(filename, sizeof(filename), "face_%Y%m%d_%H%M%S.jpg", timeinfo);// 生成时间戳文件名
+     
+    // 添加用户信息到文件名
+    std::string final_filename = 
+        "user" + std::to_string(current_id) + "_" + 
+         names[current_id] + "_" + filename;
+     
+     // 保存图像（这里只是示例，实际应该调用数据层的API）
+    bool success = imwrite(final_filename, image); // 使用OpenCV保存图像
+     
+    if (success) {
+        std::cout << "[INFO] 图像已保存: " << filename << std::endl;// 成功保存 
+        } 
+    else{
+        std :: cerr << "[ERR] 图像保存失败: " << filename << std::endl;// 保存失败 
+        }
+    return success;
+}
+ 
 // ==========================================
 // 4. 业务单次运行函数 (替代 main 的 for(;;) 循环体)
 // ==========================================
+
+/**
+ * @brief 业务单次运行函数（处理一帧图像）
+ * @note 每调用一次处理一帧，包含：读取、检测、识别、显示、键盘响应
+ */
 void business_run_once() {
-    Mat frame;
-    if (!cap.isOpened()) return;
+    Mat frame;//存储当前帧
+    if (!cap.isOpened()) return;// 安全检查：确保视频捕获已打开
 
     // 读取一帧
     if (!cap.read(frame) || frame.empty()) {
-        return;
+        return;// 读取失败或空帧，直接返回
     }
 
     // 检测人脸
-    Rect face;
+    Rect face;// 存储检测到的人脸区域
     bool has = detect_face(frame, face, face_cas);
-    if (has) rectangle(frame, face, Scalar(0,255,0), 2);
+    if (has) rectangle(frame, face, Scalar(0,255,0), 2);// 在图像上绘制绿色矩形框
 
     // 识别逻辑
     if (show_recognition && trained && has) {
-        Mat f = preprocess_face(frame, face);
-        int pred_label = -1; double conf = 0.0;
-        recog->predict(f, pred_label, conf);
+        Mat f = preprocess_face(frame, face);// 预处理人脸图像
+        int pred_label = -1; double conf = 0.0;// 预测的标签ID
+        recog->predict(f, pred_label, conf);// 使用LBPH识别器进行预测
 
-        std::string text;
+        std::string text;// 显示文本
         if (pred_label >= 0) {
-            text = (conf <= 80.0 ? names[pred_label] : "unknown");
+            text = (conf <= 80.0 ? names[pred_label] : "unknown"); // 置信度阈值80.0：小于等于80认为是可信识别，大于80认为是unknown
             text += "  dist=" + cv::format("%.1f", conf);
-        } else text = "unknown";
+        } else text = "unknown";// 预测失败
 
+        // 在人脸上方显示识别结果
         putText(frame, text, Point(face.x, std::max(0, face.y-10)),
                 FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0,255,0), 2);
     }
@@ -168,7 +251,7 @@ void business_run_once() {
     std::string hint = "ID=" + names[current_id] + " (1-5, c, t, r)";
     putText(frame, hint, Point(10, 30), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(255,255,255), 2);
 
-    // 显示窗口 (注意：在最终产品中，这里应该把 frame 转给 LVGL 显示)
+    // 显示窗口 （注意：在最终产品中，这里应该把frame转给LVGL显示，目前使用OpenCV窗口用于调试）
     imshow("LBPH Face Demo (Integration)", frame);
 
     // 处理键盘输入 (仅用于 Phase01 调试)
@@ -180,25 +263,28 @@ void business_run_once() {
     if (key >= '1' && key <= '5') { 
         current_id = key - '1'; 
         cout << "当前ID -> " << names[current_id] << endl; 
-    }
+    } // 切换当前用户ID（1对应user1，5对应user5）
     else if (key == 'c') {
-        if (!has) { cout << "未检测到人脸，无法采集。\n"; }
+        if (!has) { cout << "未检测到人脸，无法采集。\n"; }// 采集样本
         else {
-            Mat f = preprocess_face(frame, face);
-            face_samples.push_back(f); labels.push_back(current_id);
+            Mat f = preprocess_face(frame, face);// 预处理人脸并添加到训练集
+            face_samples.push_back(f);// 添加样本图像
+            labels.push_back(current_id);// 添加对应的标签
             cout << "采集: " << names[current_id] << "（总样本=" << face_samples.size() << "）\n";
         }
     } else if (key == 't') {
         if (face_samples.size() < 2) { cout << "样本过少，至少多采几张。\n"; }
         else {
-            recog->train(face_samples, labels); trained = true;
+            recog->train(face_samples, labels); // 训练LBPH识别器
+            trained = true;// 标记为已训练
             cout << "训练完成。按 [r] 开启识别显示。\n";
-        }
+        }// 训练模型
     } else if (key == 'r') {
         if (!trained) cout << "尚未训练，先按 [t]。\n";
         else {
-            show_recognition = !show_recognition;
+            show_recognition = !show_recognition;// 切换状态
             cout << "识别显示 = " << (show_recognition ? "ON" : "OFF") << endl;
         }
-    }
+    }// 切换识别显示
 }
+
