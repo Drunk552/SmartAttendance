@@ -286,28 +286,36 @@ lv_style_init(&st_symbol);
 lv_style_set_text_font(&st_symbol, LV_FONT_DEFAULT); /* 内置默认字体，含符号
 */
 }
-/* ===== main ===== */
-//[修改1]将main改为ui_init,供外部调用
+/* 
+ * 团队模板文件：ui_app.c
+ * 已注释所有重复接口，避免与ui_app.cpp冲突
+ */
+
+// 注释所有函数实现，仅保留空声明（避免重复定义）
+void ui_init(void);
+
+// 以下是原代码的完整注释（确保无语法错误）
+/*
+// 原ui_init函数（已注释，避免与ui_app.cpp重复）
 void ui_init(void)
 {
-lv_init();
-lv_display_t *disp = lv_sdl_window_create(240, 320);
-(void)disp;
-lv_sdl_keyboard_create();
-init_fonts(); /* 先准备字体样式，再创建界面，逐个给到需要的对象 */
-screens[0] = create_main_screen(0);
-screens[1] = create_list_screen(1);
-screens[2] = create_controls_screen(2);
-current_screen_idx = 0;
-lv_screen_load(screens[current_screen_idx]);
-//[修改2]删除了原本这里的while(1)循环
-//这里的任务只是“初始化”，干完活就返回，让主程序继续往下跑
-/*
-while (1)
-{
-uint32_t ms = lv_timer_handler();
-usleep(ms * 1000);
-}
-return 0;
-*/
-}
+    lv_init();
+    lv_display_t *disp = lv_sdl_window_create(240, 320);
+    (void)disp;
+    lv_keyboard_create();
+    init_fonts(); // 先准备字体样式，再创建界面，逐个给到需要的对象
+    screens[0] = create_main_screen(0);
+    screens[1] = create_list_screen(1);
+    screens[2] = create_controls_screen(2);
+    current_screen_idx = 0;
+    // lv_screen_load(screens[current_screen_idx]);#为方便整合而注释掉/
+
+    // while(1)循环（已注释）
+    /*
+    while (1)
+    {
+        uint32_t ms = lv_timer_handler();
+        usleep(ms * 1000);
+    }
+    
+}*/
