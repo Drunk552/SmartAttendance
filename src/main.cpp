@@ -10,6 +10,7 @@
 // 2. 引入我们自己的模块头文件 (验证内部模块链接是否正确)
 #include "ui/ui_app.h"          // 对应 src/ui/ui_app.c
 #include "business/face_demo.h" // 对应 src/business/face_demo.cpp
+#include "data/db_storage.h"  // <--- [12.2日新增] 引入数据层头文件
 
 int main() {
     std::cout << "==========================================" << std::endl;
@@ -33,6 +34,28 @@ int main() {
               << lv_version_minor() << "." 
               << lv_version_patch() << std::endl;
 
+    std::cout << "------------------------------------------" << std::endl;
+
+    //[12.2新增]Epic 2 数据层独立测试（验证标准：能通过独立测试）
+    //----------------------------------------------------------
+    std::cout<< ">>>[Test] 初始化数据库..." << std::endl;
+    //1.测试初始化接口
+    if(data_init()){
+        std::cout << "[OK] 数据库连接成功" << std::endl;
+
+        //2.创建一个测试图像（纯黑色 100x100）
+        cv::Mat test_img = cv::Mat::zeros(100,100,CV_8UC3);
+
+        std::cout << ">>>[Test] 尝试保存测试图像..." << std::endl;
+        //3.测试保存接口
+        if(data_saveImage(test_img)){
+            std::cout << "[OK] data_saveImage 测试通过！" << std::endl;
+        } else {
+            std::cerr << "[Failed] data_saveImage 测试失败！" << std::endl;
+        }
+    } else {
+        std::cerr << "[Failed] 数据库初始化失败！" << std::endl;
+    }
     std::cout << "------------------------------------------" << std::endl;
 
     // ---------------------------------------------------------
@@ -74,5 +97,8 @@ int main() {
         usleep(time_till_next * 1000); 
     }
 
+    // 程序退出前清理 (虽然 while(1) 永远不会到这，但这是好习惯)
+    data_close();
+    
     return 0;
 }
