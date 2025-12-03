@@ -58,7 +58,7 @@ file(GLOB_RECURSE SRC_FILES
     "src/ui/*.c" 
     "src/ui/*.cpp"
     "src/business/*.cpp"
-    "src/data/*.cpp"
+    "src/data/db_storage.cpp"     # <--- [12.2日新增] 确保这一行被包含
 )
 
 add_executable(attendance_app ${SRC_FILES})
