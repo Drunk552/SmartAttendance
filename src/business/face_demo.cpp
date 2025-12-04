@@ -11,13 +11,14 @@
 #include <algorithm>
 #include "face_demo.h" // 人脸识别演示模块的头文件
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
+#include "db_storage.h"//数据层头文件
 
 using namespace cv;
 using namespace cv::face;
 using std::cout; using std::endl;
 
 // ==========================================
-// 1. 全局静态变量 原本在 main 中的局部变量)
+//全局静态变量 原本在 main 中的局部变量)
 // ==========================================
 
 static VideoCapture cap;// 视频捕获对象，用于读取摄像头或视频流
@@ -29,11 +30,6 @@ static std::vector<std::string> names = {"user1","user2","user3","user4","user5"
 static int current_id = 0;// 当前选中的用户ID（用于采集样本）
 static bool trained = false;// 标识是否已完成训练
 static bool show_recognition = false;// 控制是否显示识别结果
-
-// ==========================================
-// 2. 辅助函数 (保持不变)
-// ==========================================
-// 级联文件查找
 
 /**
  * @brief 查找Haar级联分类器XML文件的路径
@@ -68,7 +64,7 @@ static bool detect_face(const Mat& frame, Rect& face, CascadeClassifier& cas) {
     cas.detectMultiScale(gray, faces, 1.1, 3, 0, Size(80,80));// 检测人脸，参数：1.1-缩放因子，3-最小邻居数，0-标志，Size(80,80)-最小人脸尺寸
     if (faces.empty()) return false;// 未检测到人脸
     face = *std::max_element(faces.begin(), faces.end(),
-                             [](const Rect& a, const Rect& b){return a.area()<b.area();}); // 选择面积最大的人脸（假设场景中只有一个人）
+    [](const Rect& a, const Rect& b){return a.area()<b.area();}); // 选择面积最大的人脸（假设场景中只有一个人）
     return true;
 }
 
@@ -96,9 +92,6 @@ static Mat preprocess_face(const Mat& frame, const Rect& roi) {
     return face;
 }
 
-// —— 新增：通过 GStreamer 打开 SDP 推流 ——
-// 返回已打开的 VideoCapture；失败则返回未打开的对象
-
 /**
  * @brief 通过GStreamer打开SDP推流
  * @param sdp_path SDP文件路径
@@ -124,10 +117,6 @@ static VideoCapture open_sdp_stream(const std::string& sdp_path) {
     VideoCapture cap(pipe, cv::CAP_GSTREAMER);// 使用GStreamer后端
     return cap;
 }
-
-// ==========================================
-// 3. 业务初始化函数 (替代 main 的前半部分)
-// ==========================================
 
 /**
  * @brief 业务模块初始化函数
@@ -174,43 +163,152 @@ bool business_init() {
 }
 
 /**
- * @brief 保存图像到数据层
- * @param image 要保存的图像（灰度图或彩色图）
- * @return true-保存成功，false-保存失败
- * @note 这只是示例函数，需要根据实际数据层接口实现
+ * @brief 将BGR图像转换为灰度图像
+ * @param inputImage 输入图像（BGR或BGRA格式）
+ * @return 灰度图像
+ * @note Epic 3要求实现的独立函数
+ */
+cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
+    if (inputImage.empty()) {
+        std::cerr << "[Business] 输入图像为空，无法转换灰度" << std::endl;
+        return cv::Mat();// 返回空矩阵
+    }
+    
+    cv::Mat gray;
+    if (inputImage.channels() == 3) {
+        cvtColor(inputImage, gray, cv::COLOR_BGR2GRAY);
+    }
+     else if (inputImage.channels() == 4) {
+        cvtColor(inputImage, gray, cv::COLOR_BGRA2GRAY);
+    } 
+    else if (inputImage.channels() == 1) {
+        inputImage.copyTo(gray);// 已经是灰度图，直接复制
+    } 
+    else {
+        std::cerr << "[Business] 不支持的图像通道数: " << inputImage.channels() << std::endl;
+        return cv::Mat();
+    }
+    
+    return gray;
+}
+
+/**
+ * @brief 请求业务层处理并保存图像
+ * @param inputImage - 从摄像头捕获的原始图像（BGR格式，与OpenCV一致）
+ * @return bool - 处理及保存是否成功
+ * @note 严格遵循接口定义 2.2.1：UI层 -> 业务层
  */
 
- bool data_saveImage(const cv::Mat& image) {
-    if(image.empty()){
-        std::cerr << "[ERR] 无法保存,图像为空\n";
+bool business_processAndSaveImage(const cv::Mat& inputImage) {
+    if (inputImage.empty()) {
+        std::cerr << "[Business] 输入图像为空，无法处理和保存。" << std::endl;
         return false;
-     } 
+    }//校验输入图像有效性
 
-     time_t now = time(0);
-     struct  tm* timeinfo = localtime(&now);
-     char filename[100];
-     strftime(filename, sizeof(filename), "face_%Y%m%d_%H%M%S.jpg", timeinfo);// 生成时间戳文件名
-     
-    // 添加用户信息到文件名
-    std::string final_filename = 
-        "user" + std::to_string(current_id) + "_" + 
-         names[current_id] + "_" + filename;
-     
-     // 保存图像（这里只是示例，实际应该调用数据层的API）
-    bool success = imwrite(final_filename, image); // 使用OpenCV保存图像
-     
-    if (success) {
-        std::cout << "[INFO] 图像已保存: " << filename << std::endl;// 成功保存 
-        } 
-    else{
-        std :: cerr << "[ERR] 图像保存失败: " << filename << std::endl;// 保存失败 
-        }
-    return success;
+    cv::Rect face_roi;  // 存储检测到的人脸区域
+    bool face_detected = detect_face(inputImage, face_roi, face_cas);
+    if (!face_detected) {
+        std::cerr << "[Business] 未检测到人脸，无法保存图像。" << std::endl;
+        return false;
+    }//检测人脸
+
+    //输出人脸位置
+    std::cout << "[Business] 检测到人脸，位置: ("
+              << face_roi.x << "," << face_roi.y << ") "
+              << face_roi.width << "x" << face_roi.height << std::endl;
+
+    cv::Mat preprocessed_face = preprocess_face(inputImage, face_roi);
+    if (preprocessed_face.empty()) { 
+        std::cerr << "[Business] 人脸预处理失败，图像为空。" << std::endl;
+        return false;
+    }//预处理人脸图像
+
+    //添加到样本集合和标签
+    face_samples.push_back(preprocessed_face);
+    labels.push_back(current_id);
+
+    //输出样本信息
+    if (current_id >= names.size()) {
+        std::cerr << "[Business] 警告：当前ID(" << current_id << ")超出用户名映射范围！" << std::endl;
+    } else {
+        std::cout << "[Business] 人脸处理完成，用户: " << names[current_id]
+                  << "，总样本数: " << face_samples.size() << std::endl;
+    }
+
+    //保存图像到数据层
+    bool save_success = data_saveImage(preprocessed_face);
+    if (save_success) {
+        std::cout << "[Business] 图像保存成功。" << std::endl;
+        return true;
+    } else {
+        std::cerr << "[Business] 图像保存失败。" << std::endl;
+        return false;
+    }
 }
- 
-// ==========================================
-// 4. 业务单次运行函数 (替代 main 的 for(;;) 循环体)
-// ==========================================
+
+/**
+ * @brief 测试business_processAndSaveImage接口
+ * @param imagePath 测试图像路径
+ * @return 测试是否通过
+ */
+bool test_business_processAndSaveImage(const std::string& imagePath) {
+    std::cout << "=== 开始测试business_processAndSaveImage接口 ===" << std::endl;
+        
+    cv::Mat testImage = cv::imread(imagePath);
+    if (testImage.empty()) {
+        std::cerr << "测试失败：无法加载测试图像 " << imagePath << std::endl;
+        return false;
+    }//读取本地图片
+
+    std::cout << "测试图像加载成功，尺寸: " << testImage.cols << "x" << testImage.rows << std::endl;
+    
+    std::cout << "正在调用business_processAndSaveImage接口..." << std::endl;
+    bool result = business_processAndSaveImage(testImage);//调用业务层接口
+    
+    if (result) {
+        std::cout << " 业务层接口测试通过" << std::endl;
+    } 
+    else {
+        std::cerr << "业务层接口测试失败" << std::endl;
+    }// 验证结果
+    
+    std::cout << "=== 测试完成 ===" << std::endl;
+    return result;
+}
+
+/**
+ * @brief 测试convertToGrayscale函数
+ * @param imagePath 测试图像路径
+ * @return 测试是否通过
+ */
+bool test_convertToGrayscale(const std::string& imagePath) {
+    std::cout << "=== 开始测试convertToGrayscale函数 ===" << std::endl;
+    
+    cv::Mat testImage = cv::imread(imagePath);
+    if (testImage.empty()) {
+        std::cerr << "测试失败：无法加载测试图像" << std::endl;
+        return false;
+    }
+
+    cv::Mat grayImage = convertToGrayscale(testImage);
+    if (grayImage.empty()) {
+        std::cerr << "BGR转灰度测试失败" << std::endl;
+        return false;
+    } // 测试BGR图像转换
+
+    std::cout << "BGR转灰度测试成功，灰度图尺寸: " << grayImage.cols << "x" << grayImage.rows << "，通道数: " << grayImage.channels() << std::endl;
+
+    cv::Mat grayCopy = convertToGrayscale(grayImage);
+    if (grayCopy.empty()) {
+        std::cerr << "灰度图转灰度测试失败" << std::endl;
+        return false;
+    }// 测试灰度图像转换
+
+    std::cout << "灰度图转灰度测试成功" << std::endl;
+  
+    std::cout << "=== 测试完成 ===" << std::endl;
+    return true;
+}
 
 /**
  * @brief 业务单次运行函数（处理一帧图像）
