@@ -192,8 +192,6 @@ int main() {
         std::cout << "[OK] 业务层初始化完成" << std::endl;
     }
 
-    std::cout << ">>> 系统主循环启动" << std::endl;
-
     if(!business_init()) {
         std::cerr << "[Warning] 业务层初始化遇到问题 (如摄像头未连接)，但在模拟环境中继续运行..." << std::endl;
         return -1;
