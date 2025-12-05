@@ -223,6 +223,12 @@ bool business_processAndSaveImage(const cv::Mat& inputImage) {
         return false;
     }//预处理人脸图像
 
+    cv::Mat gray_face = convertToGrayscale(inputImage(face_roi).clone());
+    if (gray_face.empty()) {
+        std::cerr << "[Business] 灰度转换失败。" << std::endl;
+        return false;
+    }//调用灰度函数
+
     //添加到样本集合和标签
     face_samples.push_back(preprocessed_face);
     labels.push_back(current_id);
