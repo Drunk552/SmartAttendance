@@ -10,7 +10,72 @@
 // 2. 引入我们自己的模块头文件 (验证内部模块链接是否正确)
 #include "ui/ui_app.h"          // 对应 src/ui/ui_app.c
 #include "business/face_demo.h" // 对应 src/business/face_demo.cpp
-#include "data/db_storage.h"  // <--- [12.2日新增] 引入数据层头文件
+#include "data/db_storage.h"  // 引入数据层头文件
+
+
+/**
+ * @brief 测试business_processAndSaveImage接口
+ * @param imagePath 测试图像路径
+ * @return 测试是否通过
+ */
+bool test_business_processAndSaveImage(const std::string& imagePath) {
+    std::cout << "=== 开始测试business_processAndSaveImage接口 ===" << std::endl;
+        
+    cv::Mat testImage = cv::imread(imagePath);
+    if (testImage.empty()) {
+        std::cerr << "测试失败：无法加载测试图像 " << imagePath << std::endl;
+        return false;
+    }//读取本地图片
+
+    std::cout << "测试图像加载成功，尺寸: " << testImage.cols << "x" << testImage.rows << std::endl;
+    
+    std::cout << "正在调用business_processAndSaveImage接口..." << std::endl;
+    bool result = business_processAndSaveImage(testImage);//调用业务层接口
+    
+    if (result) {
+        std::cout << " 业务层接口测试通过" << std::endl;
+    } 
+    else {
+        std::cerr << "业务层接口测试失败" << std::endl;
+    }// 验证结果
+    
+    std::cout << "=== 测试完成 ===" << std::endl;
+    return result;
+}
+
+/**
+ * @brief 测试convertToGrayscale函数
+ * @param imagePath 测试图像路径
+ * @return 测试是否通过
+ */
+bool test_convertToGrayscale(const std::string& imagePath) {
+    std::cout << "=== 开始测试convertToGrayscale函数 ===" << std::endl;
+    
+    cv::Mat testImage = cv::imread(imagePath);
+    if (testImage.empty()) {
+        std::cerr << "测试失败：无法加载测试图像" << std::endl;
+        return false;
+    }
+
+    cv::Mat grayImage = convertToGrayscale(testImage);
+    if (grayImage.empty()) {
+        std::cerr << "BGR转灰度测试失败" << std::endl;
+        return false;
+    } // 测试BGR图像转换
+
+    std::cout << "BGR转灰度测试成功，灰度图尺寸: " << grayImage.cols << "x" << grayImage.rows << "，通道数: " << grayImage.channels() << std::endl;
+
+    cv::Mat grayCopy = convertToGrayscale(grayImage);
+    if (grayCopy.empty()) {
+        std::cerr << "灰度图转灰度测试失败" << std::endl;
+        return false;
+    }// 测试灰度图像转换
+
+    std::cout << "灰度图转灰度测试成功" << std::endl;
+  
+    std::cout << "=== 测试完成 ===" << std::endl;
+    return true;
+}
 
 int main() {
     std::cout << "==========================================" << std::endl;
@@ -72,14 +137,36 @@ int main() {
     if (!business_init()) {
         std::cerr << "[Warning] 业务层初始化遇到问题 (如摄像头未连接)，但在模拟环境中继续运行..." << std::endl;
         // 在正式产品中可能需要 return -1; 但开发阶段允许继续跑 UI
-    } else {
+    }
+    else {
         std::cout << "[OK] 业务层初始化完成" << std::endl;
     }
+
+    std::cout << ">>> 系统主循环启动" << std::endl;
+
+    if(!business_init()) {
+        std::cerr << "[Warning] 业务层初始化遇到问题 (如摄像头未连接)，但在模拟环境中继续运行..." << std::endl;
+        return -1;
+    } //确保业务层初始化成功
+
+    std::string testImagePath = "./test_images/test1.jpg";//测试图像路径
+    
+    bool testResult1 = test_business_processAndSaveImage(testImagePath);//测试business_processAndSaveImage接口
+    bool testResult2 = test_convertToGrayscale(testImagePath);//测试convertToGrayscale函数
+
+    if(testResult1 && testResult2) {
+     std::cout << "[All Tests Passed] 业务层功能测试全部通过" << std::endl;//所有测试通过
+    }
+
+    else {
+        std::cerr << "[Some Tests Failed] 业务层功能测试存在失败项" << std::endl;//部分测试未通过  
+        if (! testResult1)std::cerr << " - business_processAndSaveImage测试未通过" << std::endl;//测试business_processAndSaveImage接口
+        if (! testResult2)std::cerr << " - convertToGrayscale测试未通过" << std::endl;//测试convertToGrayscale函数
+}
 
     // ---------------------------------------------------------
     // 第三步：进入主循环 (The Super Loop)
     // ---------------------------------------------------------
-    std::cout << ">>> 系统主循环启动" << std::endl;
     
     while (1) {
         // 1. 驱动 LVGL (UI刷新、动画、输入响应)
@@ -99,6 +186,6 @@ int main() {
 
     // 程序退出前清理 (虽然 while(1) 永远不会到这，但这是好习惯)
     data_close();
-    
+
     return 0;
 }

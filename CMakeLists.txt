@@ -49,6 +49,13 @@ target_link_libraries(lvgl PUBLIC
     Freetype::Freetype
 )
 
+# 检查 db_storage.h 是否存在
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/data/db_storage.h")
+    message(STATUS "[SUCCESS] db_storage.h found: ${CMAKE_SOURCE_DIR}/src/data/db_storage.h")
+else()
+    message(FATAL_ERROR "[ERROR] db_storage.h NOT found! Check path: ${CMAKE_SOURCE_DIR}/src/data/")
+endif()
+
 # ==========================================
 # 4. 主程序配置
 # ==========================================
@@ -67,9 +74,14 @@ add_executable(attendance_app ${SRC_FILES})
 target_include_directories(attendance_app PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/libs/lvgl
-    
+    ${CMAKE_SOURCE_DIR}/src/data
     # [新增这一行] 添加 lv_freetype.h 所在的目录
+    ${CMAKE_SOURCE_DIR}/libs/lvgl
     ${CMAKE_SOURCE_DIR}/libs/lvgl/src/libs/freetype
+
+     #添加db_storage.h
+    ${PROJECT_SOURCE_DIR}/src/data 
+    ${PROJECT_SOURCE_DIR}/src/business
 
     ${SDL2_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}

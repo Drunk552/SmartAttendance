@@ -10,14 +10,11 @@ extern "C" {
 
 bool business_init();// 初始化函数
 bool business_processAndSaveImage(const cv::Mat& inputImage);//请求业务层处理并保存函数声明
-bool test_business_processAndSaveImage(const std::string& imagePath);//测试business_processAndSaveImage接口声明
-bool test_convertToGrayscale(const std::string& imagePath);//测试convertToGrayscale函数声明
-
 
 // 单次运行函数
 void business_run_once();
 
-cv::Mat convertToGrayscale(const cv::Mat& inputImage);
+cv::Mat convertToGrayscale(const cv::Mat& inputImage);// BGR转灰度图函数声明
 
 #ifdef __cplusplus
 }
