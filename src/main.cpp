@@ -4,7 +4,7 @@
 
 // 1. 引入第三方库头文件 (验证头文件路径配置是否正确)
 #include "lvgl.h"
-#include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
 #include <sqlite3.h>
 
 // 2. 引入我们自己的模块头文件 (验证内部模块链接是否正确)
@@ -186,16 +186,9 @@ int main() {
     std::cout << ">>> 正在初始化 业务层..." << std::endl;
     if (!business_init()) {
         std::cerr << "[Warning] 业务层初始化遇到问题 (如摄像头未连接)，但在模拟环境中继续运行..." << std::endl;
-    } else {
-        // 在正式产品中可能需要 return -1; 但开发阶段允许继续跑 UI
-    }
+    } 
     else {
         std::cout << "[OK] 业务层初始化完成" << std::endl;
-    }
-
-    if(!business_init()) {
-        std::cerr << "[Warning] 业务层初始化遇到问题 (如摄像头未连接)，但在模拟环境中继续运行..." << std::endl;
-        return -1;
     } //确保业务层初始化成功
 
     // ---------------------------------------------------------
