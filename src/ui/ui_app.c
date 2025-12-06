@@ -1,9 +1,13 @@
+//src/ui/ui_app.c
+#include"ui_app.h"
 #include <lvgl.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
+#include"../business/face_demo.h"//引入业务接口
 #include <string.h>
 #include "lv_conf.h"
+
 #if LV_USE_FREETYPE
 #include "lv_freetype.h"
 #endif
@@ -16,8 +20,39 @@ static lv_font_t *g_font_zh = NULL;
 static lv_style_t st_body;   /* 中文正文字体 */
 static lv_style_t st_symbol; /* 符号/图标字体（内置默认） */
 
+// [Epic4新增] 摄像头显示相关的变量
+#define CAM_W 200
+#define CAM_H 150
+// 图像缓冲区: 宽 * 高 * 3字节(RGB888)
+static uint8_t cam_buf[CAM_W * CAM_H * 3]; 
+static lv_obj_t *img_camera = NULL;
+static lv_image_dsc_t img_dsc; // LVGL 图像描述符
+
 #define INDEX_TO_PTR(i) ((void *)(uintptr_t)(i))
 #define PTR_TO_INDEX(p) ((uint32_t)(uintptr_t)(p))
+
+// [Epic4新增] 拍照按钮回调
+static void capture_btn_cb(lv_event_t *e) {
+    lv_obj_t *label = lv_event_get_user_data(e);
+    
+    // 调用业务层接口
+    if (business_capture_snapshot()) {
+        lv_label_set_text(label, "Saved!");
+    } else {
+        lv_label_set_text(label, "Failed");
+    }
+}
+
+// [Epic4新增] 定时器回调：刷新摄像头画面
+static void camera_timer_cb(lv_timer_t *timer) {
+    if (!img_camera) return;
+
+    // 1. 从业务层获取最新一帧数据
+    if (business_get_display_frame(cam_buf, CAM_W, CAM_H)) {
+        // 2. 通知 LVGL 图片源数据变了，需要重绘
+        lv_obj_invalidate(img_camera);
+    }
+}
 
 /* ===== 辅助：动画回调，尽量用 translate，避免触发布局重排 ===== */
 static void anim_translate_x_cb(void *obj, int32_t v)
@@ -93,6 +128,7 @@ static void add_navbar(lv_obj_t *root_scr)
     }
 }
 
+// [Epic4修改] create_main_screen: 添加摄像头显示
 /* ===== 三个界面 ===== */
 /* 根容器统一：列布局（内容 + 导航），根不滚动；内容区用 flex_grow(1) 填满剩余高度 */
 static lv_obj_t *create_main_screen(uint32_t idx)
@@ -120,12 +156,62 @@ static lv_obj_t *create_main_screen(uint32_t idx)
     lv_obj_set_width(title, lv_pct(100));
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
 
+    // --------------------------------------------------------
+    // [Epic4 插入区域 START] 摄像头画面和拍照按钮
+    // --------------------------------------------------------
+    
+    // A. 初始化缓冲区
+    memset(cam_buf, 0, sizeof(cam_buf));
+
+    // B. 配置图像描述符
+    img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc.header.cf = LV_COLOR_FORMAT_RGB888;
+    img_dsc.header.w = CAM_W;
+    img_dsc.header.h = CAM_H;
+    img_dsc.header.stride = CAM_W * 3;
+    img_dsc.data = cam_buf;
+    img_dsc.data_size = sizeof(cam_buf);
+
+    // C. 创建图像控件
+    img_camera = lv_image_create(content);
+    lv_image_set_src(img_camera, &img_dsc);
+    lv_obj_set_size(img_camera, CAM_W, CAM_H);
+    lv_obj_set_style_radius(img_camera, 8, 0);
+    lv_obj_set_style_border_width(img_camera, 2, 0);
+    lv_obj_set_style_border_color(img_camera, lv_palette_main(LV_PALETTE_BLUE), 0);
+
+    // D. 启动定时器刷新画面
+    lv_timer_create(camera_timer_cb, 33, NULL);
+
+    // E. 添加“拍照”按钮 (新增的，独立于你原本的动画按钮)
+    lv_obj_t *btn_capture = lv_button_create(content);
+    lv_obj_set_size(btn_capture, 100, 36);
+    lv_obj_set_style_bg_color(btn_capture, lv_palette_main(LV_PALETTE_RED), 0);
+    
+    lv_obj_t *lbl_cap = lv_label_create(btn_capture);
+    lv_label_set_text(lbl_cap, "拍照/Capture");
+    if (g_font_zh) lv_obj_add_style(lbl_cap, &st_body, 0);
+    lv_obj_center(lbl_cap);
+    
+    // 绑定拍照事件
+    lv_obj_add_event_cb(btn_capture, capture_btn_cb, LV_EVENT_CLICKED, lbl_cap);
+
+    // --------------------------------------------------------
+    // [Epic4 插入区域 END]
+    // --------------------------------------------------------
+
+    // 分隔线，为了美观
+    lv_obj_t *line = lv_obj_create(content);
+    lv_obj_set_size(line, 150, 2);
+    lv_obj_set_style_bg_color(line, lv_color_hex(0x888888), 0);
+
+    //原有的动画按钮
     lv_obj_t *btn = lv_button_create(content);
     lv_obj_set_size(btn, 120, 40);
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, "点击我");
     if (g_font_zh)
-        lv_obj_add_style(lbl, &st_body, 0);
+    lv_obj_add_style(lbl, &st_body, 0);
     lv_obj_center(lbl);
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, lbl);
 
@@ -298,7 +384,7 @@ static void init_fonts(void)
 #endif
     lv_style_init(&st_body);
     if (g_font_zh)
-        lv_style_set_text_font(&st_body, g_font_zh);
+    lv_style_set_text_font(&st_body, g_font_zh);
 
     lv_style_init(&st_symbol);
     lv_style_set_text_font(&st_symbol, LV_FONT_DEFAULT); /* 内置默认字体，含符号 */
@@ -323,6 +409,9 @@ void ui_init(void)
 
     current_screen_idx = 0;
     lv_screen_load(screens[current_screen_idx]);
+
+    printf("UI: Init done. Camera buffer: %d bytes\n", (int)sizeof(cam_buf));
+
     //[修改2]删除了原本这里的while(1)循环
     //这里的任务只是“初始化”，干完活就返回，让主程序继续往下跑
     /*

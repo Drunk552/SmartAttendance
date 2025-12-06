@@ -1,8 +1,0 @@
-[ 10%] Built target lvgl_demos
-[ 40%] Built target lvgl_examples
-[ 47%] Built target lvgl_thorvg
-[100%] Built target lvgl
-[100%] Building CXX object CMakeFiles/attendance_app.dir/src/business/face_demo.cpp.o
-[100%] Building CXX object CMakeFiles/attendance_app.dir/src/main.cpp.o
-[100%] Linking CXX executable attendance_app
-[100%] Built target attendance_app

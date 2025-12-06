@@ -5,6 +5,8 @@
 // 1. 引入第三方库头文件 (验证头文件路径配置是否正确)
 #include "lvgl.h"
 #include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp> 
+#include <opencv2/highgui.hpp>   
 #include <sqlite3.h>
 
 // 2. 引入我们自己的模块头文件 (验证内部模块链接是否正确)
@@ -117,7 +119,7 @@ bool test_epic3_convertToGrayscale(const std::string& imagePath) {
         return false;
     } // 测试BGR图像转换
 
-    std::cout << "BGR转灰度测试成功，灰度图尺寸: " << grayImage.cols << "x" << grayImage.rows << "，通道数: " << grayImage.channels() << std::endl;
+    std::cout << "BGR转灰度测试成功,灰度图尺寸: " << grayImage.cols << "x" << grayImage.rows << "，通道数: " << grayImage.channels() << std::endl;
 
     cv::Mat grayCopy = convertToGrayscale(grayImage);
     if (grayCopy.empty()) {
@@ -155,8 +157,21 @@ int main() {
     // ---------------------------------------------------------
     // 第三步：执行单元测试 (Epic 3 )
     // ---------------------------------------------------------  
-    std::string testImagePath = "./test_images/test1.jpg";//测试图像路径
     
+
+    // ---------------------------------------------------------
+    // 必须先初始化业务层，才能进行 Epic 3 的业务测试
+    // ---------------------------------------------------------
+    std::cout << ">>> 正在初始化 业务层..." << std::endl;
+    if (!business_init()) {
+        std::cerr << "[Error] 业务层初始化失败，程序退出。" << std::endl;
+        return -1; 
+    }
+    std::cout << "[OK] 业务层初始化完成" << std::endl;
+    
+    std::cout << ">>> 执行 Epic 3 业务功能测试..." << std::endl;
+    std::string testImagePath = "./test_images/test1.jpg";//测试图像路径
+
     bool testResult1 = test_epic3_business_processAndSaveImage(testImagePath);//测试business_processAndSaveImage接口
     bool testResult2 = test_epic3_convertToGrayscale(testImagePath);//测试convertToGrayscale函数
 
@@ -171,48 +186,30 @@ int main() {
 }
 
     // ---------------------------------------------------------
-    // 第三步：系统正式初始化 (UI & 业务层)
+    // 第四步：初始化UI并进入主循环
     // ---------------------------------------------------------
 
-    // A. 初始化 UI 层
+    // 初始化 UI 层
     std::cout << ">>> 正在初始化 UI 层..." << std::endl;
     ui_init(); 
     std::cout << "[OK] UI 层初始化完成" << std::endl;
-
-    // B. 初始化 业务层
-    // 注意：data_init() 在 test_epic2_data_layer 中已经被调用过一次。
-    // 如果 business_init 内部不依赖数据层重新初始化，这里没问题。
-    // 如果业务层初始化逻辑是独立的，这里正常调用即可。
-    std::cout << ">>> 正在初始化 业务层..." << std::endl;
-    if (!business_init()) {
-        std::cerr << "[Warning] 业务层初始化遇到问题 (如摄像头未连接)，但在模拟环境中继续运行..." << std::endl;
-    } else {
-        // 在正式产品中可能需要 return -1; 但开发阶段允许继续跑 UI
-    }
-    else {
-        std::cout << "[OK] 业务层初始化完成" << std::endl;
-    }
-
-    if(!business_init()) {
-        std::cerr << "[Warning] 业务层初始化遇到问题 (如摄像头未连接)，但在模拟环境中继续运行..." << std::endl;
-        return -1;
-    } //确保业务层初始化成功
-
+    
     // ---------------------------------------------------------
-    // 第四步：进入主循环 (The Super Loop)
+    // 第五步：进入主循环 (The Super Loop)
     // ---------------------------------------------------------
-        std::cout << ">>> 系统主循环启动" << std::endl;
+    std::cout << ">>> 系统主循环启动" << std::endl;
     
     while (1) {
         // 1. 驱动 LVGL (UI刷新、动画、输入响应)
         uint32_t time_till_next = lv_timer_handler();
 
-        // 2. 驱动 业务逻辑 (人脸检测、识别)
-        business_run_once();
-
-        // 3. 线程休眠
+        // 2. 线程休眠
         if (time_till_next > 5) time_till_next = 5;
         usleep(time_till_next * 1000); 
+
+        // 3. [关键] 告诉 LVGL 过了 5ms (心跳)
+        // 如果没有这一行，UI 里的定时器永远不会触发，画面会静止！
+        lv_tick_inc(time_till_next); // 传入实际流逝的时间
     }
 
     // 程序退出前清理

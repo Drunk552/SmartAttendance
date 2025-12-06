@@ -31,6 +31,8 @@ static int current_id = 0;// 当前选中的用户ID（用于采集样本）
 static bool trained = false;// 标识是否已完成训练
 static bool show_recognition = false;// 控制是否显示识别结果
 
+static Mat current_frame;// [Eoic4新增] 用于在函数间共享最新一帧画面
+
 /**
  * @brief 查找Haar级联分类器XML文件的路径
  * @return 找到的文件路径，如果找不到则返回空字符串
@@ -50,16 +52,16 @@ static std::string find_cascade() {
 
 /**
  * @brief 在图像中检测人脸
- * @param frame 输入图像
+ * @param current_frame 输入图像
  * @param face 输出参数，检测到的人脸矩形区域
  * @param cas 人脸检测器（Haar级联分类器）
  * @return true-检测到人脸，false-未检测到人脸
  * @note 检测最大的人脸区域，适合单人脸场景
  */
 
-static bool detect_face(const Mat& frame, Rect& face, CascadeClassifier& cas) {
+static bool detect_face(const Mat& current_frame, Rect& face, CascadeClassifier& cas) {
     std::vector<Rect> faces;// 存储所有检测到的人脸
-    Mat gray; cvtColor(frame, gray, COLOR_BGR2GRAY);// 转为灰度图（Haar检测需要灰度图）
+    Mat gray; cvtColor(current_frame, gray, COLOR_BGR2GRAY);// 转为灰度图（Haar检测需要灰度图）
     equalizeHist(gray, gray);// 直方图均衡化，增强对比度
     cas.detectMultiScale(gray, faces, 1.1, 3, 0, Size(80,80));// 检测人脸，参数：1.1-缩放因子，3-最小邻居数，0-标志，Size(80,80)-最小人脸尺寸
     if (faces.empty()) return false;// 未检测到人脸
@@ -70,14 +72,14 @@ static bool detect_face(const Mat& frame, Rect& face, CascadeClassifier& cas) {
 
 /**
  * @brief 预处理人脸图像
- * @param frame 原始图像
+ * @param current_frame 原始图像
  * @param roi 人脸区域矩形
  * @return 预处理后的人脸图像（128x128灰度图，直方图均衡化）
  * @note 包括裁剪边界、尺寸归一化、直方图均衡化
  */
 
-static Mat preprocess_face(const Mat& frame, const Rect& roi) {
-    Mat gray, crop = frame(roi).clone();// 克隆人脸区域，避免修改原图
+static Mat preprocess_face(const Mat& current_frame, const Rect& roi) {
+    Mat gray, crop = current_frame(roi).clone();// 克隆人脸区域，避免修改原图
     cvtColor(crop, gray, COLOR_BGR2GRAY);// 转为灰度图
     const int w = crop.cols, h = crop.rows;
     const int mx = std::max(0, w / 20);   // 计算5%的边界（左右）
@@ -246,79 +248,138 @@ bool business_processAndSaveImage(const cv::Mat& inputImage) {
     }
 }
 
-/**
- * @brief 业务单次运行函数（处理一帧图像）
- * @note 每调用一次处理一帧，包含：读取、检测、识别、显示、键盘响应
- */
-void business_run_once() {
-    Mat frame;//存储当前帧
-    if (!cap.isOpened()) return;// 安全检查：确保视频捕获已打开
+// ==========================================
+// Epic 4: 新增控制接口 (供 UI 按钮调用)
+// ==========================================
+// 切换当前用户 ID
+void business_set_current_id(int id) {
+    if (id >= 0 && id < names.size()) {
+        current_id = id;
+        cout << "[Business] 当前用户切换为: " << names[current_id] << endl;
+    } else {
+        std::cerr << "[Business] ID 超出范围" << endl;
+    }
+}
 
-    // 读取一帧
-    if (!cap.read(frame) || frame.empty()) {
-        return;// 读取失败或空帧，直接返回
+// 触发一次采集 (替代键盘 'c')
+// 注意：这需要依赖 business_run_once 中最新获取的帧，或者重新获取一帧
+// 使用 current_frame 进行采集，确保所见即所得
+bool business_capture_snapshot() {
+    if (!current_frame.empty()) {
+         std::cout << ">>> [Business] 触发采集..." << std::endl;
+         return business_processAndSaveImage(current_frame);
+    } else {
+        std::cerr << "[Business] 采集失败：当前没有画面帧" << endl;
+        return false;
+    }
+}
+
+// 触发训练 (替代键盘 't')
+void business_start_training() {
+    if (face_samples.size() < 2) { 
+        cout << "[Business] 样本过少 (<2)，无法训练。\n"; 
+    } else {
+        recog->train(face_samples, labels);
+        trained = true;
+        cout << "[Business] 模型训练完成。\n";
+    }
+}
+
+// 切换识别开关 (替代键盘 'r')
+void business_toggle_recognition() {
+    if (!trained) {
+        cout << "[Business] 尚未训练，无法开启识别。\n";
+        show_recognition = false;
+    } else {
+        show_recognition = !show_recognition;
+        cout << "[Business] 识别功能: " << (show_recognition ? "开启" : "关闭") << endl;
+    }
+}
+
+// ==========================================
+// Epic 4: 改造后的运行函数
+// ==========================================
+
+/**
+ * @brief 业务单次运行函数（Epic 4 修改版）
+ * @return cv::Mat 处理后的图像（带有人脸框和文字），用于 UI 显示
+ * @note 移除了 imshow 和 waitKey，不再阻塞，不再直接处理键盘
+ */
+cv::Mat business_get_frame() { // 函数名建议修改，原名 business_run_once 也可以保留但返回值要改
+    if (!cap.isOpened()) return Mat();
+
+    // 1. 读取一帧
+    if (!cap.read(current_frame) || current_frame.empty()) {
+        return Mat(); 
     }
 
-    // 检测人脸
-    Rect face;// 存储检测到的人脸区域
-    bool has = detect_face(frame, face, face_cas);
-    if (has) rectangle(frame, face, Scalar(0,255,0), 2);// 在图像上绘制绿色矩形框
+    // 2. 检测人脸
+    Rect face;
+    bool has = detect_face(current_frame, face, face_cas);
+    if (has) rectangle(current_frame, face, Scalar(0,255,0), 2);
 
-    // 识别逻辑
+    // 3. 识别逻辑 (如果开启)
     if (show_recognition && trained && has) {
-        Mat f = preprocess_face(frame, face);// 预处理人脸图像
-        int pred_label = -1; double conf = 0.0;// 预测的标签ID
-        recog->predict(f, pred_label, conf);// 使用LBPH识别器进行预测
+        Mat f = preprocess_face(current_frame, face);
+        int pred_label = -1; double conf = 0.0;
+        recog->predict(f, pred_label, conf);
 
-        std::string text;// 显示文本
-        if (pred_label >= 0) {
-            text = (conf <= 80.0 ? names[pred_label] : "unknown"); // 置信度阈值80.0：小于等于80认为是可信识别，大于80认为是unknown
-            text += "  dist=" + cv::format("%.1f", conf);
-        } else text = "unknown";// 预测失败
+        std::string text;
+        if (pred_label >= 0 && pred_label < names.size()) {
+            text = (conf <= 80.0 ? names[pred_label] : "unknown");
+            text += " " + cv::format("%.0f", conf);
+        } else {
+            text = "unknown";
+        }
 
-        // 在人脸上方显示识别结果
-        putText(frame, text, Point(face.x, std::max(0, face.y-10)),
+        putText(current_frame, text, Point(face.x, std::max(0, face.y-10)),
                 FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0,255,0), 2);
     }
 
-    // 显示提示信息
-    std::string hint = "ID=" + names[current_id] + " (1-5, c, t, r)";
-    putText(frame, hint, Point(10, 30), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(255,255,255), 2);
-
-    // 显示窗口 （注意：在最终产品中，这里应该把frame转给LVGL显示，目前使用OpenCV窗口用于调试）
-    imshow("LBPH Face Demo (Integration)", frame);
-
-    // 处理键盘输入 (仅用于 Phase01 调试)
-    char key = (char)waitKey(1); // 等待 1ms
+    // 4. 在图像上绘制状态信息 (OSD)
+    // 注意：在更高级的集成中，这些文字应该由 LVGL 绘制在 Label 控件上，而不是画在图里。
+    // 但为了 Epic 4 的过渡，我们先保留在图上绘制。
+    std::string status = "User: " + names[current_id];
+    status += trained ? " [Trained]" : " [No Model]";
+    status += show_recognition ? " [Recog ON]" : "";
     
-    if (key == 'q') {
-        exit(0); // 简单的退出方式
-    }
-    if (key >= '1' && key <= '5') { 
-        current_id = key - '1'; 
-        cout << "当前ID -> " << names[current_id] << endl; 
-    } // 切换当前用户ID（1对应user1，5对应user5）
-    else if (key == 'c') {
-        if (!has) { cout << "未检测到人脸，无法采集。\n"; }// 采集样本
-        else {
-            Mat f = preprocess_face(frame, face);// 预处理人脸并添加到训练集
-            face_samples.push_back(f);// 添加样本图像
-            labels.push_back(current_id);// 添加对应的标签
-            cout << "采集: " << names[current_id] << "（总样本=" << face_samples.size() << "）\n";
-        }
-    } else if (key == 't') {
-        if (face_samples.size() < 2) { cout << "样本过少，至少多采几张。\n"; }
-        else {
-            recog->train(face_samples, labels); // 训练LBPH识别器
-            trained = true;// 标记为已训练
-            cout << "训练完成。按 [r] 开启识别显示。\n";
-        }// 训练模型
-    } else if (key == 'r') {
-        if (!trained) cout << "尚未训练，先按 [t]。\n";
-        else {
-            show_recognition = !show_recognition;// 切换状态
-            cout << "识别显示 = " << (show_recognition ? "ON" : "OFF") << endl;
-        }
-    }// 切换识别显示
+    putText(current_frame, status, Point(10, 30), FONT_HERSHEY_SIMPLEX, 
+            0.6, Scalar(0, 255, 255), 2);
+
+    // 5. 返回图像给 UI 层
+    return current_frame;
 }
+
+// [Epic4新增] 实现获取显示帧接口
+/**
+ * @brief LVGL 专用的显示接口
+ * @param buffer LVGL 的 Framebuffer 或 Canvas 缓冲区
+ * @param w 目标宽度
+ * @param h 目标高度
+ */
+bool business_get_display_frame(void* buffer, int w, int h) {
+
+    cv::Mat frame = business_get_frame();
+
+    if (current_frame.empty()) return false;
+
+    Mat resized, rgb;
+    // 1. 缩放到 UI 指定的大小
+    cv::resize(current_frame, resized, Size(w, h));
+
+    // 2. 颜色转换: OpenCV 默认是 BGR，LVGL 需要 RGB
+    // 注意：根据你的 LV_COLOR_DEPTH，如果是 32位可能需要转 BGRA/RGBA
+    // 这里假设 LVGL 配置为 RGB888 (24位) 或 ARGB8888 (32位)
+    // 简单起见，我们转成 BGR -> RGB (24位)
+    cv::cvtColor(resized, rgb, COLOR_BGR2RGB);
+
+    // 3. 内存拷贝
+    // 确保 buffer 足够大 (w * h * 3)
+    memcpy(buffer, rgb.data, w * h * 3);
+    
+    return true;
+}
+
+
+
 
