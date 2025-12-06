@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-void ui_init(void);
+void ui_init(void);//初始化UI系统
 
 #ifdef __cplusplus
 }

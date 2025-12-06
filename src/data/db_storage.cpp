@@ -101,3 +101,34 @@ bool data_saveImage(const cv::Mat& image) {
     sqlite3_finalize(stmt);
     return true;
 }
+/**
+ * @brief 获取最后保存图像的ID
+ * @return 最后保存图像的ID，失败返回 -1
+ */
+long long data_getLastImageID() {
+    if (!db) {
+        std::cerr << "[Data] Error: Database not initialized!" << std::endl;
+        return -1;
+    }// 校验数据库连接
+
+    const char* sql = "SELECT id FROM processed_images ORDER BY id DESC LIMIT 1;";// 获取最后一条记录的ID
+    sqlite3_stmt* stmt;// 语句句柄
+    
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);// 预编译 SQL
+    if (rc != SQLITE_OK) {
+        std::cerr << "[Data] Prepare failed: " << sqlite3_errmsg(db) << std::endl;
+        return -1;
+    }// 预编译失败
+
+    rc = sqlite3_step(stmt);// 执行 SQL
+    long long last_id = -1;// 默认返回值
+    if (rc == SQLITE_ROW) {
+        last_id = sqlite3_column_int64(stmt, 0);
+    }// 成功获取到数据 
+    else {
+        std::cerr << "[Data] No images found in database." << std::endl;
+    }// 未找到数据
+
+    sqlite3_finalize(stmt);// 清理语句句柄
+    return last_id;// 返回最后保存的ID
+}

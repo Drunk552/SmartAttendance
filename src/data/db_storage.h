@@ -40,4 +40,6 @@ void data_close();
  */
 bool data_saveImage(const cv::Mat& image);
 
+long long data_getLastImageID();// 获取最后保存图像的ID
+
 #endif // DB_STORAGE_H

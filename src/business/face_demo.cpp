@@ -198,7 +198,7 @@ cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
  * @brief 请求业务层处理并保存图像
  * @param inputImage - 从摄像头捕获的原始图像（BGR格式，与OpenCV一致）
  * @return bool - 处理及保存是否成功
- * @note 严格遵循接口定义 2.2.1：UI层 -> 业务层
+ * @note 严格遵循接口定义：UI层 -> 业务层
  */
 
 bool business_processAndSaveImage(const cv::Mat& inputImage) {
@@ -218,6 +218,16 @@ bool business_processAndSaveImage(const cv::Mat& inputImage) {
     std::cout << "[Business] 检测到人脸，位置: ("
               << face_roi.x << "," << face_roi.y << ") "
               << face_roi.width << "x" << face_roi.height << std::endl;
+
+    cv::Mat gray_face = convertToGrayscale(inputImage(face_roi).clone());
+    if (gray_face.empty()) {
+        std::cerr << "[Business] 灰度转换失败。" << std::endl;
+        return false;
+    }//调用灰度函数实现转换
+    
+    std::cout << "[Business] 灰度转换成功，尺寸: " 
+              << gray_face.cols << "x" << gray_face.rows 
+              << "，通道数: " << gray_face.channels() << std::endl;
 
     cv::Mat preprocessed_face = preprocess_face(inputImage, face_roi);
     if (preprocessed_face.empty()) { 
@@ -258,19 +268,6 @@ void business_set_current_id(int id) {
         cout << "[Business] 当前用户切换为: " << names[current_id] << endl;
     } else {
         std::cerr << "[Business] ID 超出范围" << endl;
-    }
-}
-
-// 触发一次采集 (替代键盘 'c')
-// 注意：这需要依赖 business_run_once 中最新获取的帧，或者重新获取一帧
-// 使用 current_frame 进行采集，确保所见即所得
-bool business_capture_snapshot() {
-    if (!current_frame.empty()) {
-         std::cout << ">>> [Business] 触发采集..." << std::endl;
-         return business_processAndSaveImage(current_frame);
-    } else {
-        std::cerr << "[Business] 采集失败：当前没有画面帧" << endl;
-        return false;
     }
 }
 
@@ -380,6 +377,28 @@ bool business_get_display_frame(void* buffer, int w, int h) {
     return true;
 }
 
+/**
+ * @brief 触发一次采集 (供 UI 按钮调用)
+ * @return bool - 采集是否成功
+ * @note 使用 current_frame 进行采集，确保所见即所得
+ */
+bool business_capture_snapshot(){// 触发拍照函数
+    if (!current_frame.empty()) {
+        std::cout <<">>> [Business]触发采集..." << endl;
 
+        bool success = business_processAndSaveImage(current_frame);// 使用 current_frame 进行采集
+        
+        if(success){
+            long long last_id = data_getLastImageID();
+            std::cout << "[Business] 采集成功,图像ID: " << last_id << std::endl;   
+        }
+        return success;// 返回采集结果
+    } 
+        else
+        {
+            std::cerr << "[Business] 采集失败：当前没有画面帧" << std::endl;
+            return false;
+        }//采集失败
+}
 
 

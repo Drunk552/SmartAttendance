@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 bool business_init();// 初始化函数
+bool business_capture_snapshot();// 触发拍照函数
 
 
 // ==========================================
