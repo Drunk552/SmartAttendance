@@ -1,4 +1,10 @@
-// src/business/face_detect.h
+/**
+ * @file face_demo.h
+ * @brief 业务层接口定义
+ * @details 提供人脸检测、识别、训练以及视频流获取的核心业务逻辑。
+ * @author SmartAttendance Team
+ * @version 1.1 (Epic 5 Update)
+ */
 #ifndef FACE_DEMO_H
 #define FACE_DEMO_H
 
@@ -13,7 +19,13 @@
 extern "C" {
 #endif
 
-bool business_init();// 初始化函数
+/**
+ * @brief 初始化业务模块
+ * @details 加载人脸检测模型、初始化识别器、打开摄像头或视频流。
+ * @return true 初始化成功
+ * @return false 初始化失败 (如模型文件丢失、摄像头无法打开)
+ */
+bool business_init();
 
 
 // ==========================================
@@ -31,9 +43,10 @@ bool business_init();// 初始化函数
 bool business_get_display_frame(void* buffer, int w, int h);
 
 /**
- * @brief 触发拍照动作
- * * 捕获当前帧，进行灰度处理，并保存到数据库。
- * * @return true 成功, false 失败
+ * @brief 触发一次快照采集
+ * @details 捕获当前帧，检测人脸，预处理并保存到数据库。
+ * @return true 采集并保存成功
+ * @return false 失败 (未检测到人脸或数据库错误)
  */
 bool business_capture_snapshot();
 
@@ -47,6 +60,9 @@ bool business_capture_snapshot();
 
 //只有 C++ 内部使用的函数声明 (放在 extern "C" 外面)
 #ifdef __cplusplus
+
+#include <opencv2/core.hpp>
+
 bool business_processAndSaveImage(const cv::Mat& inputImage);//请求业务层处理并保存函数声明
 cv::Mat convertToGrayscale(const cv::Mat& inputImage);
 #endif

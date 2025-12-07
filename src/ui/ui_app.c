@@ -1,17 +1,23 @@
-//src/ui/ui_app.c
+/**
+ * @file ui_app.c
+ * @brief UI 层主程序
+ * @details 基于 LVGL 实现图形用户界面，包含主页(预览/操作)、列表页(记录)和控制页。
+ * @version 1.1 (Epic 5 Update)
+ */
 #include"ui_app.h"
 #include <lvgl.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
-#include"../business/face_demo.h"//引入业务接口
 #include <string.h>
+#include"../business/face_demo.h"//引入业务接口
 #include "lv_conf.h"
 
 #if LV_USE_FREETYPE
 #include "lv_freetype.h"
 #endif
 
+// ================= 全局变量 =================
 #define SCREEN_COUNT 3
 static lv_obj_t *screens[SCREEN_COUNT];
 static uint32_t current_screen_idx = 0;
@@ -25,11 +31,14 @@ static lv_style_t st_symbol; /* 符号/图标字体（内置默认） */
 #define CAM_H 150
 // 图像缓冲区: 宽 * 高 * 3字节(RGB888)
 static uint8_t cam_buf[CAM_W * CAM_H * 3]; 
-static lv_obj_t *img_camera = NULL;
+static lv_obj_t *img_camera = NULL;// 保存定时器句柄
 static lv_image_dsc_t img_dsc; // LVGL 图像描述符
 
+// ================= 辅助宏 =================
 #define INDEX_TO_PTR(i) ((void *)(uintptr_t)(i))
 #define PTR_TO_INDEX(p) ((uint32_t)(uintptr_t)(p))
+
+// ================= 事件回调 =================
 
 // [Epic4新增] 拍照按钮回调
 static void capture_btn_cb(lv_event_t *e) {
@@ -74,6 +83,8 @@ static void btn_event_cb(lv_event_t *e)
     lv_snprintf(buf, sizeof(buf), "Clicked %u", (unsigned)cnt);
     lv_label_set_text(label, buf);
 }
+
+// ================= 导航栏与页面切换 =================
 
 static void switch_screen_event_cb(lv_event_t *e)
 {
@@ -128,6 +139,8 @@ static void add_navbar(lv_obj_t *root_scr)
     }
 }
 
+// ================= 页面 1: 主页 (操作台) =================
+
 // [Epic4修改] create_main_screen: 添加摄像头显示
 /* ===== 三个界面 ===== */
 /* 根容器统一：列布局（内容 + 导航），根不滚动；内容区用 flex_grow(1) 填满剩余高度 */
@@ -139,6 +152,7 @@ static lv_obj_t *create_main_screen(uint32_t idx)
     lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
+    // 内容区
     lv_obj_t *content = lv_obj_create(scr);
     lv_obj_set_scroll_dir(content, LV_DIR_VER);
     lv_obj_set_width(content, lv_pct(100));
@@ -161,7 +175,7 @@ static lv_obj_t *create_main_screen(uint32_t idx)
     // --------------------------------------------------------
     
     // A. 初始化缓冲区
-    memset(cam_buf, 0, sizeof(cam_buf));
+    memset(cam_buf, 0, sizeof(cam_buf));//初始化灰色
 
     // B. 配置图像描述符
     img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -314,6 +328,8 @@ static lv_obj_t *create_list_screen(uint32_t idx)
     add_navbar(scr);
     return scr;
 }
+
+// ================= 页面 3: 控制页  =================
 
 static lv_obj_t *create_controls_screen(uint32_t idx)
 {
