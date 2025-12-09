@@ -3,11 +3,13 @@
 #include <vector>
 // 1. 引入第三方库头文件 (验证头文件路径配置是否正确)
 #include "lvgl.h"
-#include <opencv2/core.hpp>
+#include <opencv4/opencv2/core.hpp>
 #include <sqlite3.h>
 // 2. 引入我们自己的模块头文件 (验证内部模块链接是否正确)
 #include "ui/ui_app.h" // 对应 src/ui/ui_app.c
 #include "business/face_demo.h" // 对应 src/business/face_demo.cpp
+void ui_init(void);
+
 int main() {
 std::cout << "==========================================" << std::endl;
 std::cout << " 智能考勤系统 - 框架启动 & 依赖自检" << std::endl;

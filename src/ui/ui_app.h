@@ -8,19 +8,19 @@ extern "C" {
 /**
  * @file ui_app.h
  * @brief UI层核心接口（C/C++兼容）- 负责LVGL界面渲染、摄像头预览与交互
- * @note 依赖LVGL和SDL2初始化完成，窗口尺寸默认240x320（适配团队框架）
- * @details 包含UI初始化、摄像头预览更新、打卡结果提示等接口，支持C和C++调用
+ * @note 依赖LVGL和SDL2初始化完成，窗口尺寸默认800x480（适配团队框架）
+ * @details 包含UI初始化、摄像头预览更新、打卡结果提示、资源释放等接口
  * @author 黄霖
  * @version 1.1
- * @date 2025-12-03
+ * @date 2025-12-07
  */
 
-// 原有接口（保留，不修改）
+// 初始化UI及摄像头
 void ui_init(void);
 
 /**
  * @brief 更新摄像头预览画面
- * @details 将采集模块的图像帧渲染到LVGL预览组件，保证50-60FPS
+ * @details 将采集模块的图像帧渲染到LVGL预览组件，保证30FPS
  * @param[in] frame 摄像头帧（C风格指针，实际传递cv::Mat的地址，需在C++中转换）
  * @note 主线程调用，图像尺寸建议640x480
  */
@@ -32,6 +32,13 @@ void ui_update_camera_preview(const void* frame);
  * @param[in] is_success 1=成功（绿色），0=失败（红色）
  */
 void ui_show_attendance_msg(const char* msg, int is_success);
+
+/**
+ * @brief UI层资源释放
+ * @details 关闭摄像头、停止预览定时器、释放LVGL/SDL2资源，供业务层退出时调用
+ * @note 需在业务层退出前调用，避免资源泄漏
+ */
+void ui_deinit(void);
 
 #ifdef __cplusplus
 }
