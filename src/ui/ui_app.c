@@ -1,8 +1,7 @@
 /**
  * @file ui_app.c
- * @brief UI 层主程序
- * @details 基于 LVGL 实现图形用户界面，包含主页(预览/操作)、列表页(记录)和控制页。
- * @version 1.1 (Epic 5 Update)
+ * @brief UI 层主程序 - 优化版 (Epic 5)
+ * @details 适配 800x480 分辨率，采用左右分栏布局，模拟真实考勤机界面。
  */
 #include"ui_app.h"
 #include <lvgl.h>
@@ -17,38 +16,68 @@
 #include "lv_freetype.h"
 #endif
 
+// ================= 配置宏 =================
+// 模拟 7英寸嵌入式屏幕分辨率
+#define WIN_W 800
+#define WIN_H 480
+
+// [Epic4新增] 摄像头显示相关的变量
+#define CAM_W 320
+#define CAM_H 240
+
 // ================= 全局变量 =================
+static lv_font_t *g_font_zh_large = NULL; // 大字体 (标题)
+static lv_font_t *g_font_zh_normal = NULL; // 普通字体
+static lv_style_t st_title;
+static lv_style_t st_body;
+static lv_style_t st_symbol;
+
 #define SCREEN_COUNT 3
 static lv_obj_t *screens[SCREEN_COUNT];
 static uint32_t current_screen_idx = 0;
 
 static lv_font_t *g_font_zh = NULL;
 static lv_style_t st_body;   /* 中文正文字体 */
-static lv_style_t st_symbol; /* 符号/图标字体（内置默认） */
+//static lv_style_t st_symbol; /* 符号/图标字体（内置默认） 
 
-// [Epic4新增] 摄像头显示相关的变量
-#define CAM_W 200
-#define CAM_H 150
+
 // 图像缓冲区: 宽 * 高 * 3字节(RGB888)
 static uint8_t cam_buf[CAM_W * CAM_H * 3]; 
 static lv_obj_t *img_camera = NULL;// 保存定时器句柄
 static lv_image_dsc_t img_dsc; // LVGL 图像描述符
+static lv_obj_t *lbl_status_log = NULL;// [新增这一行] 定义日志标签变量
 
 // ================= 辅助宏 =================
 #define INDEX_TO_PTR(i) ((void *)(uintptr_t)(i))
 #define PTR_TO_INDEX(p) ((uint32_t)(uintptr_t)(p))
 
-// ================= 事件回调 =================
+// 辅助函数：在界面标签上显示日志
+static void ui_log(const char *format, ...) {
+    if (!lbl_status_log) return;
 
-// [Epic4新增] 拍照按钮回调
+    char buf[128];
+
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    lv_label_set_text(lbl_status_log, buf);
+}
+
+// ================= 事件回调 =================
+// 在按钮回调中使用
 static void capture_btn_cb(lv_event_t *e) {
-    lv_obj_t *label = lv_event_get_user_data(e);
-    
-    // 调用业务层接口
+    // 1. 先显示日志，给用户反馈
+    ui_log("正在采集..."); // 实时反馈
+
+    // 2. 强制刷新 UI，让文字立即显示
+    lv_timer_handler();
+
+    // 3. 调用业务接口
     if (business_capture_snapshot()) {
-        lv_label_set_text(label, "Saved!");
-    } else {
-        lv_label_set_text(label, "Failed");
+        ui_log("采集成功! ID已入库");
+    }else{
+        ui_log("采集失败: 无人脸");
     }
 }
 
@@ -144,40 +173,26 @@ static void add_navbar(lv_obj_t *root_scr)
 // [Epic4修改] create_main_screen: 添加摄像头显示
 /* ===== 三个界面 ===== */
 /* 根容器统一：列布局（内容 + 导航），根不滚动；内容区用 flex_grow(1) 填满剩余高度 */
-static lv_obj_t *create_main_screen(uint32_t idx)
-{
-    lv_obj_t *scr = lv_obj_create(NULL);
-    lv_obj_set_scroll_dir(scr, LV_DIR_NONE);
-    lv_obj_set_style_pad_all(scr, 6, 0);
-    lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+static void create_main_ui(void) {
+    // 1. 获取当前屏幕
+    lv_obj_t *scr = lv_screen_active();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_ROW); // 左右布局
+    lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(scr, 20, 0);
 
-    // 内容区
-    lv_obj_t *content = lv_obj_create(scr);
-    lv_obj_set_scroll_dir(content, LV_DIR_VER);
-    lv_obj_set_width(content, lv_pct(100));
-    lv_obj_set_flex_grow(content, 1);
-    lv_obj_set_style_pad_all(content, 6, 0);
-    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(content, 6, 0);
-    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_AUTO);
-
-    lv_obj_t *title = lv_label_create(content);
-    lv_label_set_text(title, "LVGL 中文测试");
-    if (g_font_zh)
-        lv_obj_add_style(title, &st_body, 0);
-    lv_obj_set_width(title, lv_pct(100));
-    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-
-    // --------------------------------------------------------
-    // [Epic4 插入区域 START] 摄像头画面和拍照按钮
-    // --------------------------------------------------------
+    // --- 左侧：摄像头预览 ---
+    lv_obj_t *panel_left = lv_obj_create(scr);
+    lv_obj_set_size(panel_left, CAM_W + 40, WIN_H - 40);
+    lv_obj_set_flex_flow(panel_left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel_left, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     
-    // A. 初始化缓冲区
-    memset(cam_buf, 0, sizeof(cam_buf));//初始化灰色
-
-    // B. 配置图像描述符
+    lv_obj_t *lbl_title = lv_label_create(panel_left);
+    lv_label_set_text(lbl_title, "人脸考勤终端");
+    if (g_font_zh_large) lv_obj_add_style(lbl_title, &st_title, 0);
+    
+    // 初始化摄像头图像
+    memset(cam_buf, 0x80, sizeof(cam_buf));
     img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
     img_dsc.header.cf = LV_COLOR_FORMAT_RGB888;
     img_dsc.header.w = CAM_W;
@@ -185,82 +200,35 @@ static lv_obj_t *create_main_screen(uint32_t idx)
     img_dsc.header.stride = CAM_W * 3;
     img_dsc.data = cam_buf;
     img_dsc.data_size = sizeof(cam_buf);
-
-    // C. 创建图像控件
-    img_camera = lv_image_create(content);
+    
+    img_camera = lv_image_create(panel_left);
     lv_image_set_src(img_camera, &img_dsc);
-    lv_obj_set_size(img_camera, CAM_W, CAM_H);
-    lv_obj_set_style_radius(img_camera, 8, 0);
-    lv_obj_set_style_border_width(img_camera, 2, 0);
-    lv_obj_set_style_border_color(img_camera, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_radius(img_camera, 4, 0);
 
-    // D. 启动定时器刷新画面
+    // 状态日志标签
+    lbl_status_log = lv_label_create(panel_left);
+    lv_label_set_text(lbl_status_log, "系统就绪");
+    if (g_font_zh_normal) lv_obj_add_style(lbl_status_log, &st_body, 0);
+
+    // --- 右侧：操作区 ---
+    lv_obj_t *panel_right = lv_obj_create(scr);
+    lv_obj_set_flex_grow(panel_right, 1);
+    lv_obj_set_height(panel_right, WIN_H - 40);
+    lv_obj_set_flex_flow(panel_right, LV_FLEX_FLOW_COLUMN);
+    
+    // 拍照按钮
+    lv_obj_t *btn_cap = lv_button_create(panel_right);
+    lv_obj_set_width(btn_cap, lv_pct(80));
+    lv_obj_set_height(btn_cap, 60);
+    lv_obj_add_event_cb(btn_cap, capture_btn_cb, LV_EVENT_CLICKED, NULL);
+    
+    lv_obj_t *lbl_btn = lv_label_create(btn_cap);
+    lv_label_set_text(lbl_btn, "打卡 / 采集");
+    if (g_font_zh_large) lv_obj_add_style(lbl_btn, &st_title, 0);
+    lv_obj_center(lbl_btn);
+
+    // 启动定时器
     lv_timer_create(camera_timer_cb, 33, NULL);
-
-    // E. 添加“拍照”按钮 (新增的，独立于你原本的动画按钮)
-    lv_obj_t *btn_capture = lv_button_create(content);
-    lv_obj_set_size(btn_capture, 100, 36);
-    lv_obj_set_style_bg_color(btn_capture, lv_palette_main(LV_PALETTE_RED), 0);
-    
-    lv_obj_t *lbl_cap = lv_label_create(btn_capture);
-    lv_label_set_text(lbl_cap, "拍照/Capture");
-    if (g_font_zh) lv_obj_add_style(lbl_cap, &st_body, 0);
-    lv_obj_center(lbl_cap);
-    
-    // 绑定拍照事件
-    lv_obj_add_event_cb(btn_capture, capture_btn_cb, LV_EVENT_CLICKED, lbl_cap);
-
-    // --------------------------------------------------------
-    // [Epic4 插入区域 END]
-    // --------------------------------------------------------
-
-    // 分隔线，为了美观
-    lv_obj_t *line = lv_obj_create(content);
-    lv_obj_set_size(line, 150, 2);
-    lv_obj_set_style_bg_color(line, lv_color_hex(0x888888), 0);
-
-    //原有的动画按钮
-    lv_obj_t *btn = lv_button_create(content);
-    lv_obj_set_size(btn, 120, 40);
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, "点击我");
-    if (g_font_zh)
-    lv_obj_add_style(lbl, &st_body, 0);
-    lv_obj_center(lbl);
-    lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, lbl);
-
-    /* 使用 translate_x 做动画，避免触发布局 */
-    lv_obj_update_layout(content);
-    lv_coord_t w_content = lv_obj_get_width(content);
-    lv_coord_t btn_w = lv_obj_get_width(btn);
-    lv_coord_t span = w_content - btn_w - 16;
-    if (span < 0)
-        span = 0;
-
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, btn);
-    lv_anim_set_values(&a, 0, span);
-    lv_anim_set_time(&a, 1200);
-    lv_anim_set_playback_time(&a, 1200);
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-    lv_anim_set_exec_cb(&a, anim_translate_x_cb);
-    lv_anim_start(&a);
-
-    lv_anim_t a2;
-    lv_anim_init(&a2);
-    lv_anim_set_var(&a2, title);
-    lv_anim_set_values(&a2, 80, 255);
-    lv_anim_set_time(&a2, 800);
-    lv_anim_set_playback_time(&a2, 800);
-    lv_anim_set_repeat_count(&a2, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_path_cb(&a2, lv_anim_path_linear);
-    lv_anim_set_exec_cb(&a2, anim_opa_cb);
-    lv_anim_start(&a2);
-
-    add_navbar(scr);
-    return scr;
 }
 
 /* 关键：不用 lv_list，自己做一个可滚动面板 + 行按钮，图标使用内置默认字体 */
@@ -394,13 +362,22 @@ static void init_fonts(void)
         }
     if (path)
     {
-        g_font_zh = lv_freetype_font_create(path,
-                                            LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 14, LV_FREETYPE_FONT_STYLE_NORMAL);
-    }
+        g_font_zh = lv_freetype_font_create(path,LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 14, LV_FREETYPE_FONT_STYLE_NORMAL);
+        g_font_zh_large = lv_freetype_font_create(path,LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 24, LV_FREETYPE_FONT_STYLE_NORMAL);
+        g_font_zh_normal = lv_freetype_font_create(path,LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 16, LV_FREETYPE_FONT_STYLE_NORMAL);
+        // 【新增这行】将 normal 字体同时也赋值给 g_font_zh，修复 "add_navbar" 中的报错
+        g_font_zh = g_font_zh_normal;
+    }   
 #endif
     lv_style_init(&st_body);
-    if (g_font_zh)
-    lv_style_set_text_font(&st_body, g_font_zh);
+
+    lv_style_init(&st_body);
+    if (g_font_zh_normal) // 改为 g_font_zh_normal
+        lv_style_set_text_font(&st_body, g_font_zh_normal);
+
+    lv_style_init(&st_title);
+    if (g_font_zh_large)  // 改为 g_font_zh_large
+        lv_style_set_text_font(&st_title, g_font_zh_large);
 
     lv_style_init(&st_symbol);
     lv_style_set_text_font(&st_symbol, LV_FONT_DEFAULT); /* 内置默认字体，含符号 */
@@ -410,21 +387,24 @@ static void init_fonts(void)
 //[修改1]将main改为ui_init,供外部调用
 void ui_init(void)
 {
-
     lv_init();
-    lv_display_t *disp = lv_sdl_window_create(240, 320);
+
+    lv_display_t *disp = lv_sdl_window_create(WIN_W, WIN_H);
     (void)disp;
     lv_sdl_mouse_create();
     lv_sdl_keyboard_create();
 
     init_fonts(); /* 先准备字体样式，再创建界面，逐个给到需要的对象 */
 
-    screens[0] = create_main_screen(0);
+    //screens[0] = create_main_screen(0);
+    screens[0] = lv_obj_create(NULL);      // 【可选】给个空对象防止数组越界访问崩溃
     screens[1] = create_list_screen(1);
     screens[2] = create_controls_screen(2);
 
     current_screen_idx = 0;
-    lv_screen_load(screens[current_screen_idx]);
+    //lv_screen_load(screens[current_screen_idx]);
+
+    create_main_ui();
 
     printf("UI: Init done. Camera buffer: %d bytes\n", (int)sizeof(cam_buf));
 
