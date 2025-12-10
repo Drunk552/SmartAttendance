@@ -67,6 +67,7 @@ function m() { make; }
 # 核心指令：运行
 function run()
 {
+    cd "$ROOT_DIR/build"
     local EXE_PATH="$ROOT_DIR/build/attendance_app"
     
     if [ ! -f "$EXE_PATH" ]; then
