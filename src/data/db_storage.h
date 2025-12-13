@@ -1,24 +1,37 @@
 /**
  * @file db_storage.h
- * @brief 数据层核心接口 - 负责数据库管理与图像持久化
- * @details 包含 SQLite3 数据库的初始化、资源释放以及图像数据的二进制存储功能。
- * @author SmartAttendance Team
- * @version 1.0
- * @date 2023-10-27
+ * @brief 数据层核心接口 (混合存储版)
+ * @details 负责数据库索引管理与图像文件持久化。
+ * @version 1.2 (File System Storage)
  */
 
 #ifndef DB_STORAGE_H
 #define DB_STORAGE_H
 
 #include <opencv2/core.hpp>
+#include <string> // [新增] 需要处理字符串
+#include <vector>
+
+// [新增] 用户信息结构体
+struct UserData {
+    int id;
+    std::string name;
+    std::vector<uchar> face_feature; // 用于存储二进制数据 (BLOB)
+};
+
+// [新增] 考勤记录结构体
+struct AttendanceRecord {
+    int id;
+    int user_id;
+    std::string image_path; // 存储文件路径
+    long long timestamp;
+};
 
 /**
  * @brief 初始化数据层
- * * 连接或创建名为 "attendance.db" 的 SQLite 数据库文件。
- * 如果数据库不存在，会自动创建，并初始化所需的数据表 (processed_images)。
- * * @return true  初始化成功 (数据库连接正常且表创建成功)
- * @return false 初始化失败 (可能是文件权限、磁盘空间或 SQL 语法错误)
- * * @note 此函数应在程序启动时尽早调用。
+ * * 连接 SQLite 数据库 (attendance.db)。
+ * * 创建 users 表 (BLOB存储) 和 attendance_logs 表 (路径存储)
+ * * @return true 初始化成功
  */
 bool data_init();
 
@@ -29,15 +42,27 @@ bool data_init();
  */
 void data_close();
 
+// [修改] 废弃原有的 data_saveImage，改为以下两个新接口：
+
 /**
- * @brief 保存图像数据到数据库
- * * 将传入的 OpenCV 图像矩阵编码为 JPG 格式的二进制流 (BLOB)，
- * 并连同当前系统时间戳一起写入到数据库中。
- * * @param[in] image 待保存的图像帧 (cv::Mat)。建议传入裁剪后的人脸区域以节省空间。
- * * @return true  保存成功
- * @return false 保存失败 (如数据库未初始化、图像为空或 SQL 执行错误)
- * * @note 这是一个 IO 密集型操作，建议避免在 UI 渲染线程中高频调用，以免造成界面卡顿。
+ * @brief 注册新用户（混合存储：数据存DB）
+ * @param name 用户名
+ * @param face_image 人脸图像（将转换为二进制存入BLOB）
+ * @return int 返回新用户的ID，失败返回 -1
  */
-bool data_saveImage(const cv::Mat& image);
+int data_registerUser(const std::string& name, const cv::Mat& face_image);
+
+/**
+ * @brief 保存考勤记录（混合存储：图片存磁盘，路径存DB）
+ * @param user_id 识别到的用户ID
+ * @param image 当前抓拍的现场图
+ * @return true 保存成功
+ */
+bool data_saveAttendance(int user_id, const cv::Mat& image);
+
+/**
+ * @brief 获取所有用户数据（用于系统启动时训练模型）
+ */
+std::vector<UserData> data_getAllUsers();
 
 #endif // DB_STORAGE_H

@@ -44,29 +44,46 @@ void test_epic1_framework() {
 }
 
 /**
- * @brief Epic 2 测试: 数据层独立测试
- * 验证数据库初始化和图像存储功能
+ * @brief Epic 2 测试: 数据层独立测试 (混合存储适配版)
+ * 验证数据库初始化、用户注册(BLOB)和考勤记录(Path)功能
  */
 void test_epic2_data_layer() {
     std::cout << "------------------------------------------" << std::endl;
     std::cout << ">>> [Test] Epic 2: 数据层独立测试" << std::endl;
 
     std::cout << ">>> 初始化数据库..." << std::endl;
-    // 1. 测试初始化接口
-    // 注意：data_init 会创建数据库连接，如果初始化成功，连接会保持打开状态
+    
     if (data_init()) {
         std::cout << "[OK] 数据库连接成功" << std::endl;
 
-        // 2. 创建一个测试图像 (纯黑色 100x100)
-        cv::Mat test_img = cv::Mat::zeros(100, 100, CV_8UC3);
+        // 创建一个测试图像 (纯黑色 100x100)
+        // 注意：LBPH通常需要灰度图，我们这里直接创建单通道灰度图
+        cv::Mat test_img = cv::Mat::zeros(100, 100, CV_8UC1);
         
-        std::cout << ">>> 尝试保存测试图像..." << std::endl;
-        // 3. 测试保存接口
-        if (data_saveImage(test_img)) {
-            std::cout << "[OK] data_saveImage 测试通过！" << std::endl;
+        // -------------------------------------------------
+        // 测试 1: 用户注册 (存入 users 表，BLOB)
+        // -------------------------------------------------
+        std::cout << ">>> [1] 尝试注册测试用户 (BLOB)..." << std::endl;
+        int new_uid = data_registerUser("Test_User_Epic2", test_img);
+        
+        if (new_uid != -1) {
+            std::cout << "[OK] data_registerUser 测试通过!新用户ID: " << new_uid << std::endl;
+
+            // -------------------------------------------------
+            // 测试 2: 保存考勤 (存入 attendance 表，Path)
+            // -------------------------------------------------
+            std::cout << ">>> [2] 尝试保存考勤记录 (Path)..." << std::endl;
+            // 使用刚才注册成功的 new_uid 来记录考勤
+            if (data_saveAttendance(new_uid, test_img)) {
+                std::cout << "[OK] data_saveAttendance 测试通过！" << std::endl;
+            } else {
+                std::cerr << "[Failed] data_saveAttendance 测试失败！" << std::endl;
+            }
+
         } else {
-            std::cerr << "[Failed] data_saveImage 测试失败！" << std::endl;
+            std::cerr << "[Failed] data_registerUser 测试失败！" << std::endl;
         }
+
     } else {
         std::cerr << "[Failed] 数据库初始化失败！" << std::endl;
     }

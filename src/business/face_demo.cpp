@@ -151,6 +151,52 @@ bool business_init() {
     //初始化LBPH人脸识别器
     recog = LBPHFaceRecognizer::create(1,8,8,8, 80.0);// 参数：半径=1, 邻域=8, 网格X=8, 网格Y=8, 阈值=80.0
     
+    // 确保数据层已初始化 (连接数据库)
+    if (!data_init()) {
+        std::cerr << "[Business] 数据层初始化失败！" << std::endl;
+        return false;
+    }
+
+    // [修改] 从数据库加载用所有户数据并训练（BLOB）
+    std::vector<UserData> users = data_getAllUsers();
+    
+    face_samples.clear();
+    labels.clear();
+    names.clear(); 
+    names.push_back("Unknown"); // 0号 ID 预留给未知用户
+
+    if (!users.empty()) {
+        std::cout << ">>> [Business] 正在从数据库加载用户数据..." << std::endl;
+        
+        for (const auto& u : users) {
+            // 核心步骤：将二进制 BLOB 解码为 OpenCV Mat (灰度图)
+            // 注意：必须使用 IMREAD_GRAYSCALE，因为 LBPH 只接受灰度图
+            cv::Mat sample = cv::imdecode(u.face_feature, cv::IMREAD_GRAYSCALE);
+            
+            if (!sample.empty()) {
+                face_samples.push_back(sample); // 添加到训练样本集
+                labels.push_back(u.id);         // 添加对应的 ID 标签
+                
+                // 维护 ID 到 名字 的映射 (names 向量)
+                // 确保 names 向量够长，能存下当前的 u.id
+                if (names.size() <= u.id) {
+                    names.resize(u.id + 1, "Unknown");
+                }
+                names[u.id] = u.name;
+            }
+        }
+    }
+
+    //  如果加载到了数据，立即进行训练
+    if (!face_samples.empty()) {
+        recog->train(face_samples, labels);
+        trained = true; // 标记为已训练状态，允许进行识别
+        std::cout << "[Business] 模型已恢复，加载了 " << face_samples.size() << " 个样本。" << std::endl;
+    } else {
+        std::cout << "[Business] 数据库为空，等待新用户注册。" << std::endl;
+        trained = false;
+    }
+
     // 初始化变量状态
     current_id = 0;// 默认选择第一个用户
     trained = false;// 未训练状态
@@ -170,6 +216,7 @@ bool business_init() {
  * @return 灰度图像
  * @note Epic 3要求实现的独立函数
  */
+ 
 cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
     if (inputImage.empty()) {
         std::cerr << "[Business] 输入图像为空，无法转换灰度" << std::endl;
@@ -225,25 +272,44 @@ bool business_processAndSaveImage(const cv::Mat& inputImage) {
         return false;
     }//预处理人脸图像
 
-    //添加到样本集合和标签
-    face_samples.push_back(preprocessed_face);
-    labels.push_back(current_id);
-
-    //输出样本信息
-    if (current_id >= names.size()) {
-        std::cerr << "[Business] 警告：当前ID(" << current_id << ")超出用户名映射范围！" << std::endl;
+    // 修改为调用新的注册接口 (BLOB存储)
+    // A.准备用户名
+    // (逻辑：尝试使用 names 列表中现有的名字，或者生成默认名字)
+    std::string reg_name;
+    if (current_id < names.size() && names[current_id] != "Unknown") {
+        reg_name = names[current_id];
     } else {
-        std::cout << "[Business] 人脸处理完成，用户: " << names[current_id]
-                  << "，总样本数: " << face_samples.size() << std::endl;
+        reg_name = "User_" + std::to_string(current_id);
     }
 
-    //保存图像到数据层
-    bool save_success = data_saveImage(preprocessed_face);
-    if (save_success) {
-        std::cout << "[Business] 图像保存成功。" << std::endl;
+    // B. [关键修改] 调用数据层的新接口：注册用户 (存入 DB users 表)
+    // 注意：这里不再调用 data_saveImage，而是 data_registerUser
+    int new_uid = data_registerUser(reg_name, preprocessed_face);
+
+    // C. 判断结果并更新内存状态
+    if (new_uid != -1) {
+        // 1. 更新内存中的训练集 (这样不需要重启程序就能训练)
+        face_samples.push_back(preprocessed_face);
+        labels.push_back(new_uid);
+
+        // 2. 更新 names 映射表 (确保向量足够长)
+        if (names.size() <= new_uid) {
+            names.resize(new_uid + 1, "Unknown");
+        }
+        names[new_uid] = reg_name;
+
+        // 3. 实时更新模型 (增量训练，可选)
+        // 这样采集完马上就能识别，不需要按 't' 重新训练所有数据
+        std::vector<cv::Mat> new_samples = {preprocessed_face};
+        std::vector<int> new_labels = {new_uid};
+        recog->update(new_samples, new_labels);
+        trained = true;
+
+        std::cout << "[Business] 用户注册成功! Name: " << reg_name 
+                  << " | DB_ID: " << new_uid << std::endl;
         return true;
     } else {
-        std::cerr << "[Business] 图像保存失败。" << std::endl;
+        std::cerr << "[Business] 数据库注册失败！" << std::endl;
         return false;
     }
 }
@@ -305,7 +371,7 @@ void business_toggle_recognition() {
  * @return cv::Mat 处理后的图像（带有人脸框和文字），用于 UI 显示
  * @note 移除了 imshow 和 waitKey，不再阻塞，不再直接处理键盘
  */
-cv::Mat business_get_frame() { // 函数名建议修改，原名 business_run_once 也可以保留但返回值要改
+cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_once 也可以保留但返回值要改
     if (!cap.isOpened()) return Mat();
 
     // 1. 读取一帧
@@ -326,7 +392,31 @@ cv::Mat business_get_frame() { // 函数名建议修改，原名 business_run_on
 
         std::string text;
         if (pred_label >= 0 && pred_label < names.size()) {
-            text = (conf <= 80.0 ? names[pred_label] : "unknown");
+            // 识别成功 (置信度阈值可调，越低越匹配)
+            if (conf <= 80.0) {
+                text = names[pred_label];
+                
+                // 核心打卡逻辑：识别成功 -> 保存考勤记录
+                static long long last_save_time = 0;
+                long long now = std::time(nullptr);
+                
+                // 简单的防抖动：3秒内同一人不重复打卡
+                if (now - last_save_time > 3) {
+                    // 调用数据层接口：保存原图(彩色)到磁盘，路径存DB
+                    // 注意：这里传入的是 current_frame (当前帧)，不是裁剪后的人脸
+                    bool logged = data_saveAttendance(pred_label, current_frame);
+                    
+                    if (logged) {
+                        std::cout << "[Business] >>> 打卡成功: " << text 
+                                  << " (ID: " << pred_label << ")" << std::endl;
+                        last_save_time = now;
+                        // 可选：在界面上显示“打卡成功”提示
+                        text += " [Logged]";
+                    }
+                }
+            } else {
+                text = "unknown"; // 置信度不够
+            }
             text += " " + cv::format("%.0f", conf);
         } else {
             text = "unknown";
