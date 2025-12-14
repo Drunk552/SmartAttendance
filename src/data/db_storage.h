@@ -1,8 +1,7 @@
 /**
  * @file db_storage.h
- * @brief 数据层核心接口 (混合存储版)
- * @details 负责数据库索引管理与图像文件持久化。
- * @version 1.2 (File System Storage)
+ * @brief 数据层核心接口 (Phase 02 Update)
+ * @details 包含用户、部门、班次等核心实体定义
  */
 
 #ifndef DB_STORAGE_H
@@ -12,26 +11,45 @@
 #include <string> // [新增] 需要处理字符串
 #include <vector>
 
-// [新增] 用户信息结构体
-struct UserData {
+// [Epic 2.1 新增] 部门信息
+struct DeptInfo {
     int id;
     std::string name;
-    std::vector<uchar> face_feature; // 用于存储二进制数据 (BLOB)
 };
 
-// [新增] 考勤记录结构体
+// [Epic 2.1 新增] 班次信息
+struct ShiftInfo {
+    int id;
+    std::string name;
+    std::string start_time; // 格式 "HH:MM" e.g. "09:00"
+    std::string end_time;   // 格式 "HH:MM" e.g. "18:00"
+    int cross_day;          // 0: 当天, 1: 跨天
+};
+
+// [Epic 2.1 修改] 用户信息升级 (对应 users 表)
+struct UserData {
+    int id;                 // 工号
+    std::string name;       // 姓名
+    std::string password;   // [新增] 密码
+    std::string card_id;    // [新增] 卡号
+    int role;               // [新增] 权限 0:普通, 1:管理员
+    int dept_id;            // [新增] 部门ID
+    std::vector<uchar> face_feature; // 人脸特征(BLOB)
+};
+
+// [Epic 2.1 修改] 考勤记录升级 (对应 attendance 表)
 struct AttendanceRecord {
     int id;
     int user_id;
-    std::string image_path; // 存储文件路径
+    int shift_id;           // [新增] 关联班次
+    std::string image_path;
     long long timestamp;
+    int status;             // [新增] 0:正常, 1:迟到, 2:早退...
 };
 
 /**
- * @brief 初始化数据层
- * * 连接 SQLite 数据库 (attendance.db)。
- * * 创建 users 表 (BLOB存储) 和 attendance_logs 表 (路径存储)
- * * @return true 初始化成功
+ * @brief 初始化数据层 (Phase 02: 完整Schema构建)
+ * 创建 users, departments, shifts, attendance_rules, attendance 五张表
  */
 bool data_init();
 

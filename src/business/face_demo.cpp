@@ -216,7 +216,7 @@ bool business_init() {
  * @return 灰度图像
  * @note Epic 3要求实现的独立函数
  */
- 
+
 cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
     if (inputImage.empty()) {
         std::cerr << "[Business] 输入图像为空，无法转换灰度" << std::endl;
