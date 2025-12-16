@@ -140,7 +140,86 @@ bool data_init() {
                exec_sql(sql_att, "Create Attendance");
     
     if(ret) std::cout << "[Data] DAO Layer Initialized (Phase 2)." << std::endl;
+    
+    if (ret) {
+        std::cout << "[Data] DAO Layer Initialized (Phase 2)." << std::endl;
+        // 执行播种
+        data_seed();
+    }
+    
     return ret;
+}
+
+// [新增辅助函数] 检查表中是否有数据
+static bool is_table_empty(const char* table_name) {
+    sqlite3_stmt* stmt;
+    std::string sql = "SELECT COUNT(*) FROM " + std::string(table_name) + ";";
+    int count = 0;
+    
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return (count == 0);
+}
+
+// ================= Epic 2.3 数据播种 =================
+
+bool data_seed() {
+    std::cout << ">>> [Data] Checking for data seeding..." << std::endl;
+
+    // 1. 播种默认部门 (如果为空)
+    if (is_table_empty("departments")) {
+        // 对应手册中的 "Not Set" [cite: 1242]
+        if (db_add_department("Not Set")) {
+            std::cout << "   [Seed] Created default department: 'Not Set'" << std::endl;
+        }
+        // 可选：添加常用部门
+        db_add_department("R&D");
+        db_add_department("HR");
+    }
+
+    // 2. 播种默认班次 (如果为空)
+    if (is_table_empty("shifts")) {
+        // 对应任务书要求的默认班次 [cite: 2003]
+        const char* sql = "INSERT INTO shifts (name, start_time, end_time, cross_day) VALUES (?, ?, ?, ?);";
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+            // 班次一: 08:00 - 18:00 (简化版，或者按任务书分段但这里只有start/end)
+            sqlite3_bind_text(stmt, 1, "General Shift", -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, "09:00", -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, "18:00", -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 4, 0); // 不跨天
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            std::cout << "   [Seed] Created default shift: 'General Shift' (09:00-18:00)" << std::endl;
+        }
+    }
+
+    // 3. 播种默认管理员 (如果用户表为空)
+    if (is_table_empty("users")) {
+        UserData admin;
+        admin.name = "SuperAdmin";
+        admin.password = "888888"; // 默认密码
+        admin.card_id = "000000";
+        admin.role = 1; // 管理员
+        
+        // 获取刚才播种的部门ID
+        auto depts = db_get_departments();
+        admin.dept_id = depts.empty() ? 0 : depts[0].id; // 归属到第一个部门
+
+        // 创建一个空的黑色人脸图作为占位符
+        cv::Mat dummy_face = cv::Mat::zeros(64, 64, CV_8UC1);
+        
+        int uid = db_add_user(admin, dummy_face);
+        if (uid > 0) {
+            std::cout << "   [Seed] Created default admin: 'SuperAdmin' (ID: " << uid << ", Pwd: 888888)" << std::endl;
+        }
+    }
+
+    return true;
 }
 
 void data_close() {

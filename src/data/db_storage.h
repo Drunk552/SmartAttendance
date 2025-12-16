@@ -117,6 +117,14 @@ struct AttendanceRecord {
 bool data_init();
 
 /**
+ * @brief  数据播种 (Seeding)
+ * @details 检查数据库是否为空，若为空则插入默认的部门、班次和管理员用户。
+ * 通常在 data_init() 成功后自动调用。
+ * @return true 播种成功或无需播种
+ */
+bool data_seed();
+
+/**
  * @brief 关闭数据层
  * * 释放数据库连接句柄及相关资源。
  * 建议在程序退出前 (如 main 函数末尾) 显式调用。
