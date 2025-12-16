@@ -178,6 +178,70 @@ void test_epic5_integration() {
     std::cout << "   sqlite3 attendance.db \"SELECT * FROM processed_images;\"" << std::endl;
 }
 
+/**
+ * @brief Epic 2.2 测试: DAO 接口验证 (Phase 2 新增)
+ * @details 测试部门、用户(含密码/权限)、考勤记录的增删改查
+ */
+void test_epic2_2_dao() {
+    std::cout << "------------------------------------------" << std::endl;
+    std::cout << ">>> [Test] Epic 2.2: DAO 层接口测试" << std::endl;
+
+    // 1. 测试部门
+    std::cout << ">>> [1] 添加部门..." << std::endl;
+    if (db_add_department("R&D Center")) {
+        auto depts = db_get_departments();
+        if (!depts.empty() && depts.back().name == "R&D Center") {
+            std::cout << "[OK] 部门添加成功: " << depts.back().name << " (ID: " << depts.back().id << ")" << std::endl;
+        } else {
+            std::cerr << "[Failed] 部门查询失败" << std::endl;
+        }
+    } else {
+        std::cerr << "[Warn] 部门添加失败 (可能已存在)" << std::endl;
+    }
+
+    // 2. 测试复杂用户注册 (Admin + Password)
+    std::cout << ">>> [2] 注册管理员用户..." << std::endl;
+    cv::Mat dummy_face = cv::Mat::zeros(64, 64, CV_8UC1);
+    
+    // [修正] 使用 UserData 而不是 UserInfo
+    UserData admin;
+    admin.name = "Admin_01";
+    admin.password = "123456";
+    admin.card_id = "CARD_888";
+    admin.role = 1; // Administrator
+    
+    // 获取刚才的部门ID (假设至少有一个部门)
+    auto depts = db_get_departments();
+    admin.dept_id = depts.empty() ? 0 : depts[0].id;
+
+    int uid = db_add_user(admin, dummy_face);
+    if (uid > 0) {
+        // 验证读取
+        // [修正] 使用 UserData 接收返回值
+        UserData stored = db_get_user_info(uid);
+        
+        if (stored.password == "123456" && stored.role == 1) {
+            std::cout << "[OK] 管理员注册并回读成功 (ID=" << uid << ", Role=" << stored.role << ")" << std::endl;
+        } else {
+            std::cerr << "[Failed] 用户信息回读不匹配" << std::endl;
+        }
+
+        // 3. 测试考勤记录 (关联查询)
+        std::cout << ">>> [3] 记录考勤..." << std::endl;
+        // status 1 = Late, shift_id = 0 (暂无班次)
+        if (db_log_attendance(uid, 0, dummy_face, 1)) { 
+            auto records = db_get_records(0, 9999999999LL);
+            if (!records.empty() && records[0].user_name == "Admin_01") {
+                std::cout << "[OK] 考勤记录查询成功 (关联了用户名: " << records[0].user_name << ")" << std::endl;
+            } else {
+                std::cerr << "[Failed] 考勤记录未查到" << std::endl;
+            }
+        }
+    } else {
+        std::cerr << "[Failed] 用户注册失败" << std::endl;
+    }
+}
+
 // ==========================================
 // 主程序入口
 // ==========================================
@@ -190,7 +254,19 @@ int main() {
     // 第一步：执行单元测试 (Epic 1 & 2)
     // ---------------------------------------------------------
     test_epic1_framework();
-    test_epic2_data_layer();
+    //test_epic2_data_layer();
+
+    // 2. 初始化数据层 (Phase 2 新 Schema)
+    // 注意：如果是第一次运行 Phase 2 代码，建议先手动删除 attendance.db
+    std::cout << ">>> 初始化数据层..." << std::endl;
+    if (!data_init()) {
+        std::cerr << "[Fatal] 数据库初始化失败，程序退出。" << std::endl;
+        return -1;
+    }
+
+    // 3. 执行 Phase 2 的 DAO 接口测试
+    // 这是验证 Epic 2.1 和 2.2 是否成功的关键
+    test_epic2_2_dao();
 
     std::cout << "------------------------------------------" << std::endl;
     std::cout << ">>> 测试阶段结束，进入系统初始化..." << std::endl;
@@ -224,7 +300,7 @@ int main() {
         std::cerr << "[Some Tests Failed] 业务层功能测试存在失败项" << std::endl;//部分测试未通过  
         if (! testResult1)std::cerr << " - business_processAndSaveImage测试未通过" << std::endl;//测试business_processAndSaveImage接口
         if (! testResult2)std::cerr << " - convertToGrayscale测试未通过" << std::endl;//测试convertToGrayscale函数
-}
+    }
 
     // ---------------------------------------------------------
     // 第三步：初始化UI并进入主循环
