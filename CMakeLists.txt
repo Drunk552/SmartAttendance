@@ -30,8 +30,11 @@ find_package(SQLite3 REQUIRED)
 # ==========================================
 # 3. 第三方库配置 (LVGL)
 # ==========================================
-# [关键修正] 在引入子目录之前，设置变量告诉 LVGL 的构建脚本去 include 目录找配置文件
-#//set(LV_CONF_PATH "${CMAKE_SOURCE_DIR}/include/lv_conf.h" CACHE STRING "" FORCE)
+
+# 设置变量（注意：这一行必须放在 add_subdirectory 之前！）
+# 这样 LVGL 的构建脚本在运行时就能知道配置文件在哪里。
+set(LV_CONF_PATH "${CMAKE_SOURCE_DIR}/lv_conf.h")
+
 # 引入 libs/lvgl 子目录
 add_subdirectory(libs/lvgl)
 
