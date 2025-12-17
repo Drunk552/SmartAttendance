@@ -11,6 +11,7 @@
 #include <unistd.h> // for usleep
 #include <vector>
 #include <cstdio>
+#include <signal.h>
 
 // 1. 引入第三方库头文件
 #include "lvgl.h"
@@ -18,6 +19,12 @@
 #include <opencv2/imgcodecs.hpp> 
 #include <opencv2/highgui.hpp>   
 #include <sqlite3.h>
+
+// [修复 3] 使用 extern "C" 定义变量，以匹配 ui_app.h 中的声明
+// 这样 C 语言 (ui_app.c) 和 C++ (main.cpp) 才能看到同一个变量
+extern "C" {
+    volatile bool g_program_should_exit = false;
+}
 
 // 2. 引入项目模块头文件
 #include "ui/ui_app.h"          // UI层
@@ -27,6 +34,13 @@
 // ==========================================
 // 测试函数定义区域
 // ==========================================
+
+
+// 捕获 Ctrl+C 信号，防止终端关不掉
+void signal_handler(int signum) {
+    std::cout << "\n[System] 捕获中断信号 (" << signum << ")，正在退出..." << std::endl;
+    g_program_should_exit = true;
+}
 
 /**
  * @brief Epic 1 测试: 框架依赖自检
@@ -133,6 +147,10 @@ void test_epic2_dao_and_seeding() {
 // 主程序入口
 // ==========================================
 int main() {
+
+    // 注册信号处理 (Ctrl+C)
+    signal(SIGINT, signal_handler);
+
     std::cout << "==========================================" << std::endl;
     std::cout << "   智能考勤系统 v1.2 - Phase 02" << std::endl;
     std::cout << "==========================================" << std::endl;
@@ -167,14 +185,17 @@ int main() {
     // 6. 进入主循环
     std::cout << ">>> 系统主循环启动" << std::endl;
     
-    while (1) {
+    while (!g_program_should_exit) {
         // 驱动 LVGL 心跳
         uint32_t time_till_next = lv_timer_handler();
         if (time_till_next > 5) time_till_next = 5;
+        if (time_till_next > 30) time_till_next = 30; // 限制最大休眠，保证响应速度
+
         usleep(time_till_next * 1000); 
         lv_tick_inc(time_till_next);
     }
 
+    std::cout << ">>> 系统安全退出 (Main Loop Ended)" << std::endl;
     data_close();
     return 0;
 }
