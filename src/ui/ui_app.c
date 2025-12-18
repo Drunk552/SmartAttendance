@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include"../business/face_demo.h"//引入业务接口
 #include <string.h>
 #include "lv_conf.h"

@@ -33,6 +33,94 @@ static bool show_recognition = false;// 控制是否显示识别结果
 
 static Mat current_frame;// [Eoic4新增] 用于在函数间共享最新一帧画面
 
+static PreprocessConfig preprocess_config; // 全局预处理配置
+
+/**
+ * @brief 应用直方图均衡化
+ * @param img 输入灰度图像
+ * @param method 直方图均衡化方法（0-无, 1-全局, 2-CLAHE）
+ * @return 处理后的图像
+ * @note 根据选择的方法应用不同的均衡化技术
+ */
+static cv::Mat apply_histogram_equalization(const cv::Mat& img, int method) {
+    cv::Mat result;
+
+    if (method == HIST_EQ_GLOBAL) {
+        cv::equalizeHist(img, result);
+    } 
+    
+    else if (method == HIST_EQ_GLOBAL) {
+        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();// 创建CLAHE对象
+        clahe->setClipLimit(preprocess_config.clahe_clip_limit);// 设置对比度限制
+        clahe->setTilesGridSize(preprocess_config.clahe_tile_grid_size);// 设置网格大小
+        clahe->apply(img, result);// 应用CLAHE均衡化
+    } 
+    
+    else {
+        result = img.clone();// 无均衡化，直接克隆原图
+    }
+    return result;// 返回处理后的图像
+}
+
+/**
+ * @brief 增强人脸ROI的对比度和亮度
+ * @param img 输入图像
+ * @param config 预处理配置
+ * @return 增强后的图像
+ * @note 通过调整对比度和亮度来增强人脸区域
+ */
+static cv::Mat enhance_roi(const cv::Mat& img,const PreprocessConfig& config) {
+    if(!config.enable_roi_enhance){
+        return img.clone();
+        }// 未启用增强，返回原图
+
+    cv::Mat enhanced;
+    img.convertTo(enhanced, -1, config.roi_contrast, config.roi_brightness);// 调整对比度和亮度
+
+    cv::threshold(enhanced, enhanced, 255, 255, cv::THRESH_TRUNC);// 限制像素值上限为255
+    cv::threshold(enhanced, enhanced, 0, 0, cv::THRESH_TOZERO);// 限制像素值在0-255范围内
+
+    return enhanced;// 返回增强后的图像
+}
+
+/**
+ * @brief 完整的人脸预处理流程
+ * @param input_face 输入原始图像
+ * @param face_roi 人脸区域矩形
+ * @param config 预处理配置
+ * @return 预处理后的人脸图像
+ * @note 包括裁剪边界、尺寸归一化、直方图均衡化和ROI增强
+ */
+
+cv::Mat preprocess_face_complete(const cv::Mat& input_face, const cv::Rect& face_roi, const PreprocessConfig& config) {
+    cv::Mat gray, crop = input_face(face_roi).clone();
+    cvtColor(crop, gray, COLOR_BGR2GRAY);
+
+
+    if (config.enable_crop) {
+        const int w = crop.cols, h = crop.rows;
+        const int mx = std::max(0, w * config.crop_margin_percent / 100);
+        const int my = std::max(0, h * config.crop_margin_percent / 100);
+        const int x = mx, y = my;
+        const int ww = std::max(1, w - 2 * mx);
+        const int hh = std::max(1, h - 2 * my);
+        Rect tight = (Rect(x, y, ww, hh) & Rect(0, 0, w, h));
+        gray = gray(tight);
+    }// 裁剪边界
+
+    if (config.enable_resize_eq) {
+        if (config.enablez_resize) {
+            resize(gray, gray, config.resize_size);// 尺寸归一化
+        }
+
+        gray = apply_histogram_equalization(gray, config.hist_eq_method);// 直方图均衡化
+    }
+
+    gray = enhance_roi(gray, config);//增强ROI对比度和亮度
+
+    return gray;
+}
+
 /**
  * @brief 查找Haar级联分类器XML文件的路径
  * @return 找到的文件路径，如果找不到则返回空字符串
@@ -79,19 +167,7 @@ static bool detect_face(const Mat& current_frame, Rect& face, CascadeClassifier&
  */
 
 static Mat preprocess_face(const Mat& current_frame, const Rect& roi) {
-    Mat gray, crop = current_frame(roi).clone();// 克隆人脸区域，避免修改原图
-    cvtColor(crop, gray, COLOR_BGR2GRAY);// 转为灰度图
-    const int w = crop.cols, h = crop.rows;
-    const int mx = std::max(0, w / 20);   // 计算5%的边界（左右）
-    const int my = std::max(0, h / 20);   // 计算5%的边界（上下）
-    const int x  = mx, y = my;
-    const int ww = std::max(1, w - 2 * mx);//裁剪后的宽度
-    const int hh = std::max(1, h - 2 * my);//裁剪后的高度
-    Rect tight = (Rect(x, y, ww, hh) & Rect(0, 0, w, h));// 确保不越界
-    Mat face = gray(tight);
-    resize(face, face, Size(128, 128)); // 统一尺寸为128x128
-    equalizeHist(face, face);// 直方图均衡化，增强对比度
-    return face;
+    return preprocess_face_complete(current_frame, roi, preprocess_config);// 使用全局预处理配置
 }
 
 /**
@@ -122,8 +198,8 @@ static VideoCapture open_sdp_stream(const std::string& sdp_path) {
 
 /**
  * @brief 业务模块初始化函数
- * @return true-初始化成功，false-初始化失败
- * @note 初始化所有组件：人脸检测器、视频源、识别器
+ * @return true-初始化成功，false-失败
+ * @note 包括加载人脸检测器、打开视频源、初始化人脸识别器、设置预处理配置
  */
 
 bool business_init() {
@@ -158,8 +234,24 @@ bool business_init() {
     face_samples.clear();// 清空样本
     labels.clear();// 清空标签
 
-    cout << "业务模块初始化成功。操作说明：\n"
-         << "  [1~5] 切换ID, [c] 采集, [t] 训练, [r] 识别开关, [q] 退出程序\n";
+    // 初始化预处理配置
+    preprocess_config.enable_crop = true;
+    preprocess_config.crop_margin_percent = 5;
+    preprocess_config.enable_resize_eq = true;
+    preprocess_config.hist_eq_method = HIST_EQ_CLAHE;
+    preprocess_config.clahe_clip_limit = 2.0f;
+    preprocess_config.clahe_tile_grid_size = cv::Size(8, 8);
+    preprocess_config.enable_roi_enhance = false;
+    preprocess_config.roi_contrast = 1.2f;
+    preprocess_config.roi_brightness = 10.0f;
+    preprocess_config.enablez_resize = true;
+    preprocess_config.resize_size = cv::Size(128, 128);
+    preprocess_config.debug_show_steps = false;
+    
+    cout << "业务模块初始化成功。预处理配置已设为默认值。\n";
+    cout << "操作说明：\n"
+         << "  [1~5] 切换ID, [c] 采集, [t] 训练, [r] 识别开关, [q] 退出程序\n"
+         << "  新增预处理控制接口可用\n";
          
     return true;
 }
@@ -195,11 +287,11 @@ cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
 }
 
 /**
- * @brief 请求业务层处理并保存图像
- * @param inputImage - 从摄像头捕获的原始图像（BGR格式，与OpenCV一致）
- * @return bool - 处理及保存是否成功
- * @note 严格遵循接口定义：UI层 -> 业务层
- */
+ * @brief 处理并保存人脸图像
+ * @param inputImage 输入图像（BGR格式）
+ * @return true-处理并保存成功，false-失败
+ * @note 包括人脸检测、预处理、样本添加和保存
+*/
 
 bool business_processAndSaveImage(const cv::Mat& inputImage) {
     if (inputImage.empty()) {
@@ -208,7 +300,9 @@ bool business_processAndSaveImage(const cv::Mat& inputImage) {
     }//校验输入图像有效性
 
     cv::Rect face_roi;  // 存储检测到的人脸区域
+    
     bool face_detected = detect_face(inputImage, face_roi, face_cas);
+    
     if (!face_detected) {
         std::cerr << "[Business] 未检测到人脸，无法保存图像。" << std::endl;
         return false;
@@ -218,44 +312,50 @@ bool business_processAndSaveImage(const cv::Mat& inputImage) {
     std::cout << "[Business] 检测到人脸，位置: ("
               << face_roi.x << "," << face_roi.y << ") "
               << face_roi.width << "x" << face_roi.height << std::endl;
-
-    cv::Mat gray_face = convertToGrayscale(inputImage(face_roi).clone());
-    if (gray_face.empty()) {
-        std::cerr << "[Business] 灰度转换失败。" << std::endl;
-        return false;
-    }//调用灰度函数实现转换
     
-    std::cout << "[Business] 灰度转换成功，尺寸: " 
-              << gray_face.cols << "x" << gray_face.rows 
-              << "，通道数: " << gray_face.channels() << std::endl;
+     cv::Mat preprocessed_face;// 存储预处理后的人脸图像
 
-    cv::Mat preprocessed_face = preprocess_face(inputImage, face_roi);
-    if (preprocessed_face.empty()) { 
-        std::cerr << "[Business] 人脸预处理失败，图像为空。" << std::endl;
-        return false;
-    }//预处理人脸图像
+    if(preprocess_config.debug_show_steps){
+        preprocessed_face = preprocess_face_complete(inputImage, face_roi, preprocess_config);
+        std::cout << "[Business] 预处理完成，调试模式已启用。" << std::endl;
+    } // 调试模式下显示所有预处理步骤
 
-    //添加到样本集合和标签
-    face_samples.push_back(preprocessed_face);
-    labels.push_back(current_id);
-
-    //输出样本信息
-    if (current_id >= names.size()) {
-        std::cerr << "[Business] 警告：当前ID(" << current_id << ")超出用户名映射范围！" << std::endl;
-    } else {
-        std::cout << "[Business] 人脸处理完成，用户: " << names[current_id]
-                  << "，总样本数: " << face_samples.size() << std::endl;
+    else {
+        preprocessed_face = preprocess_face_complete(inputImage, face_roi, preprocess_config);// 预处理人脸图像
     }
 
-    //保存图像到数据层
-    bool save_success = data_saveImage(preprocessed_face);
+      if (preprocessed_face.empty()) {
+        std::cerr << "[Business] 预处理人脸图像失败，图像为空。" << std::endl;
+        return false;
+    }//校验预处理结果
+ 
+    std::cout << "[Business] 预处理成功，尺寸: "
+              << preprocessed_face.cols << "x" << preprocessed_face.rows
+              << "，通道数: " << preprocessed_face.channels() << std::endl;
+
+    face_samples.push_back(preprocessed_face);// 添加样本
+    labels.push_back(current_id);// 添加样本和标签
+
+    if (current_id >= names.size()) {
+        std::cerr << "[Business] 警告：当前ID(" << current_id << ")超出用户名映射范围！" << std::endl;
+    }// 校验ID范围
+    
+    else {
+        std::cout << "[Business] 人脸处理完成，用户: " << names[current_id]
+                  << "，总样本数: " << face_samples.size() << std::endl;
+    }// 输出处理结果
+
+    bool save_success = data_saveImage(preprocessed_face);// 保存图像到数据层
+
     if (save_success) {
         std::cout << "[Business] 图像保存成功。" << std::endl;
         return true;
-    } else {
+    }//保存图像结果反馈 
+
+    else {
         std::cerr << "[Business] 图像保存失败。" << std::endl;
         return false;
-    }
+    }//保存图像结果反馈
 }
 
 // ==========================================
@@ -358,11 +458,11 @@ bool business_get_display_frame(void* buffer, int w, int h) {
 
     cv::Mat frame = business_get_frame();
 
-    if (current_frame.empty()) return false;
+    if (frame.empty()) return false;
 
     Mat resized, rgb;
     // 1. 缩放到 UI 指定的大小
-    cv::resize(current_frame, resized, Size(w, h));
+    cv::resize(frame, resized, Size(w, h));
 
     // 2. 颜色转换: OpenCV 默认是 BGR，LVGL 需要 RGB
     // 注意：根据你的 LV_COLOR_DEPTH，如果是 32位可能需要转 BGRA/RGBA
@@ -401,4 +501,99 @@ bool business_capture_snapshot(){// 触发拍照函数
         }//采集失败
 }
 
+/**
+* @brief 设置人脸预处理配置 (供 UI 调用)
+* @param config 预处理配置结构体
+* note 更新全局预处理配置
+ */
+void business_set_preprocess_config(const PreprocessConfig* config) {
+    preprocess_config = *config;
+    std::cout << "[Business] 预处理配置已更新。" << std::endl;
+    std::cout << "  裁剪边界: " << (config->enable_crop ? "启用" : "禁用") << std::endl;
+    std::cout << "  尺寸归一化: " << (config->enable_resize_eq ? "启用" : "禁用") << std::endl;   
+    std::cout << "  直方图均衡化方法: ";
 
+    if (config->hist_eq_method == HIST_EQ_NONE) {
+        std::cout << "禁用" << std::endl;
+    } 
+
+    else if (config->hist_eq_method == HIST_EQ_GLOBAL) {
+        std::cout << "全局均衡化" << std::endl;
+    } 
+
+    else if (config->hist_eq_method == HIST_EQ_CLAHE) {
+        std::cout << "CLAHE" << std::endl;
+    } 
+    
+    else {
+        std::cout << "未知(" << config->hist_eq_method << ")" << std::endl;
+    }
+
+    std::cout << "  ROI增强: " << (config->enable_roi_enhance ? "启用" : "禁用") << std::endl;// 输出ROI增强状态
+    std::cout << "  目标尺寸: " << config->resize_size.width << "x" << config->resize_size.height << std::endl;  // 输出目标尺寸
+}
+
+/**
+ * @brief 获取当前人脸预处理配置 (供 UI 调用)
+ * @return 预处理配置结构体
+ */
+PreprocessConfig business_get_preprocess_config() {
+    return preprocess_config;
+}
+
+/**
+ * @brief 设置直方图均衡化选项 (供 UI 按钮调用)
+ * @param enable 是否启用直方图均衡化
+ * @param method 直方图均衡化方法（0-无, 1-全局, 2-CLAHE）
+ * @note 动态调整直方图均衡化选项
+ */
+void business_set_histogram_equalization(bool enable, int method) {
+    preprocess_config.enable_resize_eq = enable;
+    preprocess_config.hist_eq_method = method;
+    
+    std::cout << "[Business] 直方图均衡化: " << (enable ? "启用" : "禁用");
+    if (enable) {
+        std::cout << "，方法: ";
+        if (method == HIST_EQ_GLOBAL) {
+            std::cout << "全局均衡化";
+        } else if (method == HIST_EQ_CLAHE) {
+            std::cout << "CLAHE";
+        } else {
+            std::cout << "未知(" << method << ")";
+        }
+    }
+    std::cout << std::endl;
+}
+
+/**
+ * @brief 设置CLAHE参数 (供 UI 按钮调用)
+ * @param clip_limit CLAHE剪切限制
+ * @param grid_width CLAHE网格宽度
+ * @param grid_height CLAHE网格高度
+ * @note 动态调整CLAHE参数
+ */
+void business_set_clahe_parameters(float clip_limit,int grid_width,int grid_height){
+    preprocess_config.clahe_clip_limit = std::max(1.0f, clip_limit);
+    preprocess_config.clahe_tile_grid_size = cv::Size(std::max(1, grid_width), std::max(1, grid_height));
+    
+    std::cout << "[Business] CLAHE 参数已更新。剪切限制: " << preprocess_config.clahe_clip_limit
+              << ", 网格大小: " << preprocess_config.clahe_tile_grid_size.width
+              << "x" << preprocess_config.clahe_tile_grid_size.height << std::endl;
+}
+
+/**
+ * @brief 设置ROI增强参数 (供 UI 按钮调用)
+ * @param enable 是否启用ROI增强
+ * @param contrast 对比度增强因子
+ * @param brightness 亮度增强偏移量
+ * @note 动态调整ROI增强选项
+ */
+void business_set_roi_enhance(bool enable, float contrast, float brightness){
+    preprocess_config.enable_roi_enhance = enable;
+    preprocess_config.roi_contrast = contrast;
+    preprocess_config.roi_brightness = brightness;
+
+    std::cout << "[Business] ROI增强： " << (enable ? "启用" : "禁用")
+              << ", 对比度: " << contrast
+              << ", 亮度: " << brightness << std::endl;
+}
