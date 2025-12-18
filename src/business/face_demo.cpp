@@ -33,6 +33,9 @@ static bool show_recognition = false;// 控制是否显示识别结果
 
 static Mat current_frame;// [Eoic4新增] 用于在函数间共享最新一帧画面
 
+// [Epic 3.3] 用户列表缓存，用于给 C 语言 UI 提供数据
+static std::vector<UserData> g_user_cache;
+
 /**
  * @brief 查找Haar级联分类器XML文件的路径
  * @return 找到的文件路径，如果找不到则返回空字符串
@@ -470,6 +473,61 @@ bool business_get_display_frame(void* buffer, int w, int h) {
     return true;
 }
 
+// [Epic 3.3 实现] 获取用户总数 (并刷新缓存)
+int business_get_user_count(void) {
+    // 每次进入列表页时，从数据库重新拉取一次数据
+    g_user_cache = data_getAllUsers();
+    return (int)g_user_cache.size();
+}
+
+// [Epic 3.3 实现] 获取用户信息
+bool business_get_user_at(int index, int *id_out, char *name_buf, int len) {
+    // 越界检查
+    if (index < 0 || index >= (int)g_user_cache.size()) return false;
+    
+    const UserData& u = g_user_cache[index];
+    
+    if (id_out) *id_out = u.id;
+    
+    if (name_buf && len > 0) {
+        // 安全拷贝字符串
+        strncpy(name_buf, u.name.c_str(), len - 1);
+        name_buf[len - 1] = '\0'; // 确保结尾符
+    }
+    return true;
+}
+
+// [Epic 3.3 实现] 注册新用户
+bool business_register_user(const char* name) {
+    // 1. 检查是否有画面
+    if (current_frame.empty()) {
+        std::cerr << "[Business] Error: No camera frame for registration!\n";
+        return false;
+    }
+
+    std::cout << "[Business] Registering user: " << name << "...\n";
+
+    // 2. 构造用户数据
+    UserData u;
+    u.name = name;
+    u.role = 0;      // 默认为普通员工
+    u.dept_id = 0;   // 默认无部门 (或设为1)
+    u.password = ""; 
+    u.card_id = "";
+
+    // 3. 调用数据层接口 (自动处理图片编码和存储)
+    int new_id = db_add_user(u, current_frame);
+    
+    if (new_id > 0) {
+        std::cout << "[Business] Registration Success! ID: " << new_id << "\n";
+        // 刷新缓存，确保列表页能看到新用户
+        business_get_user_count(); 
+        return true;
+    } else {
+        std::cerr << "[Business] DB Add Failed!\n";
+        return false;
+    }
+}
 
 
 

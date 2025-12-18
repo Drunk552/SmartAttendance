@@ -51,6 +51,35 @@ bool business_get_display_frame(void* buffer, int w, int h);
 bool business_capture_snapshot();
 
 // ==========================================
+// Epic 3.3 新增: 用户列表数据接口
+// ==========================================
+
+/**
+ * @brief 获取当前数据库中的用户总数
+ */
+int business_get_user_count(void);
+
+/**
+ * @brief 获取指定索引的用户信息 (用于 C 语言 UI 显示)
+ * @param index 列表索引 (0 ~ count-1)
+ * @param id_out 输出: 用户 ID
+ * @param name_buf 输出: 名字缓冲区
+ * @param len 缓冲区大小
+ * @return true 获取成功, false 索引越界
+ */
+bool business_get_user_at(int index, int *id_out, char *name_buf, int len);
+
+/**
+ * @brief 注册新用户 (Register New User)
+ * @details 捕获当前的摄像头画面作为人脸特征，结合输入的用户名创建新用户并存入数据库。
+ * 若注册成功，会自动刷新内部的用户列表缓存。
+ * * @param name 待注册的用户名 (C 字符串)
+ * @return true  注册成功
+ * @return false 注册失败 (可能原因：当前无视频帧、数据库写入失败等)
+ */
+bool business_register_user(const char* name);
+
+// ==========================================
 // C++ 专用接口 (C 文件不可见)
 // ==========================================
 

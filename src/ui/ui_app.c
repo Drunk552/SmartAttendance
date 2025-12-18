@@ -25,6 +25,15 @@ static lv_obj_t *screen_menu;
 static lv_obj_t *obj_grid; 
 static lv_group_t *g_keypad_group; 
 
+// [Epic 3.3 新增]
+static lv_obj_t *screen_list;    // 列表页屏幕
+static lv_obj_t *obj_list_view;  // 列表控件容器
+// [Epic 3.3 注册向导] 全局变量
+static lv_obj_t *screen_register;
+static lv_obj_t *ta_name;      // 名字输入框
+static lv_obj_t *img_face_reg; // 注册页面的摄像头预览
+static char g_reg_name[64];    // 暂存输入的名字
+
 // 摄像头相关
 static uint8_t cam_buf[CAM_W * CAM_H * 3]; 
 static lv_obj_t *img_camera = NULL;
@@ -47,6 +56,16 @@ static void create_main_screen(void);
 static void create_menu_screen(void);
 static void load_main_screen(void);
 static void load_menu_screen(void);
+
+// [Epic 3.3 新增]
+static void create_user_list_screen(void);
+static void load_user_list_screen(void);
+static void list_btn_event_cb(lv_event_t *e);
+// [Epic 3.3 注册向导] 函数声明
+static void create_register_screen(void);
+static void load_register_step1(void); // 输入姓名
+static void load_register_step2(void); // 采集人脸
+static void register_face_timer_cb(lv_timer_t *timer); // 注册页面的摄像头刷新
 
 // ================= 辅助函数 =================
 
@@ -147,9 +166,16 @@ static void menu_btn_event_cb(lv_event_t *e) {
         }
         else if (key == LV_KEY_ENTER) {
             printf("[UI] Action: %s\n", tag);
-            if(strcmp(tag, "System") == 0) {
-                 extern volatile bool g_program_should_exit;
-                 g_program_should_exit = true; 
+            
+            if(strcmp(tag, "Users") == 0) {
+                load_user_list_screen();
+            }
+            // [修改点] 将 Settings 按钮作为 注册向导 入口
+            else if(strcmp(tag, "Settings") == 0) {
+                load_register_step1(); // 进入第一步：输入姓名
+            }
+            else if(strcmp(tag, "System") == 0) {
+                 request_exit();
             }
         }
     }
@@ -158,9 +184,9 @@ static void menu_btn_event_cb(lv_event_t *e) {
     if (code == LV_EVENT_CLICKED) {
          printf("[UI] Click: %s\n", tag);
          if(strcmp(tag, "System") == 0) {
-              extern volatile bool g_program_should_exit;
-              g_program_should_exit = true; 
-         }
+            extern volatile bool g_program_should_exit;
+            g_program_should_exit = true; 
+        }  
     }
 }
 
@@ -334,6 +360,268 @@ static void load_menu_screen(void) {
     
     // 兜底背景
     lv_group_add_obj(g_keypad_group, screen_menu);
+}
+
+// =================================================================
+// [Epic 3.3 新增] 员工列表页实现代码
+// =================================================================
+
+// 1. 列表按钮的事件回调 (处理上下滚动和返回)
+static void list_btn_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // 向下键：移动到下一个
+        if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(g_keypad_group);
+        }
+        // 向上键：移动到上一个
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(g_keypad_group);
+        }
+        // ESC键：返回主菜单
+        else if (key == LV_KEY_ESC) {
+            load_menu_screen();
+        }
+        // ENTER键：查看详情 (目前仅打印)
+        else if (key == LV_KEY_ENTER) {
+            printf("[UI] View User Details...\n");
+        }
+    }
+}
+
+// 2. 创建列表屏幕 UI
+static void create_user_list_screen(void) {
+    screen_list = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(screen_list, lv_color_hex(0x000000), 0);
+    
+    // 标题
+    lv_obj_t *title = lv_label_create(screen_list);
+    lv_label_set_text(title, "User List");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    
+    // 列表控件容器
+    obj_list_view = lv_list_create(screen_list);
+    lv_obj_set_size(obj_list_view, 220, 260);
+    lv_obj_align(obj_list_view, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_bg_color(obj_list_view, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_border_width(obj_list_view, 0, 0);
+}
+
+// 3. 加载数据并显示
+static void load_user_list_screen(void) {
+    if (!screen_list) create_user_list_screen();
+    
+    printf("[UI] Switch to User List\n");
+    
+    // A. 清空输入组 (准备接管键盘)
+    lv_group_remove_all_objs(g_keypad_group);
+    
+    // B. 清空旧列表内容
+    lv_obj_clean(obj_list_view);
+    
+    // C. 从业务层获取用户数据
+    int count = business_get_user_count(); // 调用 face_demo.cpp 的接口
+    printf("[UI] Fetching users: %d\n", count);
+    
+    if (count == 0) {
+        lv_list_add_text(obj_list_view, "No Users Found");
+    } else {
+        char name_buf[64];
+        int id = 0;
+        char label_buf[128];
+        
+        for(int i=0; i<count; i++) {
+            if (business_get_user_at(i, &id, name_buf, sizeof(name_buf))) {
+                sprintf(label_buf, "[%d] %s", id, name_buf);
+                
+                // 1. 创建按钮
+                lv_obj_t *btn = lv_list_add_button(obj_list_view, LV_SYMBOL_BULLET, label_buf);
+                
+                // [新增] 2. 检查是否创建成功 (防崩溃)
+                if (btn == NULL) {
+                    printf("[Error] LVGL Out of Memory! Stopped at user %d\n", i);
+                    lv_label_set_text(lv_list_add_text(obj_list_view, "Memory Full!"), "System Out of Memory");
+                    break; // 停止继续创建，保护程序不崩
+                }
+
+                // 3. 设置事件和组
+                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, NULL);
+                lv_group_add_obj(g_keypad_group, btn);
+                
+                if (i == 0) lv_group_focus_obj(btn);
+            }
+        }
+    }
+    
+    // D. 切换屏幕
+    #if LV_VERSION_CHECK(9,0,0)
+        lv_screen_load(screen_list);
+    #else
+        lv_scr_load(screen_list);
+    #endif
+    
+    // E. 兜底：把背景也加入组，防止列表为空时按键失效
+    lv_group_add_obj(g_keypad_group, screen_list);
+}
+
+// =================================================================
+// [Epic 3.3] 注册向导实现 (Wizard Implementation)
+// =================================================================
+
+// --- 辅助：注册页面的摄像头刷新 ---
+static void register_face_timer_cb(lv_timer_t *timer) {
+    // 只有在注册界面才刷新
+    if (lv_screen_active() != screen_register) return;
+    
+    // 复用全局 cam_buf 和业务接口
+    if (img_face_reg && business_get_display_frame(cam_buf, CAM_W, CAM_H)) {
+        lv_obj_invalidate(img_face_reg);
+    }
+}
+
+// --- Step 2 事件: 处理按键 (拍照/返回) ---
+static void reg_step2_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ENTER) {
+            // [核心] 触发业务层采集
+            printf("[UI] Capturing face for: %s\n", g_reg_name);
+            
+            // 调用业务接口保存
+            if (business_register_user(g_reg_name)) {
+                printf("[UI] Reg Success! Back to Menu.\n");
+                
+                // 简单反馈：延迟或直接返回
+                load_menu_screen(); 
+            } else {
+                printf("[UI] Reg Failed!\n");
+            }
+        }
+        else if (key == LV_KEY_ESC) {
+            load_register_step1(); // 返回上一步
+        }
+    }
+}
+
+// --- Step 1 事件: 输入姓名完成 ---
+static void ta_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // 按 Enter 确认名字，进入下一步
+        if (key == LV_KEY_ENTER) {
+            const char *txt = lv_textarea_get_text(ta_name);
+            if (strlen(txt) == 0) return; // 禁止空名
+            
+            strcpy(g_reg_name, txt);
+            printf("[UI] Name confirmed: %s -> Next Step\n", g_reg_name);
+            
+            load_register_step2(); // 进入拍照步骤
+        }
+        else if (key == LV_KEY_ESC) {
+            load_menu_screen(); // 放弃注册
+        }
+    }
+}
+
+// --- 创建注册屏幕容器 ---
+static void create_register_screen(void) {
+    if (screen_register) return;
+    screen_register = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(screen_register, lv_color_black(), 0);
+    
+    // 注册专用的定时器 (100ms刷新)，与主页定时器分开
+    lv_timer_create(register_face_timer_cb, 100, NULL);
+}
+
+// --- 加载 Step 1: 输入姓名 ---
+static void load_register_step1(void) {
+    create_register_screen();
+    
+    printf("[UI] Wizard Step 1: Name\n");
+
+    // 1. 清理并准备界面
+    lv_obj_clean(screen_register);
+    lv_group_remove_all_objs(g_keypad_group);
+    
+    // 2. 标题
+    lv_obj_t *label = lv_label_create(screen_register);
+    lv_label_set_text(label, "Step 1: Enter Name");
+    lv_obj_set_style_text_color(label, lv_color_white(), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);
+    
+    // 3. 输入框
+    ta_name = lv_textarea_create(screen_register);
+    lv_textarea_set_one_line(ta_name, true);
+    lv_obj_set_width(ta_name, 200);
+    lv_obj_align(ta_name, LV_ALIGN_CENTER, 0, -20);
+    lv_obj_add_event_cb(ta_name, ta_event_cb, LV_EVENT_ALL, NULL);
+    
+    // 4. 提示
+    lv_obj_t *tip = lv_label_create(screen_register);
+    lv_label_set_text(tip, "Type name & Press ENTER");
+    lv_obj_set_style_text_color(tip, lv_palette_main(LV_PALETTE_YELLOW), 0);
+    lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -40);
+    
+    // 5. 切换屏幕与焦点
+    #if LV_VERSION_CHECK(9,0,0)
+        lv_screen_load(screen_register);
+    #else
+        lv_scr_load(screen_register);
+    #endif
+    
+    // 将输入框加入组，让物理键盘能输入
+    lv_group_add_obj(g_keypad_group, ta_name);
+    lv_group_focus_obj(ta_name);
+}
+
+// --- 加载 Step 2: 采集人脸 ---
+static void load_register_step2(void) {
+    printf("[UI] Wizard Step 2: Face\n");
+
+    // 1. 清理 Step 1 的控件
+    lv_obj_clean(screen_register);
+    lv_group_remove_all_objs(g_keypad_group);
+    
+    // 2. 标题
+    lv_obj_t *label = lv_label_create(screen_register);
+    lv_label_set_text(label, "Step 2: Capture Face");
+    lv_obj_set_style_text_color(label, lv_color_white(), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 5);
+    
+    // 3. 摄像头预览区域 (复用全局 dsc)
+    #if LV_VERSION_CHECK(9,0,0)
+        img_face_reg = lv_image_create(screen_register);
+        lv_image_set_src(img_face_reg, &img_dsc); 
+    #else
+        img_face_reg = lv_img_create(screen_register);
+        lv_img_set_src(img_face_reg, &img_dsc);
+    #endif
+    lv_obj_set_size(img_face_reg, CAM_W, CAM_H);
+    lv_obj_align(img_face_reg, LV_ALIGN_CENTER, 0, 0);
+    
+    // 给图片加个绿色边框，表示这是取景框
+    lv_obj_set_style_border_width(img_face_reg, 3, 0);
+    lv_obj_set_style_border_color(img_face_reg, lv_palette_main(LV_PALETTE_GREEN), 0);
+    
+    // 4. 将图片设为可交互，用来接收 ENTER 键
+    lv_obj_add_flag(img_face_reg, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(img_face_reg, reg_step2_event_cb, LV_EVENT_KEY, NULL);
+    
+    // 5. 提示
+    lv_obj_t *tip = lv_label_create(screen_register);
+    lv_label_set_text_fmt(tip, "Hi, %s!\nPress ENTER to Capture", g_reg_name);
+    lv_obj_set_style_text_color(tip, lv_palette_main(LV_PALETTE_YELLOW), 0);
+    lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -10);
+    
+    // 6. 焦点设置
+    lv_group_add_obj(g_keypad_group, img_face_reg);
+    lv_group_focus_obj(img_face_reg);
 }
 
 // ================= 初始化 =================
