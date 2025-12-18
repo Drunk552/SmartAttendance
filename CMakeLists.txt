@@ -9,6 +9,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 开启调试符号
 set(CMAKE_BUILD_TYPE Debug)
+# [关键] 生成 compile_commands.json，让 VS Code 自动识别头文件路径
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ==========================================
 # 2. 查找依赖库
@@ -21,7 +23,8 @@ pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(Freetype REQUIRED)
 
 # 2.3 OpenCV 依赖 (包含 face 模块)
-find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc videoio highgui objdetect face)
+# 注意：OpenCV 4 通常安装在 /usr/include/opencv4，find_package 会自动处理
+find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc videoio highgui objdetect face imgcodecs)
 
 # 2.4 SQLite3 依赖
 find_package(SQLite3 REQUIRED) 
@@ -77,9 +80,10 @@ add_executable(attendance_app ${SRC_FILES})
 target_include_directories(attendance_app PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/libs/lvgl
+    ${CMAKE_SOURCE_DIR}/src/business
     ${CMAKE_SOURCE_DIR}/src/data
+    ${CMAKE_SOURCE_DIR}/src/ui
     # [新增这一行] 添加 lv_freetype.h 所在的目录
-    ${CMAKE_SOURCE_DIR}/libs/lvgl
     ${CMAKE_SOURCE_DIR}/libs/lvgl/src/libs/freetype
 
      #添加db_storage.h
@@ -88,6 +92,7 @@ target_include_directories(attendance_app PRIVATE
 
     ${SDL2_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
+    "/usr/include/opencv4"   # [强制] Linux/WSL OpenCV4 标准路径
 )
 
 # 链接所有库
@@ -103,3 +108,4 @@ message(STATUS "Build Setup:")
 message(STATUS "  OpenCV Dir: ${OpenCV_DIR}")
 message(STATUS "  SQLite3 Lib: ${SQLite3_LIBRARIES}")
 message(STATUS "  LVGL Conf: ${CMAKE_SOURCE_DIR}/lv_conf.h")
+message(STATUS "Compile Commands Export: ${CMAKE_EXPORT_COMPILE_COMMANDS}")

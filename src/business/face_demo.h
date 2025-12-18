@@ -80,6 +80,37 @@ bool business_get_user_at(int index, int *id_out, char *name_buf, int len);
 bool business_register_user(const char* name);
 
 // ==========================================
+// 考勤记录查询接口 (Data Model for UI List)
+// ==========================================
+
+/**
+ * @brief 刷新/加载考勤记录缓存
+ * @details 从数据库查询最近的考勤记录并缓存到业务层内存中。
+ * 建议在进入“考勤记录”界面时调用一次。
+ * @return int 加载到的记录数量
+ */
+int business_load_records();
+
+/**
+ * @brief 获取当前缓存的考勤记录总数
+ * @details 用于通知 UI 列表控件（如 lv_table 或 lv_list）需要渲染多少行。
+ * @return int 记录条数
+ */
+int business_get_record_count(void);
+
+/**
+ * @brief 获取指定索引的考勤记录格式化文本
+ * @details 将考勤记录（时间、姓名、状态）格式化为字符串，供 UI 显示。
+ * 格式示例: "2023-12-14 08:30 | 张三 | 正常"
+ * * @param[in]  index 列表索引 (0 ~ count-1)
+ * @param[out] buf   目标缓冲区，用于接收格式化后的字符串
+ * @param[in]  len   缓冲区大小 (建议 >= 64 字节)
+ * @return true  获取成功
+ * @return false 索引越界或缓冲区无效
+ */
+bool business_get_record_at(int index, char *buf, int len);
+
+// ==========================================
 // C++ 专用接口 (C 文件不可见)
 // ==========================================
 

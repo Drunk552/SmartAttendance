@@ -33,6 +33,11 @@ static lv_obj_t *screen_register;
 static lv_obj_t *ta_name;      // 名字输入框
 static lv_obj_t *img_face_reg; // 注册页面的摄像头预览
 static char g_reg_name[64];    // 暂存输入的名字
+// [Epic 3.4 新增] 考勤记录页
+static lv_obj_t *screen_records;
+static lv_obj_t *obj_record_list;
+static void create_record_screen(void);
+static void load_record_screen(void);
 
 // 摄像头相关
 static uint8_t cam_buf[CAM_W * CAM_H * 3]; 
@@ -170,9 +175,13 @@ static void menu_btn_event_cb(lv_event_t *e) {
             if(strcmp(tag, "Users") == 0) {
                 load_user_list_screen();
             }
+            else if(strcmp(tag, "Records") == 0) {
+                 // Records 按钮才应该跳转到 记录页
+                 load_record_screen();
+            }
             // [修改点] 将 Settings 按钮作为 注册向导 入口
             else if(strcmp(tag, "Settings") == 0) {
-                load_register_step1(); // 进入第一步：输入姓名
+                 load_register_step1(); // 跳转到记录页
             }
             else if(strcmp(tag, "System") == 0) {
                  request_exit();
@@ -660,4 +669,70 @@ void ui_init(void) {
 
     load_main_screen();
     printf("[UI] Debug Mode v2.1 (Red Focus Style)\n");
+}
+
+// =================================================================
+// [Epic 3.4] 考勤记录页 (Record List)
+// =================================================================
+
+static void create_record_screen(void) {
+    if (screen_records) return;
+    
+    screen_records = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(screen_records, lv_color_hex(0x000000), 0);
+    
+    // 标题
+    lv_obj_t *title = lv_label_create(screen_records);
+    lv_label_set_text(title, "Attendance Log");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    
+    // 列表容器
+    obj_record_list = lv_list_create(screen_records);
+    lv_obj_set_size(obj_record_list, 220, 260);
+    lv_obj_align(obj_record_list, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_bg_color(obj_record_list, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_border_width(obj_record_list, 0, 0);
+}
+
+static void load_record_screen(void) {
+    create_record_screen();
+    
+    printf("[UI] Loading Records...\n");
+    
+    // 1. 准备界面
+    lv_group_remove_all_objs(g_keypad_group);
+    lv_obj_clean(obj_record_list);
+    
+    // 2. 获取数据
+    int count = business_get_record_count();
+    printf("[UI] Found %d records\n", count);
+    
+    if (count == 0) {
+        lv_list_add_text(obj_record_list, "No Records Found");
+    } else {
+        char buf[128];
+        for(int i=0; i<count; i++) {
+            if (business_get_record_at(i, buf, sizeof(buf))) {
+                // 使用列表文本模式，前面加个时钟图标
+                lv_obj_t *btn = lv_list_add_button(obj_record_list, LV_SYMBOL_LIST, buf);
+                
+                // 复用之前的列表按键回调 (处理上下滚动/ESC返回)
+                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, NULL);
+                lv_group_add_obj(g_keypad_group, btn);
+                
+                if (i==0) lv_group_focus_obj(btn);
+            }
+        }
+    }
+    
+    // 3. 切换显示
+    #if LV_VERSION_CHECK(9,0,0)
+        lv_screen_load(screen_records);
+    #else
+        lv_scr_load(screen_records);
+    #endif
+    
+    // 4. 兜底焦点
+    lv_group_add_obj(g_keypad_group, screen_records);
 }
