@@ -9,6 +9,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 开启调试符号
 set(CMAKE_BUILD_TYPE Debug)
+# [关键] 生成 compile_commands.json，让 VS Code 自动识别头文件路径
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ==========================================
 # 2. 查找依赖库
@@ -21,7 +23,8 @@ pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(Freetype REQUIRED)
 
 # 2.3 OpenCV 依赖 (包含 face 模块)
-find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc videoio highgui objdetect face)
+# 注意：OpenCV 4 通常安装在 /usr/include/opencv4，find_package 会自动处理
+find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc videoio highgui objdetect face imgcodecs)
 
 # 2.4 SQLite3 依赖
 find_package(SQLite3 REQUIRED) 
@@ -30,8 +33,20 @@ find_package(SQLite3 REQUIRED)
 # ==========================================
 # 3. 第三方库配置 (LVGL)
 # ==========================================
-# [关键修正] 在引入子目录之前，设置变量告诉 LVGL 的构建脚本去 include 目录找配置文件
-#//set(LV_CONF_PATH "${CMAKE_SOURCE_DIR}/include/lv_conf.h" CACHE STRING "" FORCE)
+
+# [新增] 集成 libxlsxwriter (用于生成 Excel 报表)
+include(FetchContent)
+FetchContent_Declare(
+    libxlsxwriter
+    GIT_REPOSITORY https://github.com/jmcnamara/libxlsxwriter.git
+    GIT_TAG        RELEASE_1.1.5  # 使用稳定版本
+)
+FetchContent_MakeAvailable(libxlsxwriter)
+
+# 设置变量（注意：这一行必须放在 add_subdirectory 之前！）
+# 这样 LVGL 的构建脚本在运行时就能知道配置文件在哪里。
+set(LV_CONF_PATH "${CMAKE_SOURCE_DIR}/lv_conf.h")
+
 # 引入 libs/lvgl 子目录
 add_subdirectory(libs/lvgl)
 
@@ -72,11 +87,13 @@ add_executable(attendance_app ${SRC_FILES})
 
 # 包含头文件路径
 target_include_directories(attendance_app PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/libs/lvgl
+    ${CMAKE_SOURCE_DIR}/src/business
     ${CMAKE_SOURCE_DIR}/src/data
+    ${CMAKE_SOURCE_DIR}/src/ui
     # [新增这一行] 添加 lv_freetype.h 所在的目录
-    ${CMAKE_SOURCE_DIR}/libs/lvgl
     ${CMAKE_SOURCE_DIR}/libs/lvgl/src/libs/freetype
 
      #添加db_storage.h
@@ -85,6 +102,7 @@ target_include_directories(attendance_app PRIVATE
 
     ${SDL2_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
+    "/usr/include/opencv4"   # [强制] Linux/WSL OpenCV4 标准路径
 )
 
 # 链接所有库
@@ -93,6 +111,7 @@ target_link_libraries(attendance_app PRIVATE
     ${OpenCV_LIBS}      # 图像处理库
     SQLite::SQLite3     # 数据库
     ${SDL2_LIBRARIES}   # 驱动支持
+    xlsxwriter  # <--- [新增] 链接 libxlsxwriter
 )
 
 # 编译信息输出
@@ -100,3 +119,4 @@ message(STATUS "Build Setup:")
 message(STATUS "  OpenCV Dir: ${OpenCV_DIR}")
 message(STATUS "  SQLite3 Lib: ${SQLite3_LIBRARIES}")
 message(STATUS "  LVGL Conf: ${CMAKE_SOURCE_DIR}/lv_conf.h")
+message(STATUS "Compile Commands Export: ${CMAKE_EXPORT_COMPILE_COMMANDS}")

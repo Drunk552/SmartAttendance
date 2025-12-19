@@ -1,5 +1,5 @@
 /**
- * @file lv_sdl_window.h
+ * @file lv_sdl_window.c
  *
  */
 
@@ -158,6 +158,12 @@ void lv_sdl_window_set_resizeable(lv_display_t * disp, bool value)
     SDL_SetWindowResizable(dsc->window, value);
 }
 
+void lv_sdl_window_set_size(lv_display_t * disp, int32_t hor_res, int32_t ver_res)
+{
+    lv_sdl_window_t * dsc = lv_display_get_driver_data(disp);
+    SDL_SetWindowSize(dsc->window, hor_res, ver_res);
+}
+
 void lv_sdl_window_set_zoom(lv_display_t * disp, float zoom)
 {
     lv_sdl_window_t * dsc = lv_display_get_driver_data(disp);
@@ -206,6 +212,20 @@ void * lv_sdl_window_get_renderer(lv_display_t * disp)
 {
     lv_sdl_window_t * dsc = lv_display_get_driver_data(disp);
     return dsc->renderer;
+}
+
+struct SDL_Window * lv_sdl_window_get_window(lv_display_t * disp)
+{
+    if(!disp) {
+        LV_LOG_ERROR("invalid display pointer");
+        return NULL;
+    }
+    lv_sdl_window_t * dsc = lv_display_get_driver_data(disp);
+    if(!dsc) {
+        LV_LOG_ERROR("invalid driver data");
+        return NULL;
+    }
+    return dsc->window;
 }
 
 void lv_sdl_quit(void)
@@ -362,102 +382,13 @@ static void sdl_event_handler(lv_timer_t * t)
         }
     }
 }
-static void window_create1(lv_display_t * disp)
-{
-    lv_sdl_window_t * dsc = lv_display_get_driver_data(disp);
-    dsc->zoom = 1.0f;
-
-    int flag = SDL_WINDOW_RESIZABLE;
-#if LV_SDL_FULLSCREEN
-    flag |= SDL_WINDOW_FULLSCREEN;
-#endif
-
-    int32_t hor_res = (int32_t)((float)(disp->hor_res) * dsc->zoom);
-    int32_t ver_res = (int32_t)((float)(disp->ver_res) * dsc->zoom);
-
-    /* ---- 读取窗口位置需求 ---- */
-    int x_pos = SDL_WINDOWPOS_UNDEFINED;
-    int y_pos = SDL_WINDOWPOS_UNDEFINED;
-
-    /* 1) 优先自定义环境变量：LV_SDL_WINDOW_POS=100,80 */
-    const char *pos = getenv("LV_SDL_WINDOW_POS");
-    if(pos) {
-        int x, y;
-        if(sscanf(pos, "%d,%d", &x, &y) == 2) {
-            x_pos = x;
-            y_pos = y;
-        }
-    }
-
-    /* 2) 如果没有给坐标，允许用 SDL 的“居中提示” */
-    if(x_pos == SDL_WINDOWPOS_UNDEFINED && y_pos == SDL_WINDOWPOS_UNDEFINED) {
-        const char *cen = getenv("SDL_VIDEO_CENTERED");
-        if(cen && *cen) {
-            x_pos = SDL_WINDOWPOS_CENTERED;
-            y_pos = SDL_WINDOWPOS_CENTERED;
-        }
-    }
-
-    /* 3) 创建窗口：把我们期望的位置直接传给 SDL（X11 会尊重；Wayland 可能忽略） */
-    dsc->window = SDL_CreateWindow("LVGL Simulator",
-                                   x_pos, y_pos,
-                                   hor_res, ver_res, flag);
-
-    /* Wayland 下有时会忽略创建时的位置；再尝试设一次（若被忽略也无害） */
-    if(dsc->window && (x_pos != SDL_WINDOWPOS_UNDEFINED || y_pos != SDL_WINDOWPOS_UNDEFINED)) {
-        SDL_SetWindowPosition(dsc->window, x_pos, y_pos);
-    }
-
-    /* 4) 夹紧：如果合成器给了个很离谱的位置，拉回屏内 */
-    if(dsc->window) {
-        const char *vd = SDL_GetCurrentVideoDriver();
-        SDL_Rect usable = {0,0,0,0};
-        if(SDL_GetDisplayUsableBounds(0, &usable) != 0) {
-            SDL_GetDisplayBounds(0, &usable);
-        }
-        if(usable.w > 0 && usable.h > 0) {
-            int wx, wy, ww, wh;
-            SDL_GetWindowPosition(dsc->window, &wx, &wy);
-            SDL_GetWindowSize(dsc->window, &ww, &wh);
-
-            int nx = wx, ny = wy;
-            /* 如果用的是居中提示，尽量真·居中一次（Wayland 可能无效） */
-            if(x_pos == SDL_WINDOWPOS_CENTERED) nx = usable.x + (usable.w - ww)/2;
-            if(y_pos == SDL_WINDOWPOS_CENTERED) ny = usable.y + (usable.h - wh)/2;
-
-            /* 夹紧到屏内 */
-            if(nx + ww > usable.x + usable.w) nx = usable.x + usable.w - ww;
-            if(ny + wh > usable.y + usable.h) ny = usable.y + usable.h - wh;
-            if(nx < usable.x) nx = usable.x;
-            if(ny < usable.y) ny = usable.y;
-
-            SDL_SetWindowPosition(dsc->window, nx, ny);
-        }
-    }
-
-    dsc->renderer = SDL_CreateRenderer(dsc->window, -1,
-                                       LV_SDL_ACCELERATED ? SDL_RENDERER_ACCELERATED : SDL_RENDERER_SOFTWARE);
-#if LV_USE_DRAW_SDL == 0
-    texture_resize(disp);
-
-    uint32_t px_size = lv_color_format_get_size(lv_display_get_color_format(disp));
-    lv_memset(dsc->fb1, 0xff, hor_res * ver_res * px_size);
-    if(dsc->fb2) lv_memset(dsc->fb2, 0xff, hor_res * ver_res * px_size);
-#endif
-
-    /* 某些平台需要再设一次尺寸 */
-    SDL_SetWindowSize(dsc->window, hor_res, ver_res);
-#if LV_USE_DRAW_SDL == 0
-    texture_resize(disp);
-#endif
-}
 
 static void window_create(lv_display_t * disp)
 {
     lv_sdl_window_t * dsc = lv_display_get_driver_data(disp);
     dsc->zoom = 1.0;
 
-    int flag = SDL_WINDOW_RESIZABLE;
+    int flag = 0;
 #if LV_SDL_FULLSCREEN
     flag |= SDL_WINDOW_FULLSCREEN;
 #endif
@@ -519,6 +450,7 @@ static void texture_resize(lv_display_t * disp)
     lv_sdl_window_t * dsc = lv_display_get_driver_data(disp);
 
     dsc->fb1 = sdl_draw_buf_realloc_aligned(dsc->fb1, stride * disp->ver_res);
+    LV_ASSERT_MALLOC(dsc->fb1);
     lv_memzero(dsc->fb1, stride * disp->ver_res);
 
     if(sdl_render_mode() == LV_DISPLAY_RENDER_MODE_PARTIAL) {
