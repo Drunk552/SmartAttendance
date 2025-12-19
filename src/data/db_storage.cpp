@@ -537,34 +537,34 @@ bool data_saveAttendance(int user_id, const cv::Mat& image) {
     return db_log_attendance(user_id, 0, image, 0);
 }
 
-/*
-// [新增实现] 读取所有用户（用于初始化训练）
-std::vector<UserData> data_getAllUsers() {
-    std::vector<UserData> users;
-    // 更新 SQL 以匹配新架构
-    const char* sql = "SELECT id, name, face_data, privilege, dept_id FROM users;";
-    sqlite3_stmt* stmt;
+/**
+ * @brief 获取最后保存图像的ID
+ * @return 最后保存图像的ID，失败返回 -1
+ */
+long long data_getLastImageID() {
+    if (!db) {
+        std::cerr << "[Data] Error: Database not initialized!" << std::endl;
+        return -1;
+    }// 校验数据库连接
 
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            UserData u;
-            u.id = sqlite3_column_int(stmt, 0);
-            u.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-            
-            // 读取 BLOB
-            const void* blob = sqlite3_column_blob(stmt, 2);
-            int bytes = sqlite3_column_bytes(stmt, 2);
-            u.face_feature.assign((const uchar*)blob, (const uchar*)blob + bytes);
-            
-            // 读取新字段，处理可能的 NULL
-            u.role = sqlite3_column_int(stmt, 3);
-            u.dept_id = sqlite3_column_int(stmt, 4);
+    const char* sql = "SELECT id FROM processed_images ORDER BY id DESC LIMIT 1;";// 获取最后一条记录的ID
+    sqlite3_stmt* stmt;// 语句句柄
+    
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);// 预编译 SQL
+    if (rc != SQLITE_OK) {
+        std::cerr << "[Data] Prepare failed: " << sqlite3_errmsg(db) << std::endl;
+        return -1;
+    }// 预编译失败
 
-            users.push_back(u);
-        }
-    }
-    sqlite3_finalize(stmt);
-    return users;
+    rc = sqlite3_step(stmt);// 执行 SQL
+    long long last_id = -1;// 默认返回值
+    if (rc == SQLITE_ROW) {
+        last_id = sqlite3_column_int64(stmt, 0);
+    }// 成功获取到数据 
+    else {
+        std::cerr << "[Data] No images found in database." << std::endl;
+    }// 未找到数据
+
+    sqlite3_finalize(stmt);// 清理语句句柄
+    return last_id;// 返回最后保存的ID
 }
-*/
-

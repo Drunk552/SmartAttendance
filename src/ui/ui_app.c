@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdbool.h>
+#include"../business/face_demo.h"//引入业务接口
 #include <string.h>
 #include <stdlib.h>
 #include "../business/face_demo.h" 
