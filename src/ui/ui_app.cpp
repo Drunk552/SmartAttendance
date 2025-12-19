@@ -1,18 +1,27 @@
 /**
- * @file ui_app.c
- * @brief UI 层 - v2.1 (Focus Debug Mode)
- * @details 增加焦点移动日志 + 极高对比度的焦点样式
+ * @file ui_app.cpp
+ * @brief UI 层 - v2.1 (Focus Debug Mode) - C++ 风格改写
+ * @details 将文件从 C 风格迁移为更符合 C++ 的写法：
+ *  - 使用 std::string / std::array 等
+ *  - 使用 nullptr 替换 NULL
+ *  - 使用 snprintf / std::string 替换 sprintf / char buffer 处理
+ *  - 其它小幅现代化改进（保持 LVGL 回调接口不变）
  */
 #include "ui_app.h"
 #include <lvgl.h>
 #include <unistd.h>
-#include <stdio.h>
-#include <time.h>
-#include <stdbool.h>
-#include"../business/face_demo.h"//引入业务接口
-#include <string.h>
-#include <stdlib.h>
-#include "../business/face_demo.h" 
+#include <cstdio>
+#include <ctime>
+#include <cstring>
+#include <cstdlib>
+#include <string>
+#include <array>
+#include <vector>
+#include <ctime>
+#include <sstream>
+
+// 业务接口
+#include "../business/face_demo.h"
 #include "lv_conf.h"
 
 // ================= 宏定义 =================
@@ -22,28 +31,27 @@
 #define CAM_H 180
 
 // ================= 全局变量 =================
-static lv_obj_t *screen_main; 
-static lv_obj_t *screen_menu; 
-static lv_obj_t *obj_grid; 
-static lv_group_t *g_keypad_group; 
+static lv_obj_t *screen_main = nullptr; 
+static lv_obj_t *screen_menu = nullptr; 
+static lv_obj_t *obj_grid = nullptr; 
+static lv_group_t *g_keypad_group = nullptr; 
 
 // [Epic 3.3 新增]
-static lv_obj_t *screen_list;    // 列表页屏幕
-static lv_obj_t *obj_list_view;  // 列表控件容器
+static lv_obj_t *screen_list = nullptr;    // 列表页屏幕
+static lv_obj_t *obj_list_view = nullptr;  // 列表控件容器
 // [Epic 3.3 注册向导] 全局变量
-static lv_obj_t *screen_register;
-static lv_obj_t *ta_name;      // 名字输入框
-static lv_obj_t *img_face_reg; // 注册页面的摄像头预览
-static char g_reg_name[64];    // 暂存输入的名字
+static lv_obj_t *screen_register = nullptr;
+static lv_obj_t *ta_name = nullptr;      // 名字输入框
+static lv_obj_t *img_face_reg = nullptr; // 注册页面的摄像头预览
+static std::string g_reg_name;           // 使用 std::string 暂存输入的名字
 // [Epic 3.4 新增] 考勤记录页
-static lv_obj_t *screen_records;
-static lv_obj_t *obj_record_list;
-static void create_record_screen(void);
-static void load_record_screen(void);
+static lv_obj_t *screen_records = nullptr;
+static lv_obj_t *obj_record_list = nullptr;
 
-// 摄像头相关
-static uint8_t cam_buf[CAM_W * CAM_H * 3]; 
-static lv_obj_t *img_camera = NULL;
+// ================= 摄像头相关 =================
+// 使用 std::array 作为静态缓冲区（更安全、类型化）
+static std::array<uint8_t, CAM_W * CAM_H * 3> cam_buf;
+static lv_obj_t *img_camera = nullptr;
 
 #if LV_VERSION_CHECK(9,0,0)
     static lv_image_dsc_t img_dsc;
@@ -51,23 +59,25 @@ static lv_obj_t *img_camera = NULL;
     static lv_img_dsc_t img_dsc;
 #endif
 
-static lv_obj_t *label_time;
+static lv_obj_t *label_time = nullptr;
 
 // ================= 样式定义 =================
 static lv_style_t style_base;
 static lv_style_t style_menu_btn;
 static lv_style_t style_menu_btn_focused; // 焦点样式
 
-// ================= 声明 =================
-static void create_main_screen(void);
-static void create_menu_screen(void);
+
+// ================= 核心导航函数前向声明 =================
 static void load_main_screen(void);
 static void load_menu_screen(void);
+static void load_record_screen(void);
+static void request_exit(void);
 
 // [Epic 3.3 新增]
 static void create_user_list_screen(void);
 static void load_user_list_screen(void);
 static void list_btn_event_cb(lv_event_t *e);
+
 // [Epic 3.3 注册向导] 函数声明
 static void create_register_screen(void);
 static void load_register_step1(void); // 输入姓名
@@ -77,33 +87,32 @@ static void register_face_timer_cb(lv_timer_t *timer); // 注册页面的摄像�
 // ================= 辅助函数 =================
 
 static void request_exit(void) {
-    printf("[UI] Requesting Exit...\n");
+    std::printf("[UI] Requesting Exit...\n");
     g_program_should_exit = true; 
 }
 
-static void get_current_time_str(char *buf, size_t size) {
-    time_t rawtime;
-    struct tm *timeinfo;
-    time(&rawtime);
-    timeinfo = localtime(&rawtime);
-    strftime(buf, size, "%H:%M", timeinfo);
+static std::string get_current_time_str() {
+    std::time_t rawtime = std::time(nullptr);
+    std::tm *timeinfo = std::localtime(&rawtime);
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%H:%M", timeinfo);
+    return std::string(buf);
 }
 
-static void camera_timer_cb(lv_timer_t *timer) {
+static void camera_timer_cb(lv_timer_t * /*timer*/) {
     if (g_program_should_exit) return; 
     if (lv_screen_active() == screen_main && img_camera) {
-        if (business_get_display_frame(cam_buf, CAM_W, CAM_H)) {
+        if (business_get_display_frame(cam_buf.data(), CAM_W, CAM_H)) {
             lv_obj_invalidate(img_camera);
         }
     }
 }
 
-static void time_timer_cb(lv_timer_t *timer) {
+static void time_timer_cb(lv_timer_t * /*timer*/) {
     if (g_program_should_exit) return;
     if (label_time && lv_obj_is_valid(label_time)) {
-        char buf[16];
-        get_current_time_str(buf, sizeof(buf));
-        lv_label_set_text(label_time, buf);
+        std::string t = get_current_time_str();
+        lv_label_set_text(label_time, t.c_str());
     }
 }
 
@@ -121,8 +130,9 @@ static void main_screen_event_cb(lv_event_t *e) {
 // [升级版] 支持真正的上下左右二维导航
 static void menu_btn_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *btn = lv_event_get_target(e);
-    const char* tag = (const char*)lv_event_get_user_data(e);
+    // 使用 C 风格强转：
+    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
+    const char* tag = static_cast<const char*>(lv_event_get_user_data(e));
 
     // 仅处理按键事件
     if (code == LV_EVENT_KEY) {
@@ -139,22 +149,22 @@ static void menu_btn_event_cb(lv_event_t *e) {
         if (key == LV_KEY_RIGHT) {
             // 向右：+1，循环
             next_index = (index + 1) % total;
-            printf("[UI] Nav: RIGHT (%d -> %d)\n", index, next_index);
+            std::printf("[UI] Nav: RIGHT (%d -> %d)\n", index, next_index);
         }
         else if (key == LV_KEY_LEFT) {
             // 向左：-1，循环 (加 total 防止负数)
             next_index = (index + total - 1) % total;
-            printf("[UI] Nav: LEFT (%d -> %d)\n", index, next_index);
+            std::printf("[UI] Nav: LEFT (%d -> %d)\n", index, next_index);
         }
         else if (key == LV_KEY_DOWN) {
             // 向下：+2 (因为是2列布局)，循环
             next_index = (index + 2) % total;
-            printf("[UI] Nav: DOWN (%d -> %d)\n", index, next_index);
+            std::printf("[UI] Nav: DOWN (%d -> %d)\n", index, next_index);
         }
         else if (key == LV_KEY_UP) {
             // 向上：-2，循环
             next_index = (index + total - 2) % total;
-            printf("[UI] Nav: UP (%d -> %d)\n", index, next_index);
+            std::printf("[UI] Nav: UP (%d -> %d)\n", index, next_index);
         }
 
         // --- 执行跳转 ---
@@ -168,24 +178,24 @@ static void menu_btn_event_cb(lv_event_t *e) {
 
         // --- 处理功能键 ---
         if (key == LV_KEY_ESC) {
-            printf("[UI] ESC -> Back\n");
+            std::printf("[UI] ESC -> Back\n");
             load_main_screen();
         }
         else if (key == LV_KEY_ENTER) {
-            printf("[UI] Action: %s\n", tag);
+            std::printf("[UI] Action: %s\n", tag);
             
-            if(strcmp(tag, "Users") == 0) {
+            if(std::strcmp(tag, "Users") == 0) {
                 load_user_list_screen();
             }
-            else if(strcmp(tag, "Records") == 0) {
+            else if(std::strcmp(tag, "Records") == 0) {
                  // Records 按钮才应该跳转到 记录页
                  load_record_screen();
             }
             // [修改点] 将 Settings 按钮作为 注册向导 入口
-            else if(strcmp(tag, "Settings") == 0) {
-                 load_register_step1(); // 跳转到记录页
+            else if(std::strcmp(tag, "Settings") == 0) {
+                 load_register_step1(); // 跳转到注册向导
             }
-            else if(strcmp(tag, "System") == 0) {
+            else if(std::strcmp(tag, "System") == 0) {
                  request_exit();
             }
         }
@@ -193,8 +203,8 @@ static void menu_btn_event_cb(lv_event_t *e) {
     
     // 保留点击支持
     if (code == LV_EVENT_CLICKED) {
-         printf("[UI] Click: %s\n", tag);
-         if(strcmp(tag, "System") == 0) {
+         std::printf("[UI] Click: %s\n", tag);
+         if(std::strcmp(tag, "System") == 0) {
             extern volatile bool g_program_should_exit;
             g_program_should_exit = true; 
         }  
@@ -227,10 +237,10 @@ static void init_styles(void) {
 }
 
 static void create_main_screen(void) {
-    screen_main = lv_obj_create(NULL);
+    screen_main = lv_obj_create(nullptr);
     lv_obj_add_style(screen_main, &style_base, 0);
     lv_obj_set_scrollbar_mode(screen_main, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_add_event_cb(screen_main, main_screen_event_cb, LV_EVENT_ALL, NULL);
+    lv_obj_add_event_cb(screen_main, main_screen_event_cb, LV_EVENT_ALL, nullptr);
 
     // Top Bar
     lv_obj_t *top = lv_obj_create(screen_main);
@@ -245,8 +255,8 @@ static void create_main_screen(void) {
     // Camera
     img_dsc.header.w = CAM_W;
     img_dsc.header.h = CAM_H;
-    img_dsc.data = cam_buf;
-    img_dsc.data_size = sizeof(cam_buf);
+    img_dsc.data = cam_buf.data();
+    img_dsc.data_size = static_cast<uint32_t>(cam_buf.size());
     #if LV_VERSION_CHECK(9,0,0)
         img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
         img_dsc.header.cf = LV_COLOR_FORMAT_RGB888;
@@ -274,7 +284,7 @@ static void create_main_screen(void) {
 }
 
 static void create_menu_screen(void) {
-    screen_menu = lv_obj_create(NULL);
+    screen_menu = lv_obj_create(nullptr);
     lv_obj_add_style(screen_menu, &style_base, 0);
     
     lv_obj_t *title = lv_label_create(screen_menu);
@@ -321,7 +331,8 @@ static void create_menu_screen(void) {
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, labels[i]);
 
-        lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_ALL, (void*)labels[i]);
+        // 传递静态字符串指针作为 user_data（安全：指向静态文字）
+        lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_ALL, const_cast<char*>(labels[i]));
     }
 }
 
@@ -330,7 +341,7 @@ static void create_menu_screen(void) {
 static void load_main_screen(void) {
     if (!screen_main) create_main_screen();
     
-    printf("[UI] Switch to Main\n");
+    std::printf("[UI] Switch to Main\n");
     lv_group_remove_all_objs(g_keypad_group);
 
     #if LV_VERSION_CHECK(9,0,0)
@@ -346,7 +357,7 @@ static void load_main_screen(void) {
 static void load_menu_screen(void) {
     if (!screen_menu) create_menu_screen();
 
-    printf("[UI] Switch to Menu\n");
+    std::printf("[UI] Switch to Menu\n");
     lv_group_remove_all_objs(g_keypad_group);
 
     #if LV_VERSION_CHECK(9,0,0)
@@ -366,7 +377,7 @@ static void load_menu_screen(void) {
     if (cnt > 0) {
         lv_obj_t *first_btn = lv_obj_get_child(obj_grid, 0);
         lv_group_focus_obj(first_btn);
-        printf("[UI] Initial Focus Set to First Button\n");
+        std::printf("[UI] Initial Focus Set to First Button\n");
     }
     
     // 兜底背景
@@ -398,14 +409,14 @@ static void list_btn_event_cb(lv_event_t *e) {
         }
         // ENTER键：查看详情 (目前仅打印)
         else if (key == LV_KEY_ENTER) {
-            printf("[UI] View User Details...\n");
+            std::printf("[UI] View User Details...\n");
         }
     }
 }
 
 // 2. 创建列表屏幕 UI
 static void create_user_list_screen(void) {
-    screen_list = lv_obj_create(NULL);
+    screen_list = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(screen_list, lv_color_hex(0x000000), 0);
     
     // 标题
@@ -426,7 +437,7 @@ static void create_user_list_screen(void) {
 static void load_user_list_screen(void) {
     if (!screen_list) create_user_list_screen();
     
-    printf("[UI] Switch to User List\n");
+    std::printf("[UI] Switch to User List\n");
     
     // A. 清空输入组 (准备接管键盘)
     lv_group_remove_all_objs(g_keypad_group);
@@ -436,7 +447,7 @@ static void load_user_list_screen(void) {
     
     // C. 从业务层获取用户数据
     int count = business_get_user_count(); // 调用 face_demo.cpp 的接口
-    printf("[UI] Fetching users: %d\n", count);
+    std::printf("[UI] Fetching users: %d\n", count);
     
     if (count == 0) {
         lv_list_add_text(obj_list_view, "No Users Found");
@@ -447,20 +458,20 @@ static void load_user_list_screen(void) {
         
         for(int i=0; i<count; i++) {
             if (business_get_user_at(i, &id, name_buf, sizeof(name_buf))) {
-                sprintf(label_buf, "[%d] %s", id, name_buf);
+                std::snprintf(label_buf, sizeof(label_buf), "[%d] %s", id, name_buf);
                 
                 // 1. 创建按钮
                 lv_obj_t *btn = lv_list_add_button(obj_list_view, LV_SYMBOL_BULLET, label_buf);
                 
                 // [新增] 2. 检查是否创建成功 (防崩溃)
-                if (btn == NULL) {
-                    printf("[Error] LVGL Out of Memory! Stopped at user %d\n", i);
+                if (btn == nullptr) {
+                    std::printf("[Error] LVGL Out of Memory! Stopped at user %d\n", i);
                     lv_label_set_text(lv_list_add_text(obj_list_view, "Memory Full!"), "System Out of Memory");
                     break; // 停止继续创建，保护程序不崩
                 }
 
                 // 3. 设置事件和组
-                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, NULL);
+                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, nullptr);
                 lv_group_add_obj(g_keypad_group, btn);
                 
                 if (i == 0) lv_group_focus_obj(btn);
@@ -484,12 +495,12 @@ static void load_user_list_screen(void) {
 // =================================================================
 
 // --- 辅助：注册页面的摄像头刷新 ---
-static void register_face_timer_cb(lv_timer_t *timer) {
+static void register_face_timer_cb(lv_timer_t * /*timer*/) {
     // 只有在注册界面才刷新
     if (lv_screen_active() != screen_register) return;
     
     // 复用全局 cam_buf 和业务接口
-    if (img_face_reg && business_get_display_frame(cam_buf, CAM_W, CAM_H)) {
+    if (img_face_reg && business_get_display_frame(cam_buf.data(), CAM_W, CAM_H)) {
         lv_obj_invalidate(img_face_reg);
     }
 }
@@ -501,16 +512,16 @@ static void reg_step2_event_cb(lv_event_t *e) {
         
         if (key == LV_KEY_ENTER) {
             // [核心] 触发业务层采集
-            printf("[UI] Capturing face for: %s\n", g_reg_name);
+            std::printf("[UI] Capturing face for: %s\n", g_reg_name.c_str());
             
             // 调用业务接口保存
-            if (business_register_user(g_reg_name)) {
-                printf("[UI] Reg Success! Back to Menu.\n");
+            if (business_register_user(g_reg_name.c_str())) {
+                std::printf("[UI] Reg Success! Back to Menu.\n");
                 
                 // 简单反馈：延迟或直接返回
                 load_menu_screen(); 
             } else {
-                printf("[UI] Reg Failed!\n");
+                std::printf("[UI] Reg Failed!\n");
             }
         }
         else if (key == LV_KEY_ESC) {
@@ -527,10 +538,12 @@ static void ta_event_cb(lv_event_t *e) {
         // 按 Enter 确认名字，进入下一步
         if (key == LV_KEY_ENTER) {
             const char *txt = lv_textarea_get_text(ta_name);
-            if (strlen(txt) == 0) return; // 禁止空名
+            if (txt == nullptr) return;
+            std::string s(txt);
+            if (s.empty()) return; // 禁止空名
             
-            strcpy(g_reg_name, txt);
-            printf("[UI] Name confirmed: %s -> Next Step\n", g_reg_name);
+            g_reg_name = s;
+            std::printf("[UI] Name confirmed: %s -> Next Step\n", g_reg_name.c_str());
             
             load_register_step2(); // 进入拍照步骤
         }
@@ -543,18 +556,18 @@ static void ta_event_cb(lv_event_t *e) {
 // --- 创建注册屏幕容器 ---
 static void create_register_screen(void) {
     if (screen_register) return;
-    screen_register = lv_obj_create(NULL);
+    screen_register = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(screen_register, lv_color_black(), 0);
     
     // 注册专用的定时器 (100ms刷新)，与主页定时器分开
-    lv_timer_create(register_face_timer_cb, 100, NULL);
+    lv_timer_create(register_face_timer_cb, 100, nullptr);
 }
 
 // --- 加载 Step 1: 输入姓名 ---
 static void load_register_step1(void) {
     create_register_screen();
     
-    printf("[UI] Wizard Step 1: Name\n");
+    std::printf("[UI] Wizard Step 1: Name\n");
 
     // 1. 清理并准备界面
     lv_obj_clean(screen_register);
@@ -571,7 +584,7 @@ static void load_register_step1(void) {
     lv_textarea_set_one_line(ta_name, true);
     lv_obj_set_width(ta_name, 200);
     lv_obj_align(ta_name, LV_ALIGN_CENTER, 0, -20);
-    lv_obj_add_event_cb(ta_name, ta_event_cb, LV_EVENT_ALL, NULL);
+    lv_obj_add_event_cb(ta_name, ta_event_cb, LV_EVENT_ALL, nullptr);
     
     // 4. 提示
     lv_obj_t *tip = lv_label_create(screen_register);
@@ -593,7 +606,7 @@ static void load_register_step1(void) {
 
 // --- 加载 Step 2: 采集人脸 ---
 static void load_register_step2(void) {
-    printf("[UI] Wizard Step 2: Face\n");
+    std::printf("[UI] Wizard Step 2: Face\n");
 
     // 1. 清理 Step 1 的控件
     lv_obj_clean(screen_register);
@@ -622,11 +635,13 @@ static void load_register_step2(void) {
     
     // 4. 将图片设为可交互，用来接收 ENTER 键
     lv_obj_add_flag(img_face_reg, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(img_face_reg, reg_step2_event_cb, LV_EVENT_KEY, NULL);
+    lv_obj_add_event_cb(img_face_reg, reg_step2_event_cb, LV_EVENT_KEY, nullptr);
     
     // 5. 提示
     lv_obj_t *tip = lv_label_create(screen_register);
-    lv_label_set_text_fmt(tip, "Hi, %s!\nPress ENTER to Capture", g_reg_name);
+    char tip_buf[128];
+    std::snprintf(tip_buf, sizeof(tip_buf), "Hi, %s!\nPress ENTER to Capture", g_reg_name.c_str());
+    lv_label_set_text(tip, tip_buf);
     lv_obj_set_style_text_color(tip, lv_palette_main(LV_PALETTE_YELLOW), 0);
     lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -10);
     
@@ -651,7 +666,7 @@ void ui_init(void) {
         // [核心修复] 强制将键盘类型设为 Keypad (考勤机模式)
         // 这样 LVGL 才会把 方向键 当作 焦点切换键
         lv_indev_set_type(kbd, LV_INDEV_TYPE_KEYPAD);
-        printf("[UI] Keyboard force set to KEYPAD mode.\n");
+        std::printf("[UI] Keyboard force set to KEYPAD mode.\n");
     }
 
     // 1. 确保创建了组
@@ -666,11 +681,11 @@ void ui_init(void) {
     init_styles();
     create_main_screen();
     
-    lv_timer_create(camera_timer_cb, 100, NULL);
-    lv_timer_create(time_timer_cb, 1000, NULL);
+    lv_timer_create(camera_timer_cb, 100, nullptr);
+    lv_timer_create(time_timer_cb, 1000, nullptr);
 
     load_main_screen();
-    printf("[UI] Debug Mode v2.1 (Red Focus Style)\n");
+    std::printf("[UI] Debug Mode v2.1 (Red Focus Style)\n");
 }
 
 // =================================================================
@@ -680,7 +695,7 @@ void ui_init(void) {
 static void create_record_screen(void) {
     if (screen_records) return;
     
-    screen_records = lv_obj_create(NULL);
+    screen_records = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(screen_records, lv_color_hex(0x000000), 0);
     
     // 标题
@@ -700,7 +715,7 @@ static void create_record_screen(void) {
 static void load_record_screen(void) {
     create_record_screen();
     
-    printf("[UI] Loading Records...\n");
+    std::printf("[UI] Loading Records...\n");
     
     // 1. 准备界面
     lv_group_remove_all_objs(g_keypad_group);
@@ -708,7 +723,7 @@ static void load_record_screen(void) {
     
     // 2. 获取数据
     int count = business_get_record_count();
-    printf("[UI] Found %d records\n", count);
+    std::printf("[UI] Found %d records\n", count);
     
     if (count == 0) {
         lv_list_add_text(obj_record_list, "No Records Found");
@@ -720,7 +735,7 @@ static void load_record_screen(void) {
                 lv_obj_t *btn = lv_list_add_button(obj_record_list, LV_SYMBOL_LIST, buf);
                 
                 // 复用之前的列表按键回调 (处理上下滚动/ESC返回)
-                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, NULL);
+                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, nullptr);
                 lv_group_add_obj(g_keypad_group, btn);
                 
                 if (i==0) lv_group_focus_obj(btn);

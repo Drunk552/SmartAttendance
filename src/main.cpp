@@ -20,11 +20,8 @@
 #include <opencv2/highgui.hpp>   
 #include <sqlite3.h>
 
-// [修复 3] 使用 extern "C" 定义变量，以匹配 ui_app.h 中的声明
-// 这样 C 语言 (ui_app.c) 和 C++ (main.cpp) 才能看到同一个变量
-extern "C" {
-    volatile bool g_program_should_exit = false;
-}
+//直接定义，使用 C++ 链接
+volatile bool g_program_should_exit = false;
 
 // 2. 引入项目模块头文件
 #include "ui/ui_app.h"          // UI层
