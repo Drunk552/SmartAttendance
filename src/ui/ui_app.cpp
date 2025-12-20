@@ -20,6 +20,9 @@
 #include <ctime>
 #include <sstream>
 
+// 【新增】声明你的自定义字体
+LV_FONT_DECLARE(font_noto_16);
+
 // 业务接口
 #include "../business/face_demo.h"
 #include "lv_conf.h"
@@ -353,11 +356,25 @@ static void create_main_screen(void) {
     lv_obj_t *top = lv_obj_create(screen_main);
     lv_obj_set_size(top, SCREEN_W, 30);
     lv_obj_align(top, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_opa(top, LV_OPA_TRANSP, 0);
+
+    // [修改 1] 设置背景为深灰色 (Charcoal Gray) 且不透明
+    // 这样能把状态栏和底下的黑色背景区分开，形成层次感
+    lv_obj_set_style_bg_color(top, lv_color_hex(0x333333), 0); 
+    lv_obj_set_style_bg_opa(top, LV_OPA_COVER, 0);
+
+    // [修改 2] 去除默认边框和圆角，让它看起来更像一个通栏
+    lv_obj_set_style_border_width(top, 0, 0);
+    lv_obj_set_style_radius(top, 0, 0);
 
     label_time = lv_label_create(top);
     lv_label_set_text(label_time, "00:00");
-    lv_obj_align(label_time, LV_ALIGN_LEFT_MID, 5, 0);
+    
+    // [修改 3] 布局改为居中对齐
+    lv_obj_align(label_time, LV_ALIGN_CENTER, 0, 0);
+
+    // [修改 4] 强制设置字体颜色为纯亮白 (#FFFFFF)
+    // 确保在深灰背景上对比度最大
+    lv_obj_set_style_text_color(label_time, lv_color_hex(0xFFFFFF), 0);
 
     // Camera
     img_dsc.header.w = CAM_W;
@@ -390,59 +407,98 @@ static void create_main_screen(void) {
     lv_obj_align(tip, LV_ALIGN_CENTER, 0, 0);
 }
 
+// 定义菜单项结构体 (放在函数内部或外部均可)
+struct MenuEntry {
+    const char* icon;       // 图标
+    const char* text_en;    // 英文标题
+    const char* text_cn;    // 中文标题
+    const char* event_tag;  // 事件回调用的 Tag (保持不变以兼容逻辑)
+};
+
 static void create_menu_screen(void) {
+    // 1. 创建屏幕
     screen_menu = lv_obj_create(nullptr);
     lv_obj_add_style(screen_menu, &style_base, 0);
-    
-    lv_obj_t *title = lv_label_create(screen_menu);
-    lv_label_set_text(title, "Main Menu");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
-    // Grid (增加间距 gap，防止挤压)
+    // 2. 准备中文字体样式 (只需定义一次)
+    static lv_style_t style_cn;
+    if (style_cn.prop_cnt == 0) {
+        lv_style_init(&style_cn);
+        // 确保 font_noto_16 已在文件顶部声明: LV_FONT_DECLARE(font_noto_16);
+        lv_style_set_text_font(&style_cn, &font_noto_16); 
+        lv_style_set_text_color(&style_cn, lv_color_white());
+    }
+    
+    // 3. 标题 (System Menu / 系统菜单)
+    lv_obj_t *title = lv_label_create(screen_menu);
+    lv_label_set_text(title, "System Menu / 系统菜单");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    // 【关键点A】给标题应用中文字体
+    lv_obj_add_style(title, &style_cn, 0); 
+
+    // 4. 定义九宫格布局
     static int32_t col_dsc[] = {100, 100, LV_GRID_TEMPLATE_LAST}; 
-    // [修改] 增加一行，变成3行，以容纳第5个按钮 "Report"
     static int32_t row_dsc[] = {90, 90, 90, LV_GRID_TEMPLATE_LAST}; 
 
     obj_grid = lv_obj_create(screen_menu); 
-    lv_obj_set_size(obj_grid, 220, 220); 
+    lv_obj_set_size(obj_grid, 230, 300); 
     lv_obj_align(obj_grid, LV_ALIGN_CENTER, 0, 20);
     lv_obj_set_layout(obj_grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(obj_grid, col_dsc, row_dsc);
     lv_obj_set_style_bg_opa(obj_grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(obj_grid, 0, 0);
-    // [重要] 设置Grid间隙，确保边框不重叠
     lv_obj_set_style_pad_column(obj_grid, 10, 0);
     lv_obj_set_style_pad_row(obj_grid, 10, 0);
 
-    // [修改] 添加 "Report" 按钮
-    const char *labels[] = {"Users", "Records", "Report", "Settings", "System"};
-    const char *icons[] = {LV_SYMBOL_EDIT, LV_SYMBOL_LIST, LV_SYMBOL_DRIVE, LV_SYMBOL_SETTINGS, LV_SYMBOL_POWER};
+    // 5. 菜单内容定义
+    struct MenuEntry {
+        const char* icon;
+        const char* text_en;
+        const char* text_cn;
+        const char* event_tag;
+    };
+
+    MenuEntry menu_items[] = {
+        {LV_SYMBOL_EDIT,     "Users",    "员工列表", "Users"},
+        {LV_SYMBOL_LIST,     "Records",  "打卡记录", "Records"},
+        {LV_SYMBOL_DRIVE,    "Report",   "导出报表", "Report"},
+        {LV_SYMBOL_SETTINGS, "Register", "员工注册", "Settings"},
+        {LV_SYMBOL_POWER,    "System",   "退出系统", "System"}
+    };
     
-    // [修改] 循环次数改为 5
+    // 6. 循环创建按钮
     for(int i = 0; i < 5; i++) {
         uint8_t col = i % 2;
         uint8_t row = i / 2;
 
+        // 创建按钮主体
         lv_obj_t *btn = lv_button_create(obj_grid);
         lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, col, 1,
                                   LV_GRID_ALIGN_STRETCH, row, 1);
         
         lv_obj_add_style(btn, &style_menu_btn, 0);
-        // 添加 FOCUSED 状态样式 (红色)
         lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUSED);
-        // [LVGL9 补充] 确保键盘焦点状态也触发
         lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUS_KEY);
 
+        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_gap(btn, 2, 0); 
 
+        // 添加事件
+        lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_ALL, const_cast<char*>(menu_items[i].event_tag));
+
+        // 6.1 图标
         lv_obj_t *icon = lv_label_create(btn);
-        lv_label_set_text(icon, icons[i]);
+        lv_label_set_text(icon, menu_items[i].icon);
 
+        // 6.2 文字 (英文 + 中文)
         lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, labels[i]);
-
-        // 传递静态字符串指针作为 user_data（安全：指向静态文字）
-        lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_ALL, const_cast<char*>(labels[i]));
+        lv_label_set_text_fmt(lbl, "%s\n%s", menu_items[i].text_en, menu_items[i].text_cn);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        
+        // 【关键点B】必须给这里的 Label 也应用中文字体样式！
+        // 如果漏了这行，菜单里的字就是方框
+        lv_obj_add_style(lbl, &style_cn, 0); 
     }
 }
 

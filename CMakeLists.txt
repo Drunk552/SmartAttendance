@@ -35,13 +35,13 @@ find_package(SQLite3 REQUIRED)
 # ==========================================
 
 # [新增] 集成 libxlsxwriter (用于生成 Excel 报表)
-include(FetchContent)
-FetchContent_Declare(
-    libxlsxwriter
-    GIT_REPOSITORY https://github.com/jmcnamara/libxlsxwriter.git
-    GIT_TAG        RELEASE_1.1.5  # 使用稳定版本
-)
-FetchContent_MakeAvailable(libxlsxwriter)
+#include(FetchContent)
+#FetchContent_Declare(
+#    libxlsxwriter
+#    GIT_REPOSITORY https://github.com/jmcnamara/libxlsxwriter.git
+#    GIT_TAG        RELEASE_1.1.5  # 使用稳定版本
+#)
+#FetchContent_MakeAvailable(libxlsxwriter)
 
 # 设置变量（注意：这一行必须放在 add_subdirectory 之前！）
 # 这样 LVGL 的构建脚本在运行时就能知道配置文件在哪里。
