@@ -278,4 +278,16 @@ bool data_saveImage(const cv::Mat& image);
 
 long long data_getLastImageID();// 获取最后保存图像的ID
 
+/**
+ * @brief [Epic 4.3] 清空所有考勤记录
+ * @details 删除 attendance 表数据，清空 captured_images 目录
+ */
+bool db_clear_attendance();
+
+/**
+ * @brief [Epic 4.3] 恢复出厂设置
+ * @details 清除所有数据库数据和图片，重置系统
+ */
+bool db_factory_reset();
+
 #endif // DB_STORAGE_H

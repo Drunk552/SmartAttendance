@@ -568,3 +568,36 @@ long long data_getLastImageID() {
     sqlite3_finalize(stmt);// 清理语句句柄
     return last_id;// 返回最后保存的ID
 }
+
+// ================= Epic 4.3 系统维护接口 =================
+
+bool db_clear_attendance() {
+    std::cout << "[Data] Clearing all attendance records..." << std::endl;
+    // 清空表数据
+    bool ret = exec_sql("DELETE FROM attendance;", "Clear Att") &&
+               exec_sql("DELETE FROM sqlite_sequence WHERE name='attendance';", "Reset Seq");
+    
+    // 清空图片文件夹
+    if (ret) {
+        try {
+            fs::remove_all(IMAGE_DIR); // 删除目录
+            fs::create_directories(IMAGE_DIR); // 重建目录
+        } catch (...) {
+            return false;
+        }
+    }
+    return ret;
+}
+
+bool db_factory_reset() {
+    std::cout << "[Data] !!! FACTORY RESET !!!" << std::endl;
+    data_close(); // 先断开连接
+    
+    try {
+        if (fs::exists(DB_NAME)) fs::remove(DB_NAME);
+        if (fs::exists(IMAGE_DIR)) fs::remove_all(IMAGE_DIR);
+    } catch (...) {}
+
+    // 重新初始化（会自动建表和播种默认用户）
+    return data_init();
+}
