@@ -244,7 +244,7 @@ bool business_init() {
     }
 
     //初始化LBPH人脸识别器
-    recog = LBPHFaceRecognizer::create(1,8,8,8, 80.0);// 参数：半径=1, 邻域=8, 网格X=8, 网格Y=8, 阈值=80.0
+    recog = LBPHFaceRecognizer::create(1,8,8,8, 500.0);// 参数：半径=1, 邻域=8, 网格X=8, 网格Y=8, 阈值=500.0
     
     // 确保数据层已初始化 (连接数据库)
     if (!data_init()) {
@@ -526,7 +526,8 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
         std::string text;
         if (pred_label >= 0 && pred_label < names.size()) {
             // 识别成功 (置信度阈值可调，越低越匹配)
-            if (conf <= 80.0) {
+            // 这里将原来 80.0 改为100.0，放宽一些识别条件
+            if (conf <= 100.0) {
                 text = names[pred_label];
                 
                 // === [Phase 05 修改] 考勤核心逻辑 ===
