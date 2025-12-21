@@ -7,9 +7,15 @@
 //打卡状态枚举
 enum class PunchStatus {
     NORMAL,     // 正常
-    LATE,       // 迟到
-    EARLY,      // 早退
+    LATE,       // 迟到(需记录分钟)
+    EARLY,      // 早退(需记录分钟)
     ABSENT      // 旷工
+};
+
+// 【新增】打卡结果详情结构体 (Story 1.2)
+struct PunchResult {
+    PunchStatus status;
+    int minutes_diff; // 差异分钟数 (迟到或早退的分钟数，正常为0)
 };
 
 struct ShiftConfig{
@@ -34,7 +40,10 @@ static int determineShiftOwner(time_t punch_timestamp, const ShiftConfig& shift_
 /**
  * * @brief 计算具体状态（正常、迟到、早退、旷工）
  */
-static PunchStatus calculatePunchStatus(time_t punch_timestamp, const ShiftConfig& target_shift,bool is_check_in);// 计算打卡状态
+static PunchResult calculatePunchStatus(time_t punch_timestamp, const ShiftConfig& target_shift, bool is_check_in);// 计算打卡状态
+
+// 【建议】辅助函数：将 "HH:MM" 转换为当天的第 N 分钟 (Task Book 4.2)
+static int timeStringToMinutes(const std::string& time_str);
 };
 
 #endif // ATTENDANCE_RULE_H

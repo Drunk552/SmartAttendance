@@ -516,6 +516,25 @@ bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int stat
     return ok;
 }
 
+// [Phase 05 新增] 实现获取最后打卡时间
+time_t db_getLastPunchTime(int user_id) {
+    if (!db) return 0;
+
+    sqlite3_stmt* stmt;
+    // 查询该用户最新的打卡记录时间
+    const char* sql = "SELECT timestamp FROM attendance WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1;";
+    time_t last_ts = 0;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, user_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            last_ts = (time_t)sqlite3_column_int64(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return last_ts;
+}
+
 std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_ts) {
     std::vector<AttendanceRecord> list;
     

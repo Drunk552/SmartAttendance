@@ -13,6 +13,7 @@
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 #include "db_storage.h"//数据层头文件
 #include <mutex>
+#include "attendance_rule.h"
 
 using namespace cv;
 using namespace cv::face;
@@ -293,10 +294,13 @@ bool business_init() {
 
     // 初始化变量状态
     current_id = 0;// 默认选择第一个用户
-    trained = false;// 未训练状态
-    show_recognition = false;// 不显示识别结果
-    face_samples.clear();// 清空样本
-    labels.clear();// 清空标签
+    //trained = false;// 未训练状态
+
+    // 【修改这里】将 false 改为 true，让程序启动就开启识别
+    show_recognition = true; // 原本是 false
+
+    //face_samples.clear();// 清空样本
+    //labels.clear();// 清空标签
 
     // 初始化预处理配置
     preprocess_config.enable_crop = true;
@@ -501,6 +505,18 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
     bool has = detect_face(current_frame, face, face_cas);
     if (has) rectangle(current_frame, face, Scalar(0,255,0), 2);
 
+    // ================== 【新增调试日志】 ==================
+    // 每 100 帧打印一次当前状态，帮助定位问题
+    // 观察终端输出的 status 字段
+    static int debug_counter = 0;
+    if (debug_counter++ % 100 == 0) {
+        std::cout << "[Debug] 状态检查 -> "
+                  << "识别开关: " << (show_recognition ? "ON" : "OFF")
+                  << " | 模型已训练: " << (trained ? "YES" : "NO")
+                  << " | 检测到人脸: " << (has ? "YES" : "NO") 
+                  << std::endl;
+    }
+
     // 3. 识别逻辑 (如果开启)
     if (show_recognition && trained && has) {
         Mat f = preprocess_face(current_frame, face);
@@ -513,24 +529,58 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
             if (conf <= 80.0) {
                 text = names[pred_label];
                 
-                // 核心打卡逻辑：识别成功 -> 保存考勤记录
-                static long long last_save_time = 0;
-                long long now = std::time(nullptr);
+                // === [Phase 05 修改] 考勤核心逻辑 ===
                 
-                // 简单的防抖动：3秒内同一人不重复打卡
-                if (now - last_save_time > 3) {
-                    // 调用数据层接口：保存原图(彩色)到磁盘，路径存DB
-                    // 注意：这里传入的是 current_frame (当前帧)，不是裁剪后的人脸
-                    bool logged = data_saveAttendance(pred_label, current_frame);
+                // 1. 获取当前时间
+                time_t now = std::time(nullptr);
+                
+                // 2. [Story 1.3] 检查重复打卡 (数据库校验)
+                // 只有当距离上次打卡超过 5分钟 (300秒) 才允许入库
+                time_t last_punch = db_getLastPunchTime(pred_label);
+                
+                if (now - last_punch < 300) {
+                    // --- 重复打卡分支 ---
+                    text += " [Repeat]"; // 在人脸上方显示提示
+                    // 可选：在这里调用 UI 弹窗接口，例如 ui_show_toast("5分钟内已打卡");
+                } 
+                else {
+                    // --- 有效打卡分支 ---
+                    
+                    // 3. [Epic 5.1] 调用考勤规则引擎计算状态
+                    // 暂时构造默认班次 (AM 09:00-12:00, PM 13:00-18:00)
+                    // 实际项目中应从 db_get_shifts() 获取
+                    ShiftConfig shift_am = {"09:00", "12:00", 15};
+                    ShiftConfig shift_pm = {"13:00", "18:00", 15};
+                    
+                    // A. 判断是上午还是下午 (Story 1.1 折中原则)
+                    int shift_owner = AttendanceRule::determineShiftOwner(now, shift_am, shift_pm);
+                    ShiftConfig target_shift = (shift_owner == 1) ? shift_am : shift_pm;
+                    
+                    // B. 计算打卡状态和分钟数 (Story 1.2)
+                    // 简单判定：如果是上午时段且时间靠前算上班(CheckIn)，否则算下班(CheckOut)
+                    // 这里简化为：上午=上班卡，下午=下班卡 (仅作 Phase 5 演示)
+                    bool is_check_in = (shift_owner == 1); 
+                    
+                    PunchResult result = AttendanceRule::calculatePunchStatus(now, target_shift, is_check_in);
+                    
+                    // 4. 入库保存 (记录详细状态)
+                    // 转换状态枚举到 int (0:Normal, 1:Late, 2:Early, 3:Absent)
+                    int db_status = 0;
+                    if (result.status == PunchStatus::LATE) db_status = 1;
+                    else if (result.status == PunchStatus::EARLY) db_status = 2;
+                    else if (result.status == PunchStatus::ABSENT) db_status = 4;
+                    
+                    // 调用数据库接口 (Shift ID 暂时传 1)
+                    bool logged = db_log_attendance(pred_label, 1, current_frame, db_status);
                     
                     if (logged) {
-                        std::cout << "[Business] >>> 打卡成功: " << text 
-                                  << " (ID: " << pred_label << ")" << std::endl;
-                        last_save_time = now;
-                        // 可选：在界面上显示“打卡成功”提示
-                        text += " [Logged]";
+                        std::cout << "[Business] 打卡成功: " << text 
+                                  << " 状态: " << db_status 
+                                  << " 差异: " << result.minutes_diff << "分" << std::endl;
+                        text += " [OK]";
                     }
                 }
+                // ======================================
             } else {
                 text = "unknown"; // 置信度不够
             }

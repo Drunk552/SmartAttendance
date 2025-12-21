@@ -241,6 +241,9 @@ bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int stat
  */
 std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_ts);
 
+// 获取指定用户的最后一次打卡时间戳，如果没有记录返回 0
+time_t db_getLastPunchTime(int user_id);
+
 // ================= 兼容性接口 (Legacy Support) =================
 
 /**

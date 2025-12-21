@@ -2,95 +2,106 @@
 #include <sstream>
 #include <iomanip>
 #include <ctime>
+#include <cmath> // 用于数学计算
+
+/**
+ * @brief 辅助工具：将 "HH:MM" 字符串转换为当天的第 N 分钟 (0-1439)
+ * 优化建议：避免重复的 sscanf/stringstream 解析，提高复用性 (参考任务书 4.2)
+ */
+int AttendanceRule::timeStringToMinutes(const std::string& time_str) {
+    int hour = 0, min = 0;
+    char sep;
+    std::istringstream ss(time_str);
+    if (ss >> hour >> sep >> min) {
+        return hour * 60 + min;
+    }
+    return 0; // 解析失败默认返回0
+}
 
 /**
  * @brief 判断打卡归属的班次（处理12:00-13:00 的折中原则）
- * @param punch_timestamp 打卡时间戳
- * @param shift_am 上午班次
- * @param shift_pm 下午班次
  * @return 1: 归属上午, 2: 归属下午
  */
 int AttendanceRule::determineShiftOwner(time_t punch_timestamp, const ShiftConfig& shift_am, const ShiftConfig& shift_pm) {
     std::tm* punch_tm = std::localtime(&punch_timestamp);
     int punch_minutes = punch_tm->tm_hour * 60 + punch_tm->tm_min;
 
-    // 解析上午班次时间
-    std::istringstream am_start_ss(shift_am.start_time);
-    std::istringstream am_end_ss(shift_am.end_time);
-    int am_start_hour, am_start_min, am_end_hour, am_end_min;
-    char sep;
-    am_start_ss >> am_start_hour >> sep >> am_start_min;
-    am_end_ss >> am_end_hour >> sep >> am_end_min;
-    int am_start_minutes = am_start_hour * 60 + am_start_min;
-    int am_end_minutes = am_end_hour * 60 + am_end_min;
+    // 1. 统一转换为分钟数进行比较
+    int am_end_minutes = timeStringToMinutes(shift_am.end_time);
+    int pm_start_minutes = timeStringToMinutes(shift_pm.start_time);
 
-    // 解析下午班次时间
-    std::istringstream pm_start_ss(shift_pm.start_time);
-    std::istringstream pm_end_ss(shift_pm.end_time);
-    int pm_start_hour, pm_start_min, pm_end_hour, pm_end_min;
-    pm_start_ss >> pm_start_hour >> sep >> pm_start_min;
-    pm_end_ss >> pm_end_hour >> sep >> pm_end_min;
-    int pm_start_minutes = pm_start_hour * 60 + pm_start_min;
-    int pm_end_minutes = pm_end_hour * 60 + pm_end_min;
-
-    // 判断打卡时间归属
-    if (punch_minutes >= am_start_minutes && punch_minutes <= am_end_minutes) {
-        return 1; // 明确在上午段
-    } else if (punch_minutes >= pm_start_minutes && punch_minutes <= pm_end_minutes) {
-        return 2; // 明确在下午段
-    } else if (punch_minutes > am_end_minutes && punch_minutes < pm_start_minutes) {
-        // 【修正】实现折中原则
+    // 2. 逻辑判定
+    // 情况A: 明确在上午下班时间之前 -> 归属上午
+    if (punch_minutes <= am_end_minutes) {
+        return 1; 
+    }
+    // 情况B: 明确在下午上班时间之后 -> 归属下午
+    else if (punch_minutes >= pm_start_minutes) {
+        return 2;
+    }
+    // 情况C: 处于模糊地带（中间休息时间），应用“折中原则” (Story 1.1)
+    else {
+        // 计算折中点 (Midpoint Rule)
+        // 公式: 中点 = 上午下班 + (下午上班 - 上午下班) / 2
+        // 例如: 12:00 + (60分钟 / 2) = 12:30
         int mid_point = am_end_minutes + (pm_start_minutes - am_end_minutes) / 2;
+        
         if (punch_minutes <= mid_point) {
-            return 1; // 归属上午（如迟签退）
+            return 1; // 上半段归属上午（如：上午延迟签退）
         } else {
-            return 2; // 归属下午（如早签到）
+            return 2; // 下半段归属下午（如：下午提前签到）
         }
     }
-
-    // 默认归属上午班次
-    return 1;
 }
 
 /**
- * @brief 计算具体状态（正常、迟到、早退、旷工）
- * @param punch_timestamp 打卡时间戳
- * @param target_shift 目标班次配置
- * @param is_check_in 是否为上班打卡
- * @return 打卡状态枚举
+ * @brief 计算具体状态和分钟数 (Story 1.2)
+ * @return PunchResult 包含状态(status)和差异时间(minutes_diff)
  */
-PunchStatus AttendanceRule::calculatePunchStatus(time_t punch_timestamp, const ShiftConfig& target_shift, bool is_check_in) {
+PunchResult AttendanceRule::calculatePunchStatus(time_t punch_timestamp, const ShiftConfig& target_shift, bool is_check_in) {
     std::tm* punch_tm = std::localtime(&punch_timestamp);
     int punch_minutes = punch_tm->tm_hour * 60 + punch_tm->tm_min;
 
-    // 解析班次时间
-    std::istringstream start_ss(target_shift.start_time);
-    std::istringstream end_ss(target_shift.end_time);
-    int start_hour, start_min, end_hour, end_min;
-    char sep;
-    start_ss >> start_hour >> sep >> start_min;
-    end_ss >> end_hour >> sep >> end_min;
-    int start_minutes = start_hour * 60 + start_min;
-    int end_minutes = end_hour * 60 + end_min;
+    int shift_start = timeStringToMinutes(target_shift.start_time);
+    int shift_end = timeStringToMinutes(target_shift.end_time);
     
-    if (is_check_in) {
+    // 初始化结果：默认为正常，差异为0
+    PunchResult result = {PunchStatus::NORMAL, 0};
 
-        // 计算上班打卡状态
-        if (punch_minutes <= start_minutes) {
-            return PunchStatus::NORMAL; // 正常
-        } else if (punch_minutes <= start_minutes + target_shift.late_threshold_min) {
-            return PunchStatus::LATE; // 迟到
+    if (is_check_in) {
+        // ====================
+        // 上班打卡逻辑 (Check In)
+        // ====================
+        if (punch_minutes <= shift_start) {
+            // 正常：在上班时间之前或准点
+            result.status = PunchStatus::NORMAL;
+            result.minutes_diff = 0;
         } else {
-            return PunchStatus::ABSENT; // 旷工
+            // 迟到或旷工
+            int late_mins = punch_minutes - shift_start;
+            result.minutes_diff = late_mins; // 记录具体的迟到分钟数
+
+            if (late_mins <= target_shift.late_threshold_min) {
+                result.status = PunchStatus::LATE;   // 允许范围内 -> 迟到
+            } else {
+                result.status = PunchStatus::ABSENT; // 超过阈值 -> 旷工 (严重迟到)
+            }
         }
-    } 
-    
-    else {
-        // 计算下班打卡状态
-        if (punch_minutes >= end_minutes) {
-            return PunchStatus::NORMAL; // 正常
+    } else {
+        // ====================
+        // 下班打卡逻辑 (Check Out)
+        // ====================
+        if (punch_minutes >= shift_end) {
+            // 正常：在下班时间之后或准点
+            result.status = PunchStatus::NORMAL;
+            result.minutes_diff = 0;
         } else {
-            return PunchStatus::EARLY; // 早退
+            // 早退
+            result.status = PunchStatus::EARLY;
+            // 记录具体的早退分钟数 (下班时间 - 打卡时间)
+            result.minutes_diff = shift_end - punch_minutes; 
         }
     }
+
+    return result;
 }
