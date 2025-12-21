@@ -31,6 +31,7 @@ LV_FONT_DECLARE(font_noto_16);
 // 业务接口
 #include "../business/face_demo.h"
 #include "lv_conf.h"
+#include "../data/db_storage.h"//数据层接口
 
 // [Epic 4.2 新增] 报表业务
 #include "business/report_generator.h"
@@ -65,6 +66,13 @@ static bool g_disk_full = false;            // 磁盘满标志
 // [Epic 4.3] 维护菜单相关
 static lv_obj_t *screen_sys_ops = nullptr;
 static lv_obj_t *obj_sys_list = nullptr;
+static lv_obj_t *screen_user_mgmt = nullptr;   // 新增：员工管理屏幕
+static lv_obj_t *obj_user_mgmt_grid = nullptr; // 新增：员工管理菜单容器
+// [Epic 5.2 新增] 记录查询相关变量
+static lv_obj_t *screen_rec_query = nullptr;   // 查询输入页
+static lv_obj_t *ta_query_id = nullptr;        // ID输入框
+static lv_obj_t *screen_rec_result = nullptr;  // 结果展示页
+static lv_obj_t *obj_result_container = nullptr; // 结果页容器
 
 // ================= 摄像头多线程优化变量 (Epic 4.4) =================
 // 1. 显示缓冲区 (UI 线程读取) - 替换原有的 cam_buf
@@ -114,6 +122,9 @@ static void create_register_screen(void);
 static void load_register_step1(void); // 输入姓名
 static void load_register_step2(void); // 采集人脸
 static void register_face_timer_cb(lv_timer_t *timer); // 注册页面的摄像头刷新
+static void load_user_mgmt_screen(void); // 新增：声明加载员工管理页函数
+static void load_record_query_screen(void);
+static void load_record_result_screen(int user_id);
 
 // ================= 辅助函数 =================
 
@@ -346,13 +357,13 @@ static void menu_btn_event_cb(lv_event_t *e) {
         }
         else if (key == LV_KEY_ENTER) {
             std::printf("[UI] Action: %s\n", tag);
-            
-            if(std::strcmp(tag, "Users") == 0) {
-                load_user_list_screen();
+
+            if(std::strcmp(tag, "UserMgmt") == 0) {
+                load_user_mgmt_screen();
             }
             else if(std::strcmp(tag, "Records") == 0) {
-                 // Records 按钮才应该跳转到 记录页
-                 load_record_screen();
+                 // 跳转到查询界面
+                 load_record_query_screen();
             }
             else if(std::strcmp(tag, "Report") == 0) {
                  // [Epic 4.2] 调用报表导出
@@ -551,10 +562,10 @@ static void create_menu_screen(void) {
 
     // 4. 定义九宫格布局
     static int32_t col_dsc[] = {100, 100, LV_GRID_TEMPLATE_LAST}; 
-    static int32_t row_dsc[] = {90, 90, 90, LV_GRID_TEMPLATE_LAST}; 
+    static int32_t row_dsc[] = {90, 90, LV_GRID_TEMPLATE_LAST}; 
 
     obj_grid = lv_obj_create(screen_menu); 
-    lv_obj_set_size(obj_grid, 230, 300); 
+    lv_obj_set_size(obj_grid, 230, 200); 
     lv_obj_align(obj_grid, LV_ALIGN_CENTER, 0, 20);
     lv_obj_set_layout(obj_grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(obj_grid, col_dsc, row_dsc);
@@ -572,15 +583,14 @@ static void create_menu_screen(void) {
     };
 
     MenuEntry menu_items[] = {
-        {LV_SYMBOL_EDIT,     "Users",    "员工列表", "Users"},
-        {LV_SYMBOL_LIST,     "Records",  "打卡记录", "Records"},
-        {LV_SYMBOL_DRIVE,    "Report",   "导出报表", "Report"},
-        {LV_SYMBOL_SETTINGS, "Register", "员工注册", "Settings"},
-        {LV_SYMBOL_POWER,    "System",   "退出系统", "System"}
+    {LV_SYMBOL_DIRECTORY,"User Mgmt", "员工管理", "UserMgmt"}, // 新增入口
+    {LV_SYMBOL_EYE_OPEN, "Records",   "记录查询", "Records"},
+    {LV_SYMBOL_DRIVE,    "Report",    "导出报表", "Report"},
+    {LV_SYMBOL_SETTINGS, "System",    "系统设置", "System"}    // 原Settings和System合并或保留其一
     };
     
     // 6. 循环创建按钮
-    for(int i = 0; i < 5; i++) {
+    for(int i = 0; i < 4; i++) {
         uint8_t col = i % 2;
         uint8_t row = i / 2;
 
@@ -663,6 +673,289 @@ static void load_menu_screen(void) {
     lv_group_add_obj(g_keypad_group, screen_menu);
 }
 
+// ================= 员工管理子菜单逻辑 =================
+
+// 1. 子菜单事件回调
+static void user_mgmt_btn_event_cb(lv_event_t *e) {
+    // 获取事件携带的 Tag 参数
+    const char* tag = static_cast<const char*>(lv_event_get_user_data(e));
+    
+    if (lv_event_get_code(e) == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // 导航逻辑：1列布局，上下键切换
+        lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
+        lv_obj_t *grid = lv_obj_get_parent(btn);
+        uint32_t index = lv_obj_get_index(btn);
+        uint32_t total = lv_obj_get_child_cnt(grid);
+        
+        if (key == LV_KEY_DOWN) {
+            lv_group_focus_obj(lv_obj_get_child(grid, (index + 1) % total));
+        } else if (key == LV_KEY_UP) {
+            lv_group_focus_obj(lv_obj_get_child(grid, (index + total - 1) % total));
+        }
+        // 返回键：回到主菜单
+        else if (key == LV_KEY_ESC) {
+            load_menu_screen(); 
+        }
+        // 确认键：执行功能
+        else if (key == LV_KEY_ENTER) {
+            std::printf("[UI] UserMgmt Action: %s\n", tag);
+            
+            if(std::strcmp(tag, "UserList") == 0) {
+                load_user_list_screen();
+            }
+            else if(std::strcmp(tag, "Register") == 0) {
+                // 检查磁盘空间逻辑
+                if (g_disk_full) {
+                    lv_obj_t * mbox = lv_msgbox_create(NULL);
+                    lv_msgbox_add_title(mbox, "Error");
+                    lv_msgbox_add_text(mbox, "Disk Full!");
+                    lv_obj_t * btn = lv_msgbox_add_footer_button(mbox, "Close");
+                    lv_obj_add_event_cb(btn, mbox_close_event_cb, LV_EVENT_CLICKED, mbox);
+                    lv_obj_center(mbox);
+                } else {
+                    load_register_step1(); 
+                }
+            }
+            else if(std::strcmp(tag, "DeleteUser") == 0) {
+                // [占位] 删除功能提示
+                lv_obj_t * mbox = lv_msgbox_create(NULL);
+                lv_msgbox_add_title(mbox, "Info");
+                lv_msgbox_add_text(mbox, "Delete Feature\nComing Soon...");
+                lv_obj_t * btn = lv_msgbox_add_footer_button(mbox, "OK");
+                lv_obj_add_event_cb(btn, mbox_close_event_cb, LV_EVENT_CLICKED, mbox);
+                lv_obj_center(mbox);
+            }
+        }
+    }
+}
+
+// 2. 创建界面 (1列3行)
+static void create_user_mgmt_screen(void) {
+    screen_user_mgmt = lv_obj_create(nullptr);
+    lv_obj_add_style(screen_user_mgmt, &style_base, 0);
+
+    // 标题
+    lv_obj_t *title = lv_label_create(screen_user_mgmt);
+    lv_label_set_text(title, "User Management / 员工管理");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    // 务必添加中文字体样式
+    static lv_style_t style_cn_title;
+    if (style_cn_title.prop_cnt == 0) {
+        lv_style_init(&style_cn_title);
+        lv_style_set_text_font(&style_cn_title, &font_noto_16);
+        lv_style_set_text_color(&style_cn_title, lv_color_white());
+    }
+    lv_obj_add_style(title, &style_cn_title, 0);
+
+    // 布局定义: 1列, 3行 (行高70px)
+    static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST}; 
+    static int32_t row_dsc[] = {70, 70, 70, LV_GRID_TEMPLATE_LAST}; 
+
+    obj_user_mgmt_grid = lv_obj_create(screen_user_mgmt); 
+    lv_obj_set_size(obj_user_mgmt_grid, 220, 240); 
+    lv_obj_align(obj_user_mgmt_grid, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_set_layout(obj_user_mgmt_grid, LV_LAYOUT_GRID);
+    lv_obj_set_grid_dsc_array(obj_user_mgmt_grid, col_dsc, row_dsc);
+    lv_obj_set_style_bg_opa(obj_user_mgmt_grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(obj_user_mgmt_grid, 0, 0);
+    lv_obj_set_style_pad_row(obj_user_mgmt_grid, 10, 0);
+
+    // 定义菜单项
+    struct MenuEntry { const char* icon; const char* en; const char* cn; const char* tag; };
+    MenuEntry items[] = {
+        {LV_SYMBOL_EDIT,     "User List",    "员工列表", "UserList"},
+        {LV_SYMBOL_SETTINGS, "Register",     "员工注册", "Register"},
+        {LV_SYMBOL_TRASH,    "Delete User",  "删除员工", "DeleteUser"} 
+    };
+    
+    // 准备中文样式 (给按钮内的文字用)
+    static lv_style_t style_cn_item;
+    if (style_cn_item.prop_cnt == 0) {
+        lv_style_init(&style_cn_item);
+        lv_style_set_text_font(&style_cn_item, &font_noto_16);
+        lv_style_set_text_color(&style_cn_item, lv_color_white());
+    }
+
+    for(int i = 0; i < 3; i++) {
+        lv_obj_t *btn = lv_button_create(obj_user_mgmt_grid);
+        // 放置在第0列, 第i行
+        lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, i, 1);
+        
+        // 应用你的红底黄框样式
+        lv_obj_add_style(btn, &style_menu_btn, 0);
+        lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUSED);
+        lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUS_KEY); // 键盘聚焦也应用此样式
+        lv_obj_add_event_cb(btn, user_mgmt_btn_event_cb, LV_EVENT_ALL, const_cast<char*>(items[i].tag));
+
+        // 布局改为横向 (图标 + 文字)
+        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_left(btn, 20, 0);
+
+        lv_obj_t *icon = lv_label_create(btn);
+        lv_label_set_text(icon, items[i].icon);
+        
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text_fmt(lbl, "%s  %s", items[i].en, items[i].cn); 
+        lv_obj_add_style(lbl, &style_cn_item, 0); // 应用中文字体
+    }
+}
+
+// 3. 加载函数
+static void load_user_mgmt_screen(void) {
+    if (!screen_user_mgmt) create_user_mgmt_screen();
+    
+    std::printf("[UI] Switch to User Mgmt\n");
+    lv_group_remove_all_objs(g_keypad_group);
+    
+    lv_screen_load(screen_user_mgmt); // LVGL 9.x 写法
+
+    // 将按钮加入输入组
+    uint32_t cnt = lv_obj_get_child_cnt(obj_user_mgmt_grid);
+    for(uint32_t i = 0; i < cnt; i++) {
+        lv_group_add_obj(g_keypad_group, lv_obj_get_child(obj_user_mgmt_grid, i));
+    }
+    // 默认选中第一个
+    if(cnt > 0) lv_group_focus_obj(lv_obj_get_child(obj_user_mgmt_grid, 0));
+    
+    // 背景兜底
+    lv_group_add_obj(g_keypad_group, screen_user_mgmt);
+}
+
+// ================= [Epic 5.2] 记录查询功能实现 =================
+
+static lv_obj_t *btn_query_back = nullptr; //  返回按钮指针
+
+// 查询界面通用事件回调 (处理导航和动作)
+static void query_screen_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *target = (lv_obj_t*)lv_event_get_target(e);
+
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // --- 如果焦点在输入框 ---
+        if (target == ta_query_id) {
+            if (key == LV_KEY_ENTER) {
+                const char *txt = lv_textarea_get_text(ta_query_id);
+                if (txt && strlen(txt) > 0) {
+                    int uid = std::atoi(txt);
+                    load_record_result_screen(uid); // 执行查询
+                }
+            }
+            else if (key == LV_KEY_DOWN) {
+                // 向下切换到返回按钮
+                lv_group_focus_obj(btn_query_back);
+            }
+            else if (key == LV_KEY_ESC) {
+                load_menu_screen();
+            }
+        }
+        // --- 如果焦点在返回按钮 ---
+        else if (target == btn_query_back) {
+            if (key == LV_KEY_ENTER) {
+                load_menu_screen(); // 执行返回
+            }
+            else if (key == LV_KEY_UP) {
+                // 向上切换回输入框
+                lv_group_focus_obj(ta_query_id);
+            }
+            else if (key == LV_KEY_ESC) {
+                load_menu_screen();
+            }
+        }
+    }
+    // 处理点击事件 (兼顾鼠标/触摸)
+    else if (code == LV_EVENT_CLICKED) {
+        if (target == btn_query_back) {
+            load_menu_screen();
+        }
+    }
+}
+
+static void create_record_query_screen(void) {
+    if (screen_rec_query) return;
+
+    screen_rec_query = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_rec_query, lv_color_black(), 0);
+
+    // 1. 标题
+    lv_obj_t *title = lv_label_create(screen_rec_query);
+    lv_label_set_text(title, "Record Query / 记录查询");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    
+    // 准备中文字体
+    static lv_style_t style_cn;
+    if (style_cn.prop_cnt == 0) {
+        lv_style_init(&style_cn);
+        lv_style_set_text_font(&style_cn, &font_noto_16);
+        lv_style_set_text_color(&style_cn, lv_color_white());
+    }
+    lv_obj_add_style(title, &style_cn, 0);
+
+    // 2. 提示文本
+    lv_obj_t *label = lv_label_create(screen_rec_query);
+    lv_label_set_text(label, "Enter User ID:");
+    lv_obj_set_style_text_color(label, lv_palette_main(LV_PALETTE_YELLOW), 0);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
+
+    // 3. 输入框
+    ta_query_id = lv_textarea_create(screen_rec_query);
+    lv_textarea_set_one_line(ta_query_id, true);
+    lv_textarea_set_max_length(ta_query_id, 5);
+    lv_textarea_set_accepted_chars(ta_query_id, "0123456789");
+    lv_obj_set_width(ta_query_id, 140);
+    lv_obj_align(ta_query_id, LV_ALIGN_CENTER, 0, -10);
+    // 绑定事件
+    lv_obj_add_event_cb(ta_query_id, query_screen_event_cb, LV_EVENT_ALL, nullptr);
+
+    // 4. [新增] 返回按钮
+    btn_query_back = lv_button_create(screen_rec_query);
+    lv_obj_set_size(btn_query_back, 100, 40);
+    lv_obj_align(btn_query_back, LV_ALIGN_CENTER, 0, 60); // 放在输入框下方
+    lv_obj_set_style_bg_color(btn_query_back, lv_color_hex(0x444444), 0);
+    
+    // 按钮焦点样式 (红底黄框)
+    lv_obj_add_style(btn_query_back, &style_menu_btn_focused, LV_STATE_FOCUSED);
+    lv_obj_add_style(btn_query_back, &style_menu_btn_focused, LV_STATE_FOCUS_KEY);
+
+    // 按钮文字
+    lv_obj_t *lbl_back = lv_label_create(btn_query_back);
+    lv_label_set_text(lbl_back, LV_SYMBOL_LEFT " Back");
+    lv_obj_center(lbl_back);
+    
+    // 绑定事件
+    lv_obj_add_event_cb(btn_query_back, query_screen_event_cb, LV_EVENT_ALL, nullptr);
+    
+    // 5. 底部操作提示
+    lv_obj_t *tip = lv_label_create(screen_rec_query);
+    lv_label_set_text(tip, "Enter: Search / Select");
+    lv_obj_set_style_text_color(tip, lv_color_hex(0x888888), 0);
+    lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -10);
+}
+
+static void load_record_query_screen(void) {
+    if (!screen_rec_query) create_record_query_screen();
+    
+    // 重置输入框
+    lv_textarea_set_text(ta_query_id, "");
+    
+    // 重建焦点组
+    lv_group_remove_all_objs(g_keypad_group);
+    
+    lv_screen_load(screen_rec_query);
+    
+    // 将 输入框 和 返回按钮 都加入组
+    lv_group_add_obj(g_keypad_group, ta_query_id);
+    lv_group_add_obj(g_keypad_group, btn_query_back);
+    
+    // 默认聚焦输入框
+    lv_group_focus_obj(ta_query_id);
+}
+
 // =================================================================
 // 员工列表页实现代码
 // =================================================================
@@ -682,9 +975,16 @@ static void list_btn_event_cb(lv_event_t *e) {
         else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
             lv_group_focus_prev(g_keypad_group);
         }
-        // ESC键：返回主菜单
+        // ESC键：如果当前在列表页，按ESC返回员工管理页
         else if (key == LV_KEY_ESC) {
-            load_menu_screen();
+            // 如果当前是“员工列表页”，则返回“员工管理菜单”
+            if (lv_screen_active() == screen_list) {
+                load_user_mgmt_screen(); 
+            }
+            // 否则（比如是“打卡记录页”），必须返回“主菜单”
+            else {
+                load_menu_screen(); 
+            }
         }
         // ENTER键：查看详情 (目前仅打印)
         else if (key == LV_KEY_ENTER) {
@@ -939,7 +1239,7 @@ static void reg_step2_event_cb(lv_event_t *e) {
                 std::printf("[UI] Reg Success! Back to Menu.\n");
                 
                 // 简单反馈：延迟或直接返回
-                load_menu_screen(); 
+                load_user_mgmt_screen(); 
             } else {
                 std::printf("[UI] Reg Failed!\n");
             }
@@ -968,7 +1268,7 @@ static void ta_event_cb(lv_event_t *e) {
             load_register_step2(); // 进入拍照步骤
         }
         else if (key == LV_KEY_ESC) {
-            load_menu_screen(); // 放弃注册
+            load_user_mgmt_screen(); // 放弃注册，返回员工管理页
         }
     }
 }
@@ -1116,68 +1416,188 @@ void ui_init(void) {
     std::printf("[UI] Epic 4.4 Optimization: Threaded Capture Started.\n");
 }
 
-// =================================================================
-// [Epic 3.4] 考勤记录页 (Record List)
-// =================================================================
+// =================  查询结果页 (Result Screen) =================
 
-static void create_record_screen(void) {
-    if (screen_records) return;
-    
-    screen_records = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(screen_records, lv_color_hex(0x000000), 0);
-    
-    // 标题
-    lv_obj_t *title = lv_label_create(screen_records);
-    lv_label_set_text(title, "Attendance Log");
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    
-    // 列表容器
-    obj_record_list = lv_list_create(screen_records);
-    lv_obj_set_size(obj_record_list, 220, 260);
-    lv_obj_align(obj_record_list, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_style_bg_color(obj_record_list, lv_color_hex(0x222222), 0);
-    lv_obj_set_style_border_width(obj_record_list, 0, 0);
-}
+static lv_obj_t *btn_result_back = nullptr; //  结果页返回按钮
 
-static void load_record_screen(void) {
-    create_record_screen();
-    
-    std::printf("[UI] Loading Records...\n");
-    
-    // 1. 准备界面
-    lv_group_remove_all_objs(g_keypad_group);
-    lv_obj_clean(obj_record_list);
-    
-    // 2. 获取数据
-    int count = business_get_record_count();
-    std::printf("[UI] Found %d records\n", count);
-    
-    if (count == 0) {
-        lv_list_add_text(obj_record_list, "No Records Found");
-    } else {
-        char buf[128];
-        for(int i=0; i<count; i++) {
-            if (business_get_record_at(i, buf, sizeof(buf))) {
-                // 使用列表文本模式，前面加个时钟图标
-                lv_obj_t *btn = lv_list_add_button(obj_record_list, LV_SYMBOL_LIST, buf);
-                
-                // 复用之前的列表按键回调 (处理上下滚动/ESC返回)
-                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, nullptr);
-                lv_group_add_obj(g_keypad_group, btn);
-                
-                if (i==0) lv_group_focus_obj(btn);
+// 结果页通用事件回调
+static void result_screen_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *target = (lv_obj_t*)lv_event_get_target(e);
+
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // --- 焦点在结果容器 (查看内容) ---
+        if (target == obj_result_container) {
+            // ESC: 直接返回
+            if (key == LV_KEY_ESC) {
+                load_record_query_screen();
+            }
+            // 向右键: 切换焦点到“返回按钮” (因为上下键被用于滚动内容了)
+            else if (key == LV_KEY_RIGHT) {
+                if (btn_result_back) lv_group_focus_obj(btn_result_back);
+            }
+        }
+        // --- 焦点在返回按钮 ---
+        else if (target == btn_result_back) {
+            if (key == LV_KEY_ENTER) {
+                load_record_query_screen(); // 确认返回
+            }
+            else if (key == LV_KEY_LEFT) {
+                // 向左键: 切回内容区继续查看
+                if (obj_result_container) lv_group_focus_obj(obj_result_container);
+            }
+            else if (key == LV_KEY_ESC) {
+                load_record_query_screen();
             }
         }
     }
+    // 处理点击
+    else if (code == LV_EVENT_CLICKED) {
+        if (target == btn_result_back) {
+            load_record_query_screen();
+        }
+    }
+}
+
+// 创建结果展示页 UI
+static void create_record_result_screen(void) {
+    if (screen_rec_result) return; 
+
+    screen_rec_result = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_rec_result, lv_color_black(), 0);
     
-    // 3. 切换显示
-    #if LV_VERSION_CHECK(9,0,0)
-        lv_screen_load(screen_records);
-    #else
-        lv_scr_load(screen_records);
-    #endif
+    // 1. 内容容器 (高度减小，为底部按钮留出空间)
+    // 原高度 320 -> 改为 260
+    obj_result_container = lv_obj_create(screen_rec_result);
+    lv_obj_set_size(obj_result_container, 230, 260); 
+    lv_obj_align(obj_result_container, LV_ALIGN_TOP_MID, 0, 5); // 顶部对齐
+    lv_obj_set_style_bg_color(obj_result_container, lv_color_black(), 0);
+    lv_obj_set_style_border_width(obj_result_container, 0, 0);
+    lv_obj_set_flex_flow(obj_result_container, LV_FLEX_FLOW_COLUMN); 
+    lv_obj_set_style_pad_all(obj_result_container, 5, 0);            
+    lv_obj_set_scrollbar_mode(obj_result_container, LV_SCROLLBAR_MODE_AUTO);
     
-    // 4. 兜底焦点
-    lv_group_add_obj(g_keypad_group, screen_records);
+    // 绑定事件 (用于处理 ESC 和 焦点切换)
+    lv_obj_add_event_cb(obj_result_container, result_screen_event_cb, LV_EVENT_ALL, nullptr);
+
+    // 2. [新增] 底部返回按钮
+    btn_result_back = lv_button_create(screen_rec_result);
+    lv_obj_set_size(btn_result_back, 120, 40);
+    lv_obj_align(btn_result_back, LV_ALIGN_BOTTOM_MID, 0, -10); // 底部居中
+    lv_obj_set_style_bg_color(btn_result_back, lv_color_hex(0x444444), 0);
+    
+    // 焦点样式 (红底黄框)
+    lv_obj_add_style(btn_result_back, &style_menu_btn_focused, LV_STATE_FOCUSED);
+    lv_obj_add_style(btn_result_back, &style_menu_btn_focused, LV_STATE_FOCUS_KEY);
+
+    // 按钮文字
+    lv_obj_t *lbl = lv_label_create(btn_result_back);
+    lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
+    lv_obj_center(lbl);
+    
+    // 绑定事件
+    lv_obj_add_event_cb(btn_result_back, result_screen_event_cb, LV_EVENT_ALL, nullptr);
+}
+
+// 加载并显示指定员工的详细信息和记录
+static void load_record_result_screen(int user_id) {
+    if (!screen_rec_result) create_record_result_screen();
+    
+    // 1. 准备界面
+    lv_obj_clean(obj_result_container);
+    lv_group_remove_all_objs(g_keypad_group);
+    
+    // 2. [数据层交互] 获取员工详细档案
+    UserData user = db_get_user_info(user_id);
+    
+    // 3. 构建员工信息卡片
+    lv_obj_t *header = lv_obj_create(obj_result_container);
+    lv_obj_set_size(header, 210, 125); 
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_radius(header, 8, 0);
+    lv_obj_set_style_pad_all(header, 10, 0);
+    
+    lv_obj_t *info_lbl = lv_label_create(header);
+    // 准备中文字体
+    static lv_style_t style_cn_info;
+    if (style_cn_info.prop_cnt == 0) {
+        lv_style_init(&style_cn_info);
+        lv_style_set_text_font(&style_cn_info, &font_noto_16);
+        lv_style_set_text_color(&style_cn_info, lv_color_white());
+    }
+    lv_obj_add_style(info_lbl, &style_cn_info, 0);
+
+    if (user.id == 0 && user.name.empty()) {
+        lv_label_set_text(info_lbl, "User Not Found!\n查无此人");
+        lv_obj_set_style_text_color(info_lbl, lv_palette_main(LV_PALETTE_RED), 0);
+    } else {
+        const char* role_str = (user.role == 1) ? "管理员" : "员工";
+        lv_label_set_text_fmt(info_lbl, 
+            "工号 ID: %d\n"
+            "姓名 Name: %s\n"
+            "部门 Dept: %d\n"
+            "权限 Role: %s\n"
+            "卡号 Card: %s", 
+            user.id, 
+            user.name.c_str(), 
+            user.dept_id, 
+            role_str, 
+            user.card_id.c_str());
+    }
+    lv_obj_align(info_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // 4. 构建记录列表标题
+    lv_obj_t *title_rec = lv_label_create(obj_result_container);
+    lv_label_set_text(title_rec, "--- 打卡记录 ---");
+    lv_obj_set_style_text_color(title_rec, lv_color_hex(0xAAAAAA), 0);
+    lv_obj_add_style(title_rec, &style_cn_info, 0);
+
+    // 5. [数据层交互] 获取记录
+    std::time_t now = std::time(nullptr);
+    auto records = db_get_records(now - 30*24*3600, now + 24*3600); 
+    
+    bool found_any = false;
+    for (const auto& rec : records) {
+        if (rec.user_id == user_id) {
+            found_any = true;
+            
+            lv_obj_t *rec_item = lv_obj_create(obj_result_container);
+            lv_obj_set_size(rec_item, 210, 35);
+            lv_obj_set_style_bg_color(rec_item, lv_color_hex(0x222222), 0);
+            lv_obj_set_style_border_width(rec_item, 0, 0);
+            lv_obj_clear_flag(rec_item, LV_OBJ_FLAG_SCROLLABLE);
+
+            // 时间格式化修复
+            char time_buf[32];
+            time_t ts = (time_t)rec.timestamp; 
+            struct tm *tm_info = localtime(&ts);
+            strftime(time_buf, 32, "%m-%d %H:%M", tm_info);
+            
+            const char* status_icon = (rec.status == 0) ? LV_SYMBOL_OK : LV_SYMBOL_WARNING;
+            lv_color_t status_color = (rec.status == 0) ? lv_palette_main(LV_PALETTE_GREEN) : lv_palette_main(LV_PALETTE_RED);
+
+            lv_obj_t *lbl = lv_label_create(rec_item);
+            lv_label_set_text_fmt(lbl, "%s %s", status_icon, time_buf);
+            lv_obj_set_style_text_color(lbl, status_color, 0);
+            lv_obj_center(lbl);
+        }
+    }
+    
+    if (!found_any) {
+        lv_obj_t *lbl = lv_label_create(obj_result_container);
+        lv_label_set_text(lbl, "无记录 (No Data)");
+        lv_obj_add_style(lbl, &style_cn_info, 0);
+    }
+
+    // 6. 切换屏幕并加入输入组
+    lv_screen_load(screen_rec_result);
+    
+    // 【关键】将 容器 和 按钮 都加入组，实现焦点切换
+    lv_group_add_obj(g_keypad_group, obj_result_container);
+    lv_group_add_obj(g_keypad_group, btn_result_back);
+    
+    // 默认聚焦内容区，方便直接查看
+    lv_group_focus_obj(obj_result_container);
 }
