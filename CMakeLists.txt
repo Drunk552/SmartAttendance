@@ -18,6 +18,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 2.1 基础工具
 find_package(PkgConfig REQUIRED)
 
+# [Epic 4.4 新增] 查找线程库
+find_package(Threads REQUIRED)  
+
 # 2.2 LVGL 依赖 (SDL2, Freetype)
 pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(Freetype REQUIRED)
@@ -112,6 +115,7 @@ target_link_libraries(attendance_app PRIVATE
     SQLite::SQLite3     # 数据库
     ${SDL2_LIBRARIES}   # 驱动支持
     xlsxwriter  # <--- [新增] 链接 libxlsxwriter
+    Threads::Threads  # 链接线程库
 )
 
 # 编译信息输出

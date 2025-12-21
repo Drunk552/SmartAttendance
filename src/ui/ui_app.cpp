@@ -20,6 +20,10 @@
 #include <ctime>
 #include <sstream>
 #include <sys/statvfs.h>// [Epic 4.3] 系统调用
+// [Epic 4.4 新增]
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 // 【新增】声明你的自定义字体
 LV_FONT_DECLARE(font_noto_16);
@@ -62,9 +66,20 @@ static bool g_disk_full = false;            // 磁盘满标志
 static lv_obj_t *screen_sys_ops = nullptr;
 static lv_obj_t *obj_sys_list = nullptr;
 
-// ================= 摄像头相关 =================
-// 使用 std::array 作为静态缓冲区（更安全、类型化）
-static std::array<uint8_t, CAM_W * CAM_H * 3> cam_buf;
+// ================= 摄像头多线程优化变量 (Epic 4.4) =================
+// 1. 显示缓冲区 (UI 线程读取) - 替换原有的 cam_buf
+static std::array<uint8_t, CAM_W * CAM_H * 3> cam_buf_display;
+
+// 2. 后台缓冲区 (采集线程写入)
+static std::vector<uint8_t> cam_buf_back(CAM_W * CAM_H * 3);
+
+// 3. 线程控制
+static std::mutex g_frame_mutex;          // 保护缓冲区交换
+static std::atomic<bool> g_frame_ready{false}; // 标志位：后台是否有新图
+static std::thread g_capture_thread;      // 采集线程对象
+
+extern volatile bool g_program_should_exit; // 引用 main.cpp 中的退出标志
+
 static lv_obj_t *img_camera = nullptr;
 
 #if LV_VERSION_CHECK(9,0,0)
@@ -128,8 +143,18 @@ static std::string get_current_time_str() {
 
 static void camera_timer_cb(lv_timer_t * /*timer*/) {
     if (g_program_should_exit) return; 
+    
+    // 只有在主界面且图像控件存在时才更新
     if (lv_screen_active() == screen_main && img_camera) {
-        if (business_get_display_frame(cam_buf.data(), CAM_W, CAM_H)) {
+        // 检查后台是否准备好了新数据
+        if (g_frame_ready) {
+            {
+                std::lock_guard<std::mutex> lock(g_frame_mutex);
+                // 极速拷贝 (320x240 RGB 仅约 200KB，耗时 < 1ms)
+                std::memcpy(cam_buf_display.data(), cam_buf_back.data(), cam_buf_back.size());
+                g_frame_ready = false; // 放下标志
+            }
+            // 通知 LVGL 图像已脏，需要重绘
             lv_obj_invalidate(img_camera);
         }
     }
@@ -388,6 +413,38 @@ static void init_styles(void) {
     lv_style_set_text_color(&style_menu_btn_focused, lv_palette_main(LV_PALETTE_YELLOW));   // 黄色文字
 }
 
+/**
+ * @brief [Epic 4.4] 后台采集线程函数
+ * 负责死循环读取摄像头、人脸识别和缩放，不阻塞 UI
+ */
+static void capture_thread_func() {
+    std::printf("[System] Capture Thread Started.\n");
+    
+    // 临时缓存，避免长时间持有锁
+    std::vector<uint8_t> temp_buf(CAM_W * CAM_H * 3);
+
+    while (!g_program_should_exit) {
+        // 调用业务层接口获取一帧 (这是最耗时的步骤：采集+识别+缩放+转码)
+        // 注意：business_get_display_frame 内部已通过 face_demo.cpp 的锁保护了 OpenCV 资源
+        bool ret = business_get_display_frame(temp_buf.data(), CAM_W, CAM_H);
+
+        if (ret) {
+            // 获取锁，快速将数据放入后台缓冲区
+            {
+                std::lock_guard<std::mutex> lock(g_frame_mutex);
+                std::memcpy(cam_buf_back.data(), temp_buf.data(), temp_buf.size());
+                g_frame_ready = true; // 举手：我有新图了！
+            }
+            // 简单休眠控制采集帧率 (约 30-60 FPS)
+            //std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        } else {
+            // 采集失败时休眠久一点
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+    std::printf("[System] Capture Thread Stopped.\n");
+}
+
 static void create_main_screen(void) {
     screen_main = lv_obj_create(nullptr);
     lv_obj_add_style(screen_main, &style_base, 0);
@@ -433,8 +490,10 @@ static void create_main_screen(void) {
     // Camera
     img_dsc.header.w = CAM_W;
     img_dsc.header.h = CAM_H;
-    img_dsc.data = cam_buf.data();
-    img_dsc.data_size = static_cast<uint32_t>(cam_buf.size());
+
+    // [Epic 4.4 修改] 指向新的显示缓冲区
+    img_dsc.data = cam_buf_display.data(); 
+    img_dsc.data_size = static_cast<uint32_t>(cam_buf_display.size());
     #if LV_VERSION_CHECK(9,0,0)
         img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
         img_dsc.header.cf = LV_COLOR_FORMAT_RGB888;
@@ -843,14 +902,26 @@ static void load_user_list_screen(void) {
 // [Epic 3.3] 注册向导实现 (Wizard Implementation)
 // =================================================================
 
-// --- 辅助：注册页面的摄像头刷新 ---
+// --- [Epic 4.4 修正] 注册页面的摄像头刷新 ---
 static void register_face_timer_cb(lv_timer_t * /*timer*/) {
-    // 只有在注册界面才刷新
+    // 1. 只有在注册界面才刷新
     if (lv_screen_active() != screen_register) return;
     
-    // 复用全局 cam_buf 和业务接口
-    if (img_face_reg && business_get_display_frame(cam_buf.data(), CAM_W, CAM_H)) {
-        lv_obj_invalidate(img_face_reg);
+    // 2. 检查后台线程是否准备好了新帧
+    if (g_frame_ready) {
+        // 加锁并从后台缓冲区拷贝最新数据到显示缓冲区
+        {
+            std::lock_guard<std::mutex> lock(g_frame_mutex);
+            std::memcpy(cam_buf_display.data(), cam_buf_back.data(), cam_buf_back.size());
+            // 注意：这里不要把 g_frame_ready 设为 false，因为可能还有其他地方想读（虽然后台线程很快会覆盖它）
+            // 或者如果不介意，也可以设为 false。这里我们为了保险，只读数据。
+             g_frame_ready = false; 
+        }
+
+        // 3. 刷新注册页面的图像控件
+        if (img_face_reg) {
+            lv_obj_invalidate(img_face_reg);
+        }
     }
 }
 
@@ -1030,11 +1101,19 @@ void ui_init(void) {
     init_styles();
     create_main_screen();
     
-    lv_timer_create(camera_timer_cb, 100, nullptr);
+    // [Epic 4.4 新增] 启动后台采集线程
+    g_capture_thread = std::thread(capture_thread_func);
+    g_capture_thread.detach(); // 分离线程，随主进程结束
+
+    // [Epic 4.4 优化] 提升 UI 刷新频率
+    // 从 100ms 改为 20ms (目标 50 FPS)
+    // 因为现在 timer 只做内存拷贝，非常快，不会卡顿
+    lv_timer_create(camera_timer_cb, 20, nullptr);
+
     lv_timer_create(time_timer_cb, 1000, nullptr);
 
     load_main_screen();
-    std::printf("[UI] Debug Mode v2.1 (Red Focus Style)\n");
+    std::printf("[UI] Epic 4.4 Optimization: Threaded Capture Started.\n");
 }
 
 // =================================================================

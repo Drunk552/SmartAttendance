@@ -12,6 +12,7 @@
 #include "face_demo.h" // 人脸识别演示模块的头文件
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 #include "db_storage.h"//数据层头文件
+#include <mutex>
 
 using namespace cv;
 using namespace cv::face;
@@ -32,7 +33,8 @@ static bool trained = false;// 标识是否已完成训练
 static bool show_recognition = false;// 控制是否显示识别结果
 
 static Mat current_frame;// [Eoic4新增] 用于在函数间共享最新一帧画面
-
+// [Epic 4.4 新增] 保护 current_frame 的互斥锁
+static std::mutex g_data_mutex;
 // [Epic 3.3] 用户列表缓存，用于给 C 语言 UI 提供数据
 static std::vector<UserData> g_user_cache;
 // [Epic 3.4] 考勤记录缓存
@@ -220,7 +222,19 @@ bool business_init() {
     
     if (!cap.isOpened()) {
         std::cerr << "[WARN] 打不开 SDP 推流，回退到摄像头 0。\n";
-        cap.open(0);// 回退到默认摄像头（索引0）
+        cap.open(0);
+        
+        // 【新增代码】强制设置低分辨率和缓冲区大小
+        if (cap.isOpened()) {
+            // 设置为 320x240，匹配我们的屏幕尺寸，大幅提升处理速度
+            cap.set(cv::CAP_PROP_FRAME_WIDTH, 320);
+            cap.set(cv::CAP_PROP_FRAME_HEIGHT, 240);
+            
+            // 尝试设置缓冲区为1 (部分驱动支持)，只取最新一帧
+            cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+            
+            std::cout << "[Business] Camera set to 320x240 Low Latency Mode.\n";
+        }
     }
     
     if (!cap.isOpened()) {
@@ -470,6 +484,13 @@ void business_toggle_recognition() {
 cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_once 也可以保留但返回值要改
     if (!cap.isOpened()) return Mat();
 
+    // [Epic 4.4 新增] 加锁，防止写入时被其他线程读取
+    std::lock_guard<std::mutex> lock(g_data_mutex);
+
+    // 【可选优化】如果在 Linux/V4L2 下延迟依然存在，可以取消下面这行的注释
+    // 它的作用是每次读取前先抓取一次丢弃，确保拿到的是最新的
+    cap.grab();
+
     // 1. 读取一帧
     if (!cap.read(current_frame) || current_frame.empty()) {
         return Mat(); 
@@ -610,6 +631,10 @@ bool business_get_user_at(int index, int *id_out, char *name_buf, int len) {
  * @note 此接口会调用 db_add_user(current_frame) 并刷新用户缓存
  */
 bool business_register_user(const char* name) {
+
+    // [Epic 4.4 新增] 加锁保护读取
+    std::lock_guard<std::mutex> lock(g_data_mutex);
+
     // 1. 检查是否有画面
     if (current_frame.empty()) {
         std::cerr << "[Business] Error: No camera frame for registration!\n";
@@ -703,6 +728,11 @@ bool business_get_record_at(int index, char *buf, int len) {
  * @note 使用 current_frame 进行采集，确保所见即所得
  */
 bool business_capture_snapshot(){// 触发拍照函数
+
+    // [Epic 4.4 新增] 加锁保护读取
+    std::lock_guard<std::mutex> lock(g_data_mutex);
+
+    //检查是否有画面
     if (!current_frame.empty()) {
         std::cout <<">>> [Business]触发采集..." << endl;
 
