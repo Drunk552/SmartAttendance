@@ -35,12 +35,17 @@ int AttendanceRule::determineShiftOwner(time_t punch_timestamp, const ShiftConfi
 
     // 判断打卡时间归属
     if (punch_minutes >= am_start_minutes && punch_minutes <= am_end_minutes) {
-        return 1; // 上午班次
+        return 1; // 明确在上午段
     } else if (punch_minutes >= pm_start_minutes && punch_minutes <= pm_end_minutes) {
-        return 2; // 下午班次
+        return 2; // 明确在下午段
     } else if (punch_minutes > am_end_minutes && punch_minutes < pm_start_minutes) {
-        // 折中原则，12:00-13:00视为上午班次
-        return 1;
+        // 【修正】实现折中原则
+        int mid_point = am_end_minutes + (pm_start_minutes - am_end_minutes) / 2;
+        if (punch_minutes <= mid_point) {
+            return 1; // 归属上午（如迟签退）
+        } else {
+            return 2; // 归属下午（如早签到）
+        }
     }
 
     // 默认归属上午班次

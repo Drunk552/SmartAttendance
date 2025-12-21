@@ -74,6 +74,9 @@ struct UserData {
     /// @brief [新增] 所属部门 ID (关联 DeptInfo.id)
     int dept_id;            
 
+    // [新增] 部门名称 (用于UI显示和报表，数据库不直接存，靠联表查询获取)
+    std::string dept_name;
+
     /// @brief 人脸特征数据 (二进制流)
     /// @details 对应数据库中的 BLOB 字段，存储编码后的 JPG 图片数据
     std::vector<uchar> face_feature; 
@@ -208,6 +211,13 @@ UserData db_get_user_info(int user_id);
  * @return std::vector<UserData> 包含人脸数据的用户列表
  */
 std::vector<UserData> db_get_all_users();
+
+/**
+ * @brief 获取所有用户的基础信息 (用于报表和UI列表)
+ * @details 包含部门名称，但不包含人脸数据(BLOB)，轻量高效。
+ * @return std::vector<UserData> 用户列表
+ */
+std::vector<UserData> db_get_all_users_info();
 
 // ================= 4. 考勤记录接口 (Attendance DAO) =================
 

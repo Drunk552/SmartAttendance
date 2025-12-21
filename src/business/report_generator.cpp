@@ -109,6 +109,31 @@ bool ReportGenerator::exportReport(ReportType type,
         }
     }
 
+    // 获取所有员工信息 
+    std::vector<UserData> all_users = db_get_all_users_info();
+
+    // 遍历查询范围内的每一天
+    for (long long t = start_ts; t <= end_ts; t += 86400) {
+        std::string curr_date = formatDate(t);
+        // 遍历每一个员工
+        for (const auto& user : all_users) {
+            std::string key = std::to_string(user.id) + "_" + curr_date;
+            
+            // 如果map里没有这个key，说明当天没打卡，补全“缺勤”
+            if (summary_map.find(key) == summary_map.end()) {
+                DailySummary ds;
+                ds.date = curr_date;
+                ds.name = user.name;
+                ds.dept = user.dept_name;
+                ds.check_in = "--:--";
+                ds.check_out = "--:--";
+                ds.status = "缺勤"; // 【关键】标记为缺勤
+                ds.is_abnormal = true;
+                summary_map[key] = ds;
+            }
+        }
+    }
+
     // 4. 使用 libxlsxwriter 写入 Excel
     lxw_workbook  *workbook  = workbook_new(output_path.c_str());
     if (!workbook) {

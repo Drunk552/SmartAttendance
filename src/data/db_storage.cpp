@@ -429,6 +429,45 @@ std::vector<UserData> db_get_all_users() {
     return list;
 }
 
+std::vector<UserData> db_get_all_users_info() {
+    std::vector<UserData> list;
+    // [优化] 只查基本信息，关联部门表获取名称，不查 face_data BLOB
+    const char* sql = 
+        "SELECT u.id, u.name, u.card_id, u.privilege, u.dept_id, d.name "
+        "FROM users u "
+        "LEFT JOIN departments d ON u.dept_id = d.id "
+        "ORDER BY u.id ASC;";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            UserData u;
+            u.id = sqlite3_column_int(stmt, 0);
+            
+            const char* name = (const char*)sqlite3_column_text(stmt, 1);
+            u.name = name ? name : "Unknown";
+            
+            const char* card = (const char*)sqlite3_column_text(stmt, 2);
+            u.card_id = card ? card : "";
+            
+            u.role = sqlite3_column_int(stmt, 3);
+            u.dept_id = sqlite3_column_int(stmt, 4);
+            
+            // 获取联表查询出的部门名称
+            const char* dname = (const char*)sqlite3_column_text(stmt, 5);
+            u.dept_name = dname ? dname : "Not Set";
+            
+            // 注意：这里没有加载 face_feature，保持轻量
+            
+            list.push_back(u);
+        }
+    } else {
+        std::cerr << "[Data] Get All Users Info Failed: " << sqlite3_errmsg(db) << std::endl;
+    }
+    sqlite3_finalize(stmt);
+    return list;
+}
+
 // ================= 4. 考勤记录 DAO =================
 
 bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int status) {
