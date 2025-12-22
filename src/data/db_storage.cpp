@@ -181,21 +181,38 @@ bool data_seed() {
         db_add_department("HR");
     }
 
-    // 2. 播种默认班次 (如果为空)
+    // 2. 播种默认班次 
     if (is_table_empty("shifts")) {
-        // 对应任务书要求的默认班次 [cite: 2003]
         const char* sql = "INSERT INTO shifts (name, start_time, end_time, cross_day) VALUES (?, ?, ?, ?);";
         sqlite3_stmt* stmt;
+        
+        // 插入上午班 (09:00 - 12:00)
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-            // 班次一: 08:00 - 18:00 (简化版，或者按任务书分段但这里只有start/end)
-            sqlite3_bind_text(stmt, 1, "General Shift", -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 1, "Morning Shift", -1, SQLITE_STATIC);
             sqlite3_bind_text(stmt, 2, "09:00", -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, "18:00", -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 4, 0); // 不跨天
+            sqlite3_bind_text(stmt, 3, "12:00", -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 4, 0);
             sqlite3_step(stmt);
+            sqlite3_reset(stmt); // 重置语句以便复用
+            
+            // 插入下午班 (13:00 - 18:00)
+            sqlite3_bind_text(stmt, 1, "Afternoon Shift", -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, "13:00", -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, "18:00", -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 4, 0);
+            sqlite3_step(stmt);
+            
             sqlite3_finalize(stmt);
-            std::cout << "   [Seed] Created default shift: 'General Shift' (09:00-18:00)" << std::endl;
+            std::cout << "   [Seed] Created AM/PM Shifts." << std::endl;
         }
+    }
+
+    // [新增] 3. 播种默认考勤规则
+    if (is_table_empty("attendance_rules")) {
+        // 默认允许迟到 15 分钟
+        const char* sql = "INSERT INTO attendance_rules (company_name, late_threshold, early_leave_threshold) VALUES ('Smart Co.', 15, 0);";
+        exec_sql(sql, "Seed Rules");
+        std::cout << "   [Seed] Created default rules (Late Threshold: 15m)." << std::endl;
     }
 
     // 3. 播种默认管理员 (如果用户表为空)
@@ -316,6 +333,25 @@ std::vector<ShiftInfo> db_get_shifts() {
     }
     sqlite3_finalize(stmt);
     return list;
+}
+
+RuleConfig db_get_global_rules() {
+    RuleConfig config = {"MyCompany", 15, 0}; // 默认兜底值
+    
+    // 查询第一条规则记录
+    const char* sql = "SELECT company_name, late_threshold, early_leave_threshold FROM attendance_rules LIMIT 1;";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* name = (const char*)sqlite3_column_text(stmt, 0);
+            config.company_name = name ? name : "MyCompany";
+            config.late_threshold = sqlite3_column_int(stmt, 1);
+            config.early_leave_threshold = sqlite3_column_int(stmt, 2);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return config;
 }
 
 // ================= 3. 用户管理 DAO (升级版) =================

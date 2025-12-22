@@ -33,6 +33,11 @@ static int current_id = 0;// 当前选中的用户ID（用于采集样本）
 static bool trained = false;// 标识是否已完成训练
 static bool show_recognition = false;// 控制是否显示识别结果
 
+// ============== [新增：考勤配置全局缓存] ==============
+static RuleConfig g_rule_cfg;              // 全局规则配置
+static std::vector<ShiftInfo> g_shifts;    // 全局班次列表
+static bool g_is_config_loaded = false;    // 是否已加载标志位
+
 static Mat current_frame;// [Eoic4新增] 用于在函数间共享最新一帧画面
 // [Epic 4.4 新增] 保护 current_frame 的互斥锁
 static std::mutex g_data_mutex;
@@ -548,10 +553,35 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
                     // --- 有效打卡分支 ---
                     
                     // 3. [Epic 5.1] 调用考勤规则引擎计算状态
-                    // 暂时构造默认班次 (AM 09:00-12:00, PM 13:00-18:00)
-                    // 实际项目中应从 db_get_shifts() 获取
-                    ShiftConfig shift_am = {"09:00", "12:00", 15};
-                    ShiftConfig shift_pm = {"13:00", "18:00", 15};
+                    // 1. 定义静态变量 (Static Cache)
+                    // static 变量只在程序第一次执行到这里时初始化，之后会一直保留在内存中
+                    // 这样就避免了每一帧都去读取硬盘数据库，极大提升性能
+                    static RuleConfig rule_cfg;
+                    static std::vector<ShiftInfo> shifts;
+                    static bool is_config_loaded = false;
+
+                    // 2. 懒加载逻辑 (Lazy Loading)
+                    // 如果没加载过，或者需要刷新配置，才去查数据库
+                    // 1. 懒加载检查：如果配置过期或未加载，查数据库
+                    if (!g_is_config_loaded || g_shifts.empty()) {
+                        g_rule_cfg = db_get_global_rules();
+                        g_shifts = db_get_shifts();
+                        g_is_config_loaded = true;
+                        std::cout << "[Business] 配置已刷新: 迟到阈值=" << g_rule_cfg.late_threshold 
+                                << "m, 班次数量=" << g_shifts.size() << std::endl;
+                    }
+
+                    ShiftConfig shift_am, shift_pm;
+
+                    // 2. 动态赋值 (使用 g_shifts 和 g_rule_cfg)
+                    if (g_shifts.size() >= 2) {
+                        shift_am = {g_shifts[0].start_time, g_shifts[0].end_time, g_rule_cfg.late_threshold};
+                        shift_pm = {g_shifts[1].start_time, g_shifts[1].end_time, g_rule_cfg.late_threshold};
+                    } else {
+                        // 兜底默认值
+                        shift_am = {"09:00", "12:00", g_rule_cfg.late_threshold};
+                        shift_pm = {"13:00", "18:00", g_rule_cfg.late_threshold};
+                    }
                     
                     // A. 判断是上午还是下午 (Story 1.1 折中原则)
                     int shift_owner = AttendanceRule::determineShiftOwner(now, shift_am, shift_pm);
@@ -897,4 +927,16 @@ void business_set_roi_enhance(bool enable, float contrast, float brightness){
     std::cout << "[Business] ROI增强： " << (enable ? "启用" : "禁用")
               << ", 对比度: " << contrast
               << ", 亮度: " << brightness << std::endl;
+}
+
+/**
+ * @brief 强制刷新考勤配置
+ * @note 将加载标志位置为 false，下次 business_get_frame 运行时会自动从数据库重新拉取
+ */
+void business_reload_config() {
+    // [Epic 4.4] 建议加锁 (如果你有多线程隐患)
+    std::lock_guard<std::mutex> lock(g_data_mutex); 
+    
+    g_is_config_loaded = false;
+    std::cout << ">>> [Business] 配置已过期，将在下一帧自动刷新。" << std::endl;
 }

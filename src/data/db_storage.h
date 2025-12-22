@@ -51,6 +51,16 @@ struct ShiftInfo {
 };
 
 /**
+ * @brief 系统考勤规则配置
+ * @details 对应数据库 `attendance_rules` 表
+ */
+struct RuleConfig {
+    std::string company_name;
+    int late_threshold;       // 允许迟到分钟数 (默认 15)
+    int early_leave_threshold;// 允许早退分钟数 (默认 0)
+};
+
+/**
  * @brief 用户完整信息结构体
  * @details 对应数据库 `users` 表，包含身份、权限及生物特征
  */
@@ -176,6 +186,12 @@ bool db_update_shift(int shift_id, const std::string& start, const std::string& 
  * @return std::vector<ShiftInfo> 班次列表数组
  */
 std::vector<ShiftInfo> db_get_shifts();
+
+/**
+ * @brief 获取全局考勤规则配置
+ * @return RuleConfig 包含迟到/早退阈值
+ */
+RuleConfig db_get_global_rules();
 
 // ================= 3. 用户管理接口 (User DAO) =================
 
