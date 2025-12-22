@@ -16,6 +16,8 @@
 #include <cstdlib>
 #include <string>
 #include <array>
+#include <set>
+#include <algorithm>
 #include <vector>
 #include <ctime>
 #include <sstream>
@@ -56,10 +58,6 @@ static lv_obj_t *obj_list_view = nullptr;  // 列表控件容器
 static lv_obj_t *screen_register = nullptr;
 static lv_obj_t *ta_name = nullptr;      // 名字输入框
 static lv_obj_t *img_face_reg = nullptr; // 注册页面的摄像头预览
-static std::string g_reg_name;           // 使用 std::string 暂存输入的名字
-static int g_reg_dept_id = 1;            // 暂存选择的部门ID
-static lv_obj_t *roller_dept = nullptr;  // 部门选择滚轮
-static void load_register_step_dept(void); // 选择部门
 // [Epic 3.4 新增] 考勤记录页
 static lv_obj_t *screen_records = nullptr;
 static lv_obj_t *obj_record_list = nullptr;
@@ -85,6 +83,11 @@ static lv_obj_t *screen_sys_info = nullptr;     // Level 1: 系统信息菜单
 static lv_obj_t *obj_info_grid = nullptr;       // 信息菜单容器
 static lv_obj_t *screen_storage_info = nullptr; // Level 2: 存储详情页
 
+// 这些变量用于在注册流程中临时存储数据
+int g_reg_user_id = 0;      // 全局变量：注册时的工号
+std::string g_reg_name = ""; // 全局变量：注册时的姓名
+int g_reg_dept_id = 0;      // 全局变量：注册时的部门ID
+
 // ================= 摄像头多线程优化变量 (Epic 4.4) =================
 // 1. 显示缓冲区 (UI 线程读取) - 替换原有的 cam_buf
 static std::array<uint8_t, CAM_W * CAM_H * 3> cam_buf_display;
@@ -109,11 +112,30 @@ static lv_obj_t *img_camera = nullptr;
 
 static lv_obj_t *label_time = nullptr;
 
+// 辅助函数：获取数据库中下一个可用的最小工号
+static int get_next_available_id() { 
+    // 1. 获取当前所有用户
+    std::vector<UserData> users = db_get_all_users();
+    
+    // 2. 将现有ID存入集合
+    std::set<int> existing_ids;
+    for (const auto& user : users) {
+        existing_ids.insert(user.id);
+    }
+    
+    // 3. 寻找最小的未被占用的正整数
+    int next_id = 1;
+    while (existing_ids.find(next_id) != existing_ids.end()) {
+        next_id++;
+    }
+    return next_id;
+}
+
 // ================= 样式定义 =================
 static lv_style_t style_base;
 static lv_style_t style_menu_btn;
 static lv_style_t style_menu_btn_focused; // 焦点样式
-
+static lv_style_t style_text_cn;
 
 // ================= 核心导航函数前向声明 =================
 static void load_main_screen(void);
@@ -130,9 +152,7 @@ static void list_btn_event_cb(lv_event_t *e);
 
 // [Epic 3.3 注册向导] 函数声明
 static void create_register_screen(void);
-static void load_register_step1(void); // 输入姓名
-static void load_register_step2(void); // 采集人脸
-static void load_register_step_dept(void);
+static void load_register_step(void); // 采集人脸
 static void register_face_timer_cb(lv_timer_t *timer); // 注册页面的摄像头刷新
 static void load_user_mgmt_screen(void); // 新增：声明加载员工管理页函数
 static void load_record_query_screen(void);
@@ -142,6 +162,9 @@ static void load_sys_settings_screen(void);
 static void load_sys_adv_screen(void);
 static void load_sys_info_screen(void);
 static void load_storage_info_screen(void);
+
+// 前向声明：确保编译器知道这个函数存在 // 或者你原来返回上一级菜单的函数名
+void load_register_form_screen();
 
 // ================= 辅助函数 =================
 
@@ -396,7 +419,7 @@ static void menu_btn_event_cb(lv_event_t *e) {
                     lv_obj_add_event_cb(btn, mbox_close_event_cb, LV_EVENT_CLICKED, mbox);
                     lv_obj_center(mbox);
                 } else {
-                    load_register_step1(); 
+                    load_register_form_screen(); 
                 }
             }
             else if(std::strcmp(tag, "System") == 0) {
@@ -426,6 +449,11 @@ static void init_styles(void) {
     lv_style_set_bg_color(&style_base, lv_color_hex(0x000000));
     lv_style_set_bg_opa(&style_base, LV_OPA_COVER);
     lv_style_set_text_color(&style_base, lv_color_hex(0xFFFFFF));
+
+    // 中文文字样式
+    lv_style_init(&style_text_cn);
+    lv_style_set_text_font(&style_text_cn, &font_noto_16); // 设定中文字体
+    lv_style_set_text_color(&style_text_cn, lv_color_white()); // 默认白色文字
 
     // 普通按钮：深灰色
     lv_style_init(&style_menu_btn);
@@ -535,14 +563,8 @@ static lv_obj_t* create_sys_grid_btn(lv_obj_t *parent, int row,
     // 使用 format 拼接字符串，中间加两个空格
     lv_label_set_text_fmt(lbl_text, "%s  %s", text_en, text_cn);
     
-    // 3. 字体样式 (必须应用中文字体)
-    static lv_style_t style_cn_text;
-    if (style_cn_text.prop_cnt == 0) {
-        lv_style_init(&style_cn_text);
-        lv_style_set_text_font(&style_cn_text, &font_noto_16); // 使用你的自定义字体
-        lv_style_set_text_color(&style_cn_text, lv_color_hex(0xFFFFFF));
-    }
-    lv_obj_add_style(lbl_text, &style_cn_text, 0);
+    // 3. 字体样式 (必须应用中文字体全局样式)
+    lv_obj_add_style(lbl_text, &style_text_cn, 0);
 
     return btn;
 }
@@ -634,22 +656,13 @@ static void create_menu_screen(void) {
     // 1. 创建屏幕
     screen_menu = lv_obj_create(nullptr);
     lv_obj_add_style(screen_menu, &style_base, 0);
-
-    // 2. 准备中文字体样式 (只需定义一次)
-    static lv_style_t style_cn;
-    if (style_cn.prop_cnt == 0) {
-        lv_style_init(&style_cn);
-        // 确保 font_noto_16 已在文件顶部声明: LV_FONT_DECLARE(font_noto_16);
-        lv_style_set_text_font(&style_cn, &font_noto_16); 
-        lv_style_set_text_color(&style_cn, lv_color_white());
-    }
     
-    // 3. 标题 (System Menu / 系统菜单)
+    // 2. 标题 (System Menu / 系统菜单)
     lv_obj_t *title = lv_label_create(screen_menu);
     lv_label_set_text(title, "System Menu / 系统菜单");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    // 【关键点A】给标题应用中文字体
-    lv_obj_add_style(title, &style_cn, 0); 
+    // 使用全局样式 style_text_cn应用中文字体
+    lv_obj_add_style(title, &style_text_cn, 0); 
 
     // 4. 定义九宫格布局
     static int32_t col_dsc[] = {100, 100, LV_GRID_TEMPLATE_LAST}; 
@@ -711,9 +724,8 @@ static void create_menu_screen(void) {
         lv_label_set_text_fmt(lbl, "%s\n%s", menu_items[i].text_en, menu_items[i].text_cn);
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         
-        // 【关键点B】必须给这里的 Label 也应用中文字体样式！
-        // 如果漏了这行，菜单里的字就是方框
-        lv_obj_add_style(lbl, &style_cn, 0); 
+        // 使用全局样式 style_text_cn
+        lv_obj_add_style(lbl, &style_text_cn, 0);
     }
 }
 
@@ -807,7 +819,8 @@ static void user_mgmt_btn_event_cb(lv_event_t *e) {
                     lv_obj_add_event_cb(btn, mbox_close_event_cb, LV_EVENT_CLICKED, mbox);
                     lv_obj_center(mbox);
                 } else {
-                    load_register_step1(); 
+                    screen_user_mgmt = nullptr; // 标记该屏幕即将被销毁
+                    load_register_form_screen(); 
                 }
             }
             else if(std::strcmp(tag, "DeleteUser") == 0) {
@@ -832,14 +845,7 @@ static void create_user_mgmt_screen(void) {
     lv_obj_t *title = lv_label_create(screen_user_mgmt);
     lv_label_set_text(title, "User Management / 员工管理");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    // 务必添加中文字体样式
-    static lv_style_t style_cn_title;
-    if (style_cn_title.prop_cnt == 0) {
-        lv_style_init(&style_cn_title);
-        lv_style_set_text_font(&style_cn_title, &font_noto_16);
-        lv_style_set_text_color(&style_cn_title, lv_color_white());
-    }
-    lv_obj_add_style(title, &style_cn_title, 0);
+    lv_obj_add_style(title, &style_text_cn, 0);// 应用中文字体样式
 
     // 布局定义: 1列, 3行 (行高70px)
     static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST}; 
@@ -861,14 +867,6 @@ static void create_user_mgmt_screen(void) {
         {LV_SYMBOL_SETTINGS, "Register",     "员工注册", "Register"},
         {LV_SYMBOL_TRASH,    "Delete User",  "删除员工", "DeleteUser"} 
     };
-    
-    // 准备中文样式 (给按钮内的文字用)
-    static lv_style_t style_cn_item;
-    if (style_cn_item.prop_cnt == 0) {
-        lv_style_init(&style_cn_item);
-        lv_style_set_text_font(&style_cn_item, &font_noto_16);
-        lv_style_set_text_color(&style_cn_item, lv_color_white());
-    }
 
     for(int i = 0; i < 3; i++) {
         lv_obj_t *btn = lv_button_create(obj_user_mgmt_grid);
@@ -891,7 +889,7 @@ static void create_user_mgmt_screen(void) {
         
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text_fmt(lbl, "%s  %s", items[i].en, items[i].cn); 
-        lv_obj_add_style(lbl, &style_cn_item, 0); // 应用中文字体
+        lv_obj_add_style(lbl, &style_text_cn, 0); // 使用全局样式
     }
 }
 
@@ -914,6 +912,39 @@ static void load_user_mgmt_screen(void) {
     
     // 背景兜底
     lv_group_add_obj(g_keypad_group, screen_user_mgmt);
+}
+
+// ================= 员工注册表单逻辑 =================
+// 事件：处理"下一步"按钮点击
+static void register_btn_next_event_handler(lv_event_t * e) {
+    // 获取传递过来的控件指针
+    lv_obj_t * name_ta = (lv_obj_t *)lv_event_get_user_data(e);
+    // 我们将 dept_dropdown 指针保存在了 name_ta 的 user_data 中
+    lv_obj_t * dept_dd = (lv_obj_t *)lv_obj_get_user_data(name_ta);
+
+    // 1. 获取输入内容
+    const char * name_txt = lv_textarea_get_text(name_ta);
+    uint16_t selected_dept_idx = lv_dropdown_get_selected(dept_dd);
+
+    // 2. 简单校验：姓名不能为空
+    if (strlen(name_txt) == 0) {
+        lv_obj_set_style_border_color(name_ta, lv_palette_main(LV_PALETTE_RED), 0);
+        return;
+    }
+
+    // 3. 获取部门ID (需要重新获取部门列表以匹配索引)
+    auto depts = db_get_departments();
+    if (selected_dept_idx < depts.size()) {
+        g_reg_dept_id = depts[selected_dept_idx].id;
+    } else {
+        g_reg_dept_id = 0; // 默认值
+    }
+
+    // 4. 保存姓名 (工号已经在加载页面时通过 get_next_available_id 生成并赋值给了 g_reg_user_id)
+    g_reg_name = std::string(name_txt);
+
+    // 5. 跳转到原有的人脸录入界面
+    load_register_step();
 }
 
 // ================= [Epic 5.2] 记录查询功能实现 =================
@@ -978,15 +1009,7 @@ static void create_record_query_screen(void) {
     lv_label_set_text(title, "Record Query / 记录查询");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    
-    // 准备中文字体
-    static lv_style_t style_cn;
-    if (style_cn.prop_cnt == 0) {
-        lv_style_init(&style_cn);
-        lv_style_set_text_font(&style_cn, &font_noto_16);
-        lv_style_set_text_color(&style_cn, lv_color_white());
-    }
-    lv_obj_add_style(title, &style_cn, 0);
+    lv_obj_add_style(title, &style_text_cn, 0); // 应用中文字体样式
 
     // 2. 提示文本
     lv_obj_t *label = lv_label_create(screen_rec_query);
@@ -1194,14 +1217,7 @@ static void create_sys_adv_screen() {
     lv_label_set_text(title, "Advanced Settings / 高级设置");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    
-    static lv_style_t style_cn_title;
-    if (style_cn_title.prop_cnt == 0) {
-        lv_style_init(&style_cn_title);
-        lv_style_set_text_font(&style_cn_title, &font_noto_16);
-        lv_style_set_text_color(&style_cn_title, lv_color_white());
-    }
-    lv_obj_add_style(title, &style_cn_title, 0);
+    lv_obj_add_style(title, &style_text_cn, 0);// 应用中文字体样式
 
     static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST}; 
     static int32_t row_dsc[] = {45, 45, 45, 45, 45, LV_GRID_TEMPLATE_LAST}; 
@@ -1351,15 +1367,7 @@ static void create_storage_info_screen() {
     lv_label_set_text(title, "Storage Statistics");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    
-    // 中文字体
-    static lv_style_t style_cn;
-    if (style_cn.prop_cnt == 0) {
-        lv_style_init(&style_cn);
-        lv_style_set_text_font(&style_cn, &font_noto_16);
-        lv_style_set_text_color(&style_cn, lv_color_white());
-    }
-    lv_obj_add_style(title, &style_cn, 0);
+    lv_obj_add_style(title, &style_text_cn, 0);// 应用中文字体样式
 
     // 获取数据
     StorageStats s = get_storage_statistics();
@@ -1384,7 +1392,7 @@ static void create_storage_info_screen() {
         
         lv_obj_t *lbl = lv_label_create(item);
         lv_label_set_text_fmt(lbl, "%s: %d", cn_label, value);
-        lv_obj_add_style(lbl, &style_cn, 0);
+        lv_obj_add_style(lbl, &style_text_cn, 0);// 中文字体样式
         lv_obj_set_style_text_color(lbl, color, 0);
         lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
     };
@@ -1452,14 +1460,7 @@ static void create_sys_info_screen() {
     lv_label_set_text(title, "System Info / 系统信息");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    
-    static lv_style_t style_cn;
-    if (style_cn.prop_cnt == 0) {
-        lv_style_init(&style_cn);
-        lv_style_set_text_font(&style_cn, &font_noto_16);
-        lv_style_set_text_color(&style_cn, lv_color_white());
-    }
-    lv_obj_add_style(title, &style_cn, 0);
+    lv_obj_add_style(title, &style_text_cn, 0);// 应用中文字体样式
 
     // 1列 2行 Grid
     static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST}; 
@@ -1500,14 +1501,7 @@ static void create_sys_settings_screen() {
     lv_label_set_text(title, "System Settings / 系统设置");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    
-    static lv_style_t style_cn_title;
-    if (style_cn_title.prop_cnt == 0) {
-        lv_style_init(&style_cn_title);
-        lv_style_set_text_font(&style_cn_title, &font_noto_16);
-        lv_style_set_text_color(&style_cn_title, lv_color_white());
-    }
-    lv_obj_add_style(title, &style_cn_title, 0);
+    lv_obj_add_style(title, &style_text_cn, 0);// 应用中文字体样式
 
     // 布局: 1列 3行
     static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST}; 
@@ -1585,7 +1579,7 @@ static void load_user_list_screen(void) {
                 
                 // 1. 创建按钮
                 lv_obj_t *btn = lv_list_add_button(obj_list_view, LV_SYMBOL_BULLET, label_buf);
-                
+                lv_obj_set_style_text_font(btn, &font_noto_16, 0);
                 // [新增] 2. 检查是否创建成功 (防崩溃)
                 if (btn == nullptr) {
                     std::printf("[Error] LVGL Out of Memory! Stopped at user %d\n", i);
@@ -1665,30 +1659,7 @@ static void reg_step2_event_cb(lv_event_t *e) {
             }
         }
         else if (key == LV_KEY_ESC) {
-            load_register_step_dept();
-        }
-    }
-}
-
-// --- Step 1 事件: 输入姓名完成 ---
-static void ta_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
-        
-        // 按 Enter 确认名字，进入下一步
-        if (key == LV_KEY_ENTER) {
-            const char *txt = lv_textarea_get_text(ta_name);
-            if (txt == nullptr) return;
-            std::string s(txt);
-            if (s.empty()) return; // 禁止空名
-            
-            g_reg_name = s;
-            std::printf("[UI] Name confirmed: %s -> Next Step\n", g_reg_name.c_str());
-            
-            load_register_step_dept(); // 进入部门选择页
-        }
-        else if (key == LV_KEY_ESC) {
-            load_user_mgmt_screen(); // 放弃注册，返回员工管理页
+            load_register_form_screen();
         }
     }
 }
@@ -1703,127 +1674,203 @@ static void create_register_screen(void) {
     lv_timer_create(register_face_timer_cb, 100, nullptr);
 }
 
-// --- 加载 Step 1: 输入姓名 ---
-static void load_register_step1(void) {
-    create_register_screen();
-    
-    std::printf("[UI] Wizard Step 1: Name\n");
-
-    // 1. 清理并准备界面
-    lv_obj_clean(screen_register);
-    lv_group_remove_all_objs(g_keypad_group);
-    
-    // 2. 标题
-    lv_obj_t *label = lv_label_create(screen_register);
-    lv_label_set_text(label, "Step 1: Enter Name");
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);
-    
-    // 3. 输入框
-    ta_name = lv_textarea_create(screen_register);
-    lv_textarea_set_one_line(ta_name, true);
-    lv_obj_set_width(ta_name, 200);
-    lv_obj_align(ta_name, LV_ALIGN_CENTER, 0, -20);
-    lv_obj_add_event_cb(ta_name, ta_event_cb, LV_EVENT_ALL, nullptr);
-    
-    // 4. 提示
-    lv_obj_t *tip = lv_label_create(screen_register);
-    lv_label_set_text(tip, "Type name & Press ENTER");
-    lv_obj_set_style_text_color(tip, lv_palette_main(LV_PALETTE_YELLOW), 0);
-    lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -40);
-    
-    // 5. 切换屏幕与焦点
-    #if LV_VERSION_CHECK(9,0,0)
-        lv_screen_load(screen_register);
-    #else
-        lv_scr_load(screen_register);
-    #endif
-    
-    // 将输入框加入组，让物理键盘能输入
-    lv_group_add_obj(g_keypad_group, ta_name);
-    lv_group_focus_obj(ta_name);
+/* --- ：强制导航模式的定时器回调 --- */
+static void force_nav_mode_timer_cb(lv_timer_t * t) {
+    if (g_keypad_group) {
+        lv_group_set_editing(g_keypad_group, false); // 再次强制设为导航模式
+        std::printf("[Debug] Timer: Enforced Nav Mode (Editing=False)\n");
+    }
+    lv_timer_del(t); // 任务完成，自杀
 }
 
-// --- 部门选择完成 ---
-static void dept_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_KEY) {
+/* --- 表单导航专用回调：实现按上下键切换焦点 --- */
+static void form_nav_event_cb(lv_event_t * e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t * obj = (lv_obj_t *)lv_event_get_target(e);
+
+    // [1] 焦点进入时：启动定时器强制修正状态
+    if (code == LV_EVENT_FOCUSED) {
+        // 给个亮橙色边框，确信焦点真的在这
+        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_ORANGE), 0);
+        lv_obj_set_style_border_width(obj, 3, 0);
+
+        if (g_keypad_group) {
+            // 如果是下拉框或按钮，我们要强制它处于“导航模式”
+            if (lv_obj_check_type(obj, &lv_dropdown_class) || 
+                lv_obj_check_type(obj, &lv_button_class)) {
+                
+                // 【核心修复】先设置一次，并启动定时器在下一帧再设置一次
+                lv_group_set_editing(g_keypad_group, false);
+                lv_timer_create(force_nav_mode_timer_cb, 10, NULL); 
+            }
+            // 输入框则保持编辑模式
+            else if (lv_obj_check_type(obj, &lv_textarea_class)) {
+                lv_group_set_editing(g_keypad_group, true);
+            }
+        }
+    }
+    // [2] 失去焦点：恢复样式
+    else if (code == LV_EVENT_DEFOCUSED) {
+        lv_obj_set_style_border_width(obj, 1, 0);
+        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_GREY), 0);
+    }
+    // [3] 按键处理
+    else if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
         
-        if (key == LV_KEY_ENTER) {
-            // 获取选中的索引 (假设 roller 选项顺序与 DB ID 对应，ID = index + 1)
-            // 更严谨的做法是把 ID 存在 user_data 里，这里先做简单映射
-            uint16_t selected_idx = lv_roller_get_selected(roller_dept);
-            
-            // 假设我们从数据库读出的部门列表顺序是 ID 1, 2, 3...
-            // 这里简单处理：ID = 索引 + 1
-            g_reg_dept_id = selected_idx + 1; 
-            
-            std::printf("[UI] Dept selected: %d -> Next Step\n", g_reg_dept_id);
-            load_register_step2(); // 进入拍照
+        bool is_expanded = false;
+        if (lv_obj_check_type(obj, &lv_dropdown_class)) {
+            is_expanded = lv_dropdown_is_open(obj);
         }
-        else if (key == LV_KEY_ESC) {
-            load_register_step1(); // 返回上一步
+
+        // 只要下拉框没展开，就拦截跳转
+        if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            if (!is_expanded) {
+                if (g_keypad_group) lv_group_set_editing(g_keypad_group, false);
+                lv_group_focus_next(g_keypad_group);
+            }
+        }
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            if (!is_expanded) {
+                std::printf("[Debug] UP Key Pressed -> Jumping Prev\n");
+                if (g_keypad_group) lv_group_set_editing(g_keypad_group, false);
+                lv_group_focus_prev(g_keypad_group);
+            }
+        }
+        else if (key == LV_KEY_ENTER) {
+            if (lv_obj_check_type(obj, &lv_textarea_class)) {
+                if (g_keypad_group) lv_group_set_editing(g_keypad_group, false);
+                lv_group_focus_next(g_keypad_group);
+            }
         }
     }
 }
 
-// ---  选择部门 ---
-static void load_register_step_dept(void) {
-    create_register_screen(); // 确保容器存在
-    std::printf("[UI] Wizard Step 1.5: Select Dept\n");
+//---  创建整合后的注册表单界面 --- 
+void load_register_form_screen() {
+    lv_obj_t * screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0xF0F0F0), 0);
 
-    lv_obj_clean(screen_register);
-    lv_group_remove_all_objs(g_keypad_group);
-    
-    // 1. 标题
-    lv_obj_t *label = lv_label_create(screen_register);
-    lv_label_set_text(label, "Step 2: Select Dept");
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_t * title = lv_label_create(screen);
+    lv_label_set_text(title, "员工注册 / Registration");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    // 标题应用中文字体样式
+    lv_obj_add_style(title, &style_text_cn, 0);
+    lv_obj_set_style_text_color(title, lv_color_black(), 0); 
 
-    // 2. 部门选择滚轮 (Roller)
-    roller_dept = lv_roller_create(screen_register);
+    lv_obj_t * form_cont = lv_obj_create(screen);
+    lv_obj_set_size(form_cont, 220, 180); 
+    lv_obj_align(form_cont, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_flex_flow(form_cont, LV_FLEX_FLOW_COLUMN); 
+    lv_obj_set_style_pad_all(form_cont, 5, 0);
+
+    // --- ID ---
+    lv_obj_t * lbl_id = lv_label_create(form_cont); // 捕获指针以便将来扩展
+    lv_label_set_text(lbl_id, "ID (Auto):");
     
-    // [关键] 从数据库获取真实部门列表
-    std::vector<DeptInfo> depts = db_get_departments();
+    lv_obj_t * ta_id = lv_textarea_create(form_cont);
+    lv_obj_set_width(ta_id, LV_PCT(100));
+    lv_textarea_set_one_line(ta_id, true);
+    lv_obj_add_state(ta_id, LV_STATE_DISABLED);
+    
+    int new_id = get_next_available_id();
+    g_reg_user_id = new_id;
+    char buf[32];
+    lv_snprintf(buf, sizeof(buf), "%06d", new_id);
+    lv_textarea_set_text(ta_id, buf);
+
+    // --- Name ---
+    // 姓名标签
+    lv_obj_t * lbl_name = lv_label_create(form_cont);
+    lv_label_set_text(lbl_name, "Name / 姓名:");
+    lv_obj_add_style(lbl_name, &style_text_cn, 0);
+    lv_obj_set_style_text_color(lbl_name, lv_color_black(), 0);
+
+    lv_obj_t * ta_name = lv_textarea_create(form_cont);
+    lv_obj_set_width(ta_name, LV_PCT(100));
+    lv_textarea_set_one_line(ta_name, true);
+    lv_textarea_set_placeholder_text(ta_name, "Enter Name");
+    lv_obj_add_event_cb(ta_name, form_nav_event_cb, LV_EVENT_ALL, NULL);
+    
+    // --- Dept ---
+    //部门标签
+    lv_obj_t * lbl_dept = lv_label_create(form_cont);
+    lv_label_set_text(lbl_dept, "Dept / 部门:");
+    lv_obj_add_style(lbl_dept, &style_text_cn, 0);
+    lv_obj_set_style_text_color(lbl_dept, lv_color_black(), 0);
+
+    // 部门下拉框
+    lv_obj_t * dd_dept = lv_dropdown_create(form_cont);
+    lv_obj_set_width(dd_dept, LV_PCT(100));
+    lv_obj_remove_flag(dd_dept, LV_OBJ_FLAG_SCROLLABLE);
+
+    // 填充数据
+    auto depts = db_get_departments();
     std::string opts = "";
-    for (size_t i = 0; i < depts.size(); ++i) {
-        opts += depts[i].name;
-        if (i < depts.size() - 1) opts += "\n";
+    for (const auto& d : depts) {
+        if (!opts.empty()) opts += "\n";
+        opts += d.name;
     }
-    // 如果数据库为空，提供默认选项
-    if (opts.empty()) opts = "Default Dept\nSales\nR&D"; 
-
-    lv_roller_set_options(roller_dept, opts.c_str(), LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_visible_row_count(roller_dept, 3);
-    lv_obj_set_width(roller_dept, 150);
-    lv_obj_align(roller_dept, LV_ALIGN_CENTER, 0, -10);
+    if (opts.empty()) opts = "Default";
+    lv_dropdown_set_options(dd_dept, opts.c_str());
     
-    // 样式美化
-    lv_obj_set_style_bg_color(roller_dept, lv_color_hex(0x444444), 0);
-    lv_obj_set_style_bg_color(roller_dept, lv_palette_main(LV_PALETTE_BLUE), LV_PART_SELECTED);
-    
-    lv_obj_add_event_cb(roller_dept, dept_event_cb, LV_EVENT_ALL, nullptr);
+    // 给下拉框列表也加个保险（虽然下拉框自带样式比较复杂，但文字部分可以尝试应用）
+    lv_obj_add_style(dd_dept, &style_text_cn, 0);
+    lv_obj_set_style_text_color(dd_dept, lv_color_black(), 0);
+    lv_obj_t * list = lv_dropdown_get_list(dd_dept);
+    if (list) {
+        lv_obj_add_style(list, &style_text_cn, 0); // 列表也需要中文字体
+        lv_obj_set_style_text_color(list, lv_color_black(), 0); // 列表文字也要黑色
+    }
+    lv_obj_add_event_cb(dd_dept, form_nav_event_cb, LV_EVENT_ALL, NULL);
 
-    // 3. 提示
-    lv_obj_t *tip = lv_label_create(screen_register);
-    lv_label_set_text(tip, "Select & Press ENTER");
-    lv_obj_set_style_text_color(tip, lv_palette_main(LV_PALETTE_YELLOW), 0);
-    lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -40);
+    // --- Buttons ---
+    lv_obj_t * btn_area = lv_obj_create(screen);
+    lv_obj_remove_style_all(btn_area);
+    lv_obj_set_size(btn_area, LV_PCT(100), 40);
+    lv_obj_align(btn_area, LV_ALIGN_BOTTOM_MID, 0, -35);
+    lv_obj_set_flex_flow(btn_area, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_area, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // 4. 加载
-    #if LV_VERSION_CHECK(9,0,0)
-        lv_screen_load(screen_register);
-    #else
-        lv_scr_load(screen_register);
-    #endif
+    lv_obj_t * btn_cancel = lv_button_create(btn_area);
+    lv_obj_set_width(btn_cancel, 80);
+    lv_obj_set_style_bg_color(btn_cancel, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_label_set_text(lv_label_create(btn_cancel), "Cancel");
+    lv_obj_add_event_cb(btn_cancel, [](lv_event_t * e){ load_user_mgmt_screen(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(btn_cancel, form_nav_event_cb, LV_EVENT_ALL, NULL);
 
-    lv_group_add_obj(g_keypad_group, roller_dept);
-    lv_group_focus_obj(roller_dept);
+    lv_obj_t * btn_next = lv_button_create(btn_area);
+    lv_obj_set_width(btn_next, 80);
+    lv_obj_set_style_bg_color(btn_next, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_label_set_text(lv_label_create(btn_next), "Next >");
+    lv_obj_set_user_data(ta_name, dd_dept);
+    lv_obj_add_event_cb(btn_next, register_btn_next_event_handler, LV_EVENT_CLICKED, ta_name);
+    lv_obj_add_event_cb(btn_next, form_nav_event_cb, LV_EVENT_ALL, NULL);
+
+    // --- Footer ---
+    lv_obj_t * bottom_bar = lv_obj_create(screen);
+    lv_obj_set_size(bottom_bar, LV_PCT(100), 30);
+    lv_obj_align(bottom_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(bottom_bar, lv_color_black(), 0);
+    lv_label_set_text(lv_label_create(bottom_bar), "Enter:Select  Up/Down:Nav");
+    lv_obj_set_style_text_color(lv_obj_get_child(bottom_bar, 0), lv_color_white(), 0);
+    lv_obj_center(lv_obj_get_child(bottom_bar, 0));
+
+    // --- Group ---
+    lv_group_remove_all_objs(g_keypad_group);
+    lv_group_add_obj(g_keypad_group, ta_name);
+    lv_group_add_obj(g_keypad_group, dd_dept);
+    lv_group_add_obj(g_keypad_group, btn_next);
+    lv_group_add_obj(g_keypad_group, btn_cancel);
+
+    lv_group_focus_obj(ta_name);
+    lv_screen_load_anim(screen, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
 }
 
 // --- 加载 Step 2: 采集人脸 ---
-static void load_register_step2(void) {
+static void load_register_step(void) {
+    if (!screen_register) create_register_screen(); // 确保屏幕已创建
+    
     std::printf("[UI] Wizard Step 2: Face\n");
 
     // 1. 清理 Step 1 的控件
@@ -1866,6 +1913,12 @@ static void load_register_step2(void) {
     // 6. 焦点设置
     lv_group_add_obj(g_keypad_group, img_face_reg);
     lv_group_focus_obj(img_face_reg);
+
+    #if LV_VERSION_CHECK(9,0,0)
+        lv_screen_load(screen_register);
+    #else
+        lv_scr_load(screen_register);
+    #endif
 }
 
 // ================= 初始化 =================
@@ -2018,14 +2071,7 @@ static void load_record_result_screen(int user_id) {
     lv_obj_set_style_pad_all(header, 10, 0);
     
     lv_obj_t *info_lbl = lv_label_create(header);
-    // 准备中文字体
-    static lv_style_t style_cn_info;
-    if (style_cn_info.prop_cnt == 0) {
-        lv_style_init(&style_cn_info);
-        lv_style_set_text_font(&style_cn_info, &font_noto_16);
-        lv_style_set_text_color(&style_cn_info, lv_color_white());
-    }
-    lv_obj_add_style(info_lbl, &style_cn_info, 0);
+    lv_obj_add_style(info_lbl, &style_text_cn, 0);// 中文字体样式
 
     if (user.id == 0 && user.name.empty()) {
         lv_label_set_text(info_lbl, "User Not Found!\n查无此人");
@@ -2050,7 +2096,7 @@ static void load_record_result_screen(int user_id) {
     lv_obj_t *title_rec = lv_label_create(obj_result_container);
     lv_label_set_text(title_rec, "--- 打卡记录 ---");
     lv_obj_set_style_text_color(title_rec, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_add_style(title_rec, &style_cn_info, 0);
+    lv_obj_add_style(title_rec, &style_text_cn, 0);// 中文字体样式
 
     // 5. [数据层交互] 获取记录
     std::time_t now = std::time(nullptr);
@@ -2086,7 +2132,7 @@ static void load_record_result_screen(int user_id) {
     if (!found_any) {
         lv_obj_t *lbl = lv_label_create(obj_result_container);
         lv_label_set_text(lbl, "无记录 (No Data)");
-        lv_obj_add_style(lbl, &style_cn_info, 0);
+        lv_obj_add_style(lbl, &style_text_cn, 0);// 中文字体样式
     }
 
     // 6. 切换屏幕并加入输入组

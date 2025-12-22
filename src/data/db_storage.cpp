@@ -124,7 +124,7 @@ bool data_init() {
         "face_data BLOB, "              // 人脸二进制数据
         "dept_id INTEGER, "
         "default_shift_id INTEGER, " // 绑定的默认班次ID
-        "FOREIGN KEY(dept_id) REFERENCES departments(id) ON DELETE SET NULL);";
+        "FOREIGN KEY(dept_id) REFERENCES departments(id) ON DELETE SET NULL, "
         "FOREIGN KEY(default_shift_id) REFERENCES shifts(id) ON DELETE SET NULL);"; // 外键约束
 
     // (E) 考勤记录表 (关联用户与班次)
@@ -492,6 +492,7 @@ int db_add_user(const UserData& info, const cv::Mat& face_img) {
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return -1;
 
+    sqlite3_bind_text(stmt, 1, info.name.c_str(), -1, SQLITE_STATIC);
     // 2. 绑定参数
     std::string hashed_pwd = simple_hash_password(info.password); 
     sqlite3_bind_text(stmt, 2, hashed_pwd.c_str(), -1, SQLITE_TRANSIENT);
