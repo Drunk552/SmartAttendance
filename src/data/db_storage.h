@@ -39,12 +39,18 @@ struct ShiftInfo {
     
     /// @brief 班次名称 (e.g. "早班")
     std::string name;
-    
-    /// @brief 上班时间 (格式 "HH:MM", e.g. "09:00")
-    std::string start_time; 
-    
-    /// @brief 下班时间 (格式 "HH:MM", e.g. "18:00")
-    std::string end_time;   
+
+    /// @brief 时段 1 (e.g. 09:00 - 12:00)
+    std::string s1_start; 
+    std::string s1_end;
+
+    /// @brief 时段 2 (e.g. 13:00 - 18:00)
+    std::string s2_start; 
+    std::string s2_end;
+
+    /// @brief 时段 3 (e.g. 19:00 - 21:00, 可为空)
+    std::string s3_start; 
+    std::string s3_end;  
     
     /// @brief 是否跨天 (0: 当天, 1: 次日)
     int cross_day;          
@@ -83,6 +89,9 @@ struct UserData {
 
     /// @brief [新增] 所属部门 ID (关联 DeptInfo.id)
     int dept_id;            
+
+    ///绑定的默认班次ID
+    int default_shift_id; 
 
     // [新增] 部门名称 (用于UI显示和报表，数据库不直接存，靠联表查询获取)
     std::string dept_name;
@@ -172,14 +181,21 @@ bool db_delete_department(int dept_id);
 // ================= 2. 班次管理接口 (Shift DAO) =================
 
 /**
- * @brief 更新班次时间
+ * @brief 更新班次时间 (支持3个时段)
  * @param shift_id 要修改的班次ID
- * @param start 上班时间 "HH:MM"
- * @param end 下班时间 "HH:MM"
- * @param cross_day 是否跨天 (0/1)
- * @return true 更新成功
+ * @param s1_start 时段1开始 "HH:MM"
+ * @param s1_end   时段1结束
+ * @param s2_start 时段2开始 (若无则传 "")
+ * @param s2_end   时段2结束 (若无则传 "")
+ * @param s3_start 时段3开始 (若无则传 "")
+ * @param s3_end   时段3结束 (若无则传 "")
+ * @param cross_day 是否跨天
  */
-bool db_update_shift(int shift_id, const std::string& start, const std::string& end, int cross_day);
+bool db_update_shift(int shift_id, 
+                     const std::string& s1_start, const std::string& s1_end,
+                     const std::string& s2_start, const std::string& s2_end,
+                     const std::string& s3_start, const std::string& s3_end,
+                     int cross_day);
 
 /**
  * @brief 获取所有班次列表
@@ -188,10 +204,39 @@ bool db_update_shift(int shift_id, const std::string& start, const std::string& 
 std::vector<ShiftInfo> db_get_shifts();
 
 /**
+ * @brief 创建新班次
+ * @param name 班次名称 (如 "夜班")
+ * @param start 上班时间 "22:00"
+ * @param end 下班时间 "06:00"
+ * @param cross_day 是否跨天 (1=是)
+ * @return int 新班次ID
+ */
+int db_add_shift(const std::string& name, 
+                 const std::string& s1_start, const std::string& s1_end,
+                 const std::string& s2_start, const std::string& s2_end,
+                 const std::string& s3_start, const std::string& s3_end,
+                 int cross_day);
+
+/**
+ * @brief 删除班次
+ * @param shift_id 待删除的班次ID
+ */
+bool db_delete_shift(int shift_id);
+
+/**
  * @brief 获取全局考勤规则配置
  * @return RuleConfig 包含迟到/早退阈值
  */
 RuleConfig db_get_global_rules();
+
+/**
+ * @brief 更新全局考勤规则
+ * @param company_name 公司名称
+ * @param late_min 迟到阈值(分钟)
+ * @param early_min 早退阈值(分钟)
+ * @return true 更新成功
+ */
+bool db_update_global_rules(const std::string& company_name, int late_min, int early_min);
 
 // ================= 3. 用户管理接口 (User DAO) =================
 
@@ -235,6 +280,19 @@ std::vector<UserData> db_get_all_users();
  */
 std::vector<UserData> db_get_all_users_info();
 
+/**
+ * @brief 给用户指定班次 (排班)
+ * @param user_id 用户ID
+ * @param shift_id 班次ID (传 0 或 -1 代表“未排班/使用默认规则”)
+ */
+bool db_assign_user_shift(int user_id, int shift_id);
+
+/**
+ * @brief 获取用户绑定的班次信息
+ * @return ShiftInfo 班次信息 (如果未绑定，返回ID=0的空结构体)
+ */
+ShiftInfo db_get_user_shift(int user_id);
+
 // ================= 4. 考勤记录接口 (Attendance DAO) =================
 
 /**
@@ -259,6 +317,48 @@ std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_t
 
 // 获取指定用户的最后一次打卡时间戳，如果没有记录返回 0
 time_t db_getLastPunchTime(int user_id);
+
+// ================= 5. 数据库事务接口 =================
+
+/**
+ * @brief 开启数据库事务 (用于批量操作加速)
+ */
+bool db_begin_transaction();
+
+/**
+ * @brief 提交数据库事务
+ */
+bool db_commit_transaction();
+
+// ================= 6. 排班管理接口 (Schedule DAO) =================
+
+/**
+ * @brief 设置部门的周排班
+ * @param dept_id 部门ID
+ * @param day_of_week 0=周日, 1=周一, ..., 6=周六
+ * @param shift_id 班次ID (传0代表休息/无班次)
+ */
+bool db_set_dept_schedule(int dept_id, int day_of_week, int shift_id);
+
+/**
+ * @brief 设置个人的特定日期排班 (最高优先级)
+ * @param user_id 用户ID
+ * @param date_str 日期字符串 "YYYY-MM-DD"
+ * @param shift_id 班次ID (传0代表当天休息)
+ */
+bool db_set_user_special_schedule(int user_id, const std::string& date_str, int shift_id);
+
+/**
+ * @brief [核心] 根据日期智能获取用户当天的班次
+ * @details 优先级逻辑:
+ * 1. 检查 `user_schedule` (个人特殊排班)
+ * 2. 若无，检查 `dept_schedule` (部门周排班)
+ * 3. 若无，返回 users 表中的 default_shift_id
+ * * @param user_id 用户ID
+ * @param timestamp 查询的时间戳 (秒)
+ * @return ShiftInfo 班次信息 (若当天休息或未排班，返回ID=0的空对象)
+ */
+ShiftInfo db_get_user_shift_smart(int user_id, long long timestamp);
 
 // ================= 兼容性接口 (Legacy Support) =================
 

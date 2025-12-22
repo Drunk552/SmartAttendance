@@ -57,6 +57,9 @@ static lv_obj_t *screen_register = nullptr;
 static lv_obj_t *ta_name = nullptr;      // 名字输入框
 static lv_obj_t *img_face_reg = nullptr; // 注册页面的摄像头预览
 static std::string g_reg_name;           // 使用 std::string 暂存输入的名字
+static int g_reg_dept_id = 1;            // 暂存选择的部门ID
+static lv_obj_t *roller_dept = nullptr;  // 部门选择滚轮
+static void load_register_step_dept(void); // 选择部门
 // [Epic 3.4 新增] 考勤记录页
 static lv_obj_t *screen_records = nullptr;
 static lv_obj_t *obj_record_list = nullptr;
@@ -129,6 +132,7 @@ static void list_btn_event_cb(lv_event_t *e);
 static void create_register_screen(void);
 static void load_register_step1(void); // 输入姓名
 static void load_register_step2(void); // 采集人脸
+static void load_register_step_dept(void);
 static void register_face_timer_cb(lv_timer_t *timer); // 注册页面的摄像头刷新
 static void load_user_mgmt_screen(void); // 新增：声明加载员工管理页函数
 static void load_record_query_screen(void);
@@ -1646,17 +1650,22 @@ static void reg_step2_event_cb(lv_event_t *e) {
             std::printf("[UI] Capturing face for: %s\n", g_reg_name.c_str());
             
             // 调用业务接口保存
-            if (business_register_user(g_reg_name.c_str())) {
+            if (business_register_user(g_reg_name.c_str(), g_reg_dept_id)) {
                 std::printf("[UI] Reg Success! Back to Menu.\n");
                 
                 // 简单反馈：延迟或直接返回
                 load_user_mgmt_screen(); 
             } else {
-                std::printf("[UI] Reg Failed!\n");
+                // 错误提示弹窗
+                std::printf("[UI] Reg Failed! Check DB constraints.\n");
+                lv_obj_t * mbox = lv_msgbox_create(NULL);
+                lv_msgbox_add_text(mbox, "Registration Failed!\n(Check DB/Dept ID)");
+                lv_msgbox_add_close_button(mbox);
+                lv_obj_center(mbox);
             }
         }
         else if (key == LV_KEY_ESC) {
-            load_register_step1(); // 返回上一步
+            load_register_step_dept();
         }
     }
 }
@@ -1676,7 +1685,7 @@ static void ta_event_cb(lv_event_t *e) {
             g_reg_name = s;
             std::printf("[UI] Name confirmed: %s -> Next Step\n", g_reg_name.c_str());
             
-            load_register_step2(); // 进入拍照步骤
+            load_register_step_dept(); // 进入部门选择页
         }
         else if (key == LV_KEY_ESC) {
             load_user_mgmt_screen(); // 放弃注册，返回员工管理页
@@ -1733,6 +1742,84 @@ static void load_register_step1(void) {
     // 将输入框加入组，让物理键盘能输入
     lv_group_add_obj(g_keypad_group, ta_name);
     lv_group_focus_obj(ta_name);
+}
+
+// --- 部门选择完成 ---
+static void dept_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ENTER) {
+            // 获取选中的索引 (假设 roller 选项顺序与 DB ID 对应，ID = index + 1)
+            // 更严谨的做法是把 ID 存在 user_data 里，这里先做简单映射
+            uint16_t selected_idx = lv_roller_get_selected(roller_dept);
+            
+            // 假设我们从数据库读出的部门列表顺序是 ID 1, 2, 3...
+            // 这里简单处理：ID = 索引 + 1
+            g_reg_dept_id = selected_idx + 1; 
+            
+            std::printf("[UI] Dept selected: %d -> Next Step\n", g_reg_dept_id);
+            load_register_step2(); // 进入拍照
+        }
+        else if (key == LV_KEY_ESC) {
+            load_register_step1(); // 返回上一步
+        }
+    }
+}
+
+// ---  选择部门 ---
+static void load_register_step_dept(void) {
+    create_register_screen(); // 确保容器存在
+    std::printf("[UI] Wizard Step 1.5: Select Dept\n");
+
+    lv_obj_clean(screen_register);
+    lv_group_remove_all_objs(g_keypad_group);
+    
+    // 1. 标题
+    lv_obj_t *label = lv_label_create(screen_register);
+    lv_label_set_text(label, "Step 2: Select Dept");
+    lv_obj_set_style_text_color(label, lv_color_white(), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);
+
+    // 2. 部门选择滚轮 (Roller)
+    roller_dept = lv_roller_create(screen_register);
+    
+    // [关键] 从数据库获取真实部门列表
+    std::vector<DeptInfo> depts = db_get_departments();
+    std::string opts = "";
+    for (size_t i = 0; i < depts.size(); ++i) {
+        opts += depts[i].name;
+        if (i < depts.size() - 1) opts += "\n";
+    }
+    // 如果数据库为空，提供默认选项
+    if (opts.empty()) opts = "Default Dept\nSales\nR&D"; 
+
+    lv_roller_set_options(roller_dept, opts.c_str(), LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(roller_dept, 3);
+    lv_obj_set_width(roller_dept, 150);
+    lv_obj_align(roller_dept, LV_ALIGN_CENTER, 0, -10);
+    
+    // 样式美化
+    lv_obj_set_style_bg_color(roller_dept, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_bg_color(roller_dept, lv_palette_main(LV_PALETTE_BLUE), LV_PART_SELECTED);
+    
+    lv_obj_add_event_cb(roller_dept, dept_event_cb, LV_EVENT_ALL, nullptr);
+
+    // 3. 提示
+    lv_obj_t *tip = lv_label_create(screen_register);
+    lv_label_set_text(tip, "Select & Press ENTER");
+    lv_obj_set_style_text_color(tip, lv_palette_main(LV_PALETTE_YELLOW), 0);
+    lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -40);
+
+    // 4. 加载
+    #if LV_VERSION_CHECK(9,0,0)
+        lv_screen_load(screen_register);
+    #else
+        lv_scr_load(screen_register);
+    #endif
+
+    lv_group_add_obj(g_keypad_group, roller_dept);
+    lv_group_focus_obj(roller_dept);
 }
 
 // --- 加载 Step 2: 采集人脸 ---

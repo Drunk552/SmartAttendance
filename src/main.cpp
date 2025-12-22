@@ -81,8 +81,9 @@ void test_epic2_dao_and_seeding() {
     // 检查默认班次
     auto shifts = db_get_shifts();
     if (!shifts.empty()) {
-        std::cout << "[OK] 默认班次已存在: " << shifts[0].name << " (" 
-                  << shifts[0].start_time << "-" << shifts[0].end_time << ")" << std::endl;
+        std::cout << "Shift: " << shifts[0].name << " (AM: " 
+                << shifts[0].s1_start << "-" << shifts[0].s1_end << ", PM: "
+                << shifts[0].s2_start << "-" << shifts[0].s2_end << ")" << std::endl;
     }
 
     // --- 步骤 B: 验证手动业务操作 (Epic 2.2) ---

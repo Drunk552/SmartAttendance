@@ -139,7 +139,7 @@ bool business_get_user_at(int index, int *id_out, char *name_buf, int len);
  * @return true  注册成功
  * @return false 注册失败 (可能原因：当前无视频帧、数据库写入失败等)
  */
-bool business_register_user(const char* name);
+bool business_register_user(const char* name, int dept_id);
 
 // ==========================================
 // 考勤记录查询接口 (Data Model for UI List)

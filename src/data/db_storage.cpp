@@ -14,6 +14,9 @@
 #include <ctime>
 #include <filesystem> // C++17 标准库，用于处理文件系统
 #include <sys/stat.h>
+#include <functional> // 引入哈希支持
+#include <sstream>
+#include <iomanip>
 
 namespace fs = std::filesystem;
 
@@ -97,8 +100,9 @@ bool data_init() {
         "CREATE TABLE IF NOT EXISTS shifts ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "name TEXT, "
-        "start_time TEXT, "
-        "end_time TEXT, "
+        "s1_start TEXT, s1_end TEXT, "
+        "s2_start TEXT, s2_end TEXT, "
+        "s3_start TEXT, s3_end TEXT, "
         "cross_day INTEGER DEFAULT 0);";
 
     // (C) 考勤规则表
@@ -119,7 +123,9 @@ bool data_init() {
         "privilege INTEGER DEFAULT 0, " // 0:User, 1:Admin
         "face_data BLOB, "              // 人脸二进制数据
         "dept_id INTEGER, "
+        "default_shift_id INTEGER, " // 绑定的默认班次ID
         "FOREIGN KEY(dept_id) REFERENCES departments(id) ON DELETE SET NULL);";
+        "FOREIGN KEY(default_shift_id) REFERENCES shifts(id) ON DELETE SET NULL);"; // 外键约束
 
     // (E) 考勤记录表 (关联用户与班次)
     const char* sql_att = 
@@ -133,12 +139,40 @@ bool data_init() {
         "FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, "
         "FOREIGN KEY(shift_id) REFERENCES shifts(id) ON DELETE SET NULL);";
 
+    // (F) [新增] 部门周排班表 (联合主键确保一个部门一天只有一条规则)
+    const char* sql_dept_sch = 
+        "CREATE TABLE IF NOT EXISTS dept_schedule ("
+        "dept_id INTEGER, "
+        "day_of_week INTEGER, " // 0-6
+        "shift_id INTEGER, "
+        "PRIMARY KEY(dept_id, day_of_week), "
+        "FOREIGN KEY(dept_id) REFERENCES departments(id) ON DELETE CASCADE, "
+        "FOREIGN KEY(shift_id) REFERENCES shifts(id) ON DELETE SET NULL);";
+
+    // (G) [新增] 用户特定日期排班表 (用于调休、加班或特定排班)
+    const char* sql_user_sch = 
+        "CREATE TABLE IF NOT EXISTS user_schedule ("
+        "user_id INTEGER, "
+        "date_str TEXT, "       // "YYYY-MM-DD"
+        "shift_id INTEGER, "
+        "PRIMARY KEY(user_id, date_str), "
+        "FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, "
+        "FOREIGN KEY(shift_id) REFERENCES shifts(id) ON DELETE SET NULL);";
+
+    // 创建联合索引：加速 "查某人最近打卡" 和 "查某段时间记录"
+    // 索引命名为 idx_att_user_time
+    const char* sql_index = 
+        "CREATE INDEX IF NOT EXISTS idx_att_user_time ON attendance(user_id, timestamp DESC);";
+
     bool ret = exec_sql(sql_dept, "Create Dept") && 
-               exec_sql(sql_shifts, "Create Shifts") &&
+               exec_sql(sql_shifts, "Create Shifts V2") &&
                exec_sql(sql_rules, "Create Rules") && 
                exec_sql(sql_users, "Create Users") &&
+               exec_sql(sql_dept_sch, "Create Dept Schedule") && 
+               exec_sql(sql_user_sch, "Create User Schedule") && 
                exec_sql(sql_att, "Create Attendance");
-    
+               exec_sql(sql_index, "Create Index");
+
     if(ret) std::cout << "[Data] DAO Layer Initialized (Phase 2)." << std::endl;
     
     if (ret) {
@@ -165,6 +199,18 @@ static bool is_table_empty(const char* table_name) {
     return (count == 0);
 }
 
+// [辅助函数] 简单哈希转换 
+static std::string simple_hash_password(const std::string& raw_pwd) {
+    if (raw_pwd.empty()) return "";
+    std::hash<std::string> hasher;
+    size_t hash_val = hasher(raw_pwd);
+    
+    // 转为 hex 字符串存储
+    std::stringstream ss;
+    ss << std::hex << hash_val;
+    return ss.str();
+}
+
 // ================= Epic 2.3 数据播种 =================
 
 bool data_seed() {
@@ -183,28 +229,14 @@ bool data_seed() {
 
     // 2. 播种默认班次 
     if (is_table_empty("shifts")) {
-        const char* sql = "INSERT INTO shifts (name, start_time, end_time, cross_day) VALUES (?, ?, ?, ?);";
-        sqlite3_stmt* stmt;
-        
-        // 插入上午班 (09:00 - 12:00)
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, "Morning Shift", -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, "09:00", -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, "12:00", -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 4, 0);
-            sqlite3_step(stmt);
-            sqlite3_reset(stmt); // 重置语句以便复用
-            
-            // 插入下午班 (13:00 - 18:00)
-            sqlite3_bind_text(stmt, 1, "Afternoon Shift", -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, "13:00", -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, "18:00", -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 4, 0);
-            sqlite3_step(stmt);
-            
-            sqlite3_finalize(stmt);
-            std::cout << "   [Seed] Created AM/PM Shifts." << std::endl;
-        }
+        // 对应手册：班次一 (08:00-12:00, 14:00-18:00, 无加班)
+        db_add_shift("Standard Shift", 
+                     "08:00", "12:00",  // 上午
+                     "14:00", "18:00",  // 下午
+                     "", "",            // 无加班
+                     0);
+                     
+        std::cout << "   [Seed] Created Standard Shift (Seg1: 08-12, Seg2: 14-18)." << std::endl;
     }
 
     // [新增] 3. 播种默认考勤规则
@@ -293,16 +325,26 @@ bool db_delete_department(int dept_id) {
 
 // ================= 2. 班次管理 DAO =================
 
-bool db_update_shift(int shift_id, const std::string& start, const std::string& end, int cross_day) {
-    // 简化处理：直接更新。实际业务中可能需要先判断ID是否存在
-    const char* sql = "UPDATE shifts SET start_time=?, end_time=?, cross_day=? WHERE id=?;";
+bool db_update_shift(int shift_id, 
+                     const std::string& s1_start, const std::string& s1_end,
+                     const std::string& s2_start, const std::string& s2_end,
+                     const std::string& s3_start, const std::string& s3_end,
+                     int cross_day) {
+    const char* sql = 
+        "UPDATE shifts SET s1_start=?, s1_end=?, s2_start=?, s2_end=?, s3_start=?, s3_end=?, cross_day=? "
+        "WHERE id=?;";
+    
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
     
-    sqlite3_bind_text(stmt, 1, start.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, end.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 3, cross_day);
-    sqlite3_bind_int(stmt, 4, shift_id);
+    sqlite3_bind_text(stmt, 1, s1_start.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, s1_end.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, s2_start.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 4, s2_end.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 5, s3_start.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 6, s3_end.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 7, cross_day);
+    sqlite3_bind_int(stmt, 8, shift_id);
     
     bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
@@ -312,21 +354,25 @@ bool db_update_shift(int shift_id, const std::string& start, const std::string& 
 std::vector<ShiftInfo> db_get_shifts() {
     std::vector<ShiftInfo> list;
     sqlite3_stmt* stmt;
-    // 假设系统规划最多支持16个班次
-    const char* sql = "SELECT id, name, start_time, end_time, cross_day FROM shifts;";
+    
+    const char* sql = "SELECT id, name, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, cross_day FROM shifts;";
     
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             ShiftInfo s;
             s.id = sqlite3_column_int(stmt, 0);
-            const char* name = (const char*)sqlite3_column_text(stmt, 1);
-            const char* start = (const char*)sqlite3_column_text(stmt, 2);
-            const char* end = (const char*)sqlite3_column_text(stmt, 3);
             
-            s.name = name ? name : "";
-            s.start_time = start ? start : "--:--";
-            s.end_time = end ? end : "--:--";
-            s.cross_day = sqlite3_column_int(stmt, 4);
+            auto get_col_str = [&](int idx) -> std::string {
+                const char* txt = (const char*)sqlite3_column_text(stmt, idx);
+                return txt ? txt : "";
+            };
+            
+            s.name = get_col_str(1);
+            s.s1_start = get_col_str(2); s.s1_end = get_col_str(3);
+            s.s2_start = get_col_str(4); s.s2_end = get_col_str(5);
+            s.s3_start = get_col_str(6); s.s3_end = get_col_str(7);
+            
+            s.cross_day = sqlite3_column_int(stmt, 8);
             
             list.push_back(s);
         }
@@ -354,6 +400,81 @@ RuleConfig db_get_global_rules() {
     return config;
 }
 
+int db_add_shift(const std::string& name, 
+                 const std::string& s1_start, const std::string& s1_end,
+                 const std::string& s2_start, const std::string& s2_end,
+                 const std::string& s3_start, const std::string& s3_end,
+                 int cross_day) {
+    const char* sql = 
+        "INSERT INTO shifts (name, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, cross_day) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+    
+    sqlite3_stmt* stmt;
+    int new_id = -1;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
+        
+        // 辅助 lambda：空字符串存 NULL 或 空串? 这里存空串即可
+        auto bind_str = [&](int idx, const std::string& s) {
+            sqlite3_bind_text(stmt, idx, s.c_str(), -1, SQLITE_STATIC);
+        };
+        
+        bind_str(2, s1_start); bind_str(3, s1_end);
+        bind_str(4, s2_start); bind_str(5, s2_end);
+        bind_str(6, s3_start); bind_str(7, s3_end);
+        
+        sqlite3_bind_int(stmt, 8, cross_day);
+        
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            new_id = (int)sqlite3_last_insert_rowid(db);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return new_id;
+}
+
+bool db_delete_shift(int shift_id) {
+    const char* sql = "DELETE FROM shifts WHERE id=?;";
+    sqlite3_stmt* stmt;
+
+    // 1. 准备语句
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Delete Shift Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+    
+    // 2. 绑定参数 (shift_id 绑定到第一个 ?)
+    sqlite3_bind_int(stmt, 1, shift_id);
+    
+    // 3. 执行语句
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    
+    if (!ok) {
+        std::cerr << "[Data] Delete Shift Execution Failed: " << sqlite3_errmsg(db) << std::endl;
+    }
+
+    // 4. 释放资源
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+bool db_update_global_rules(const std::string& company_name, int late_min, int early_min) {
+    // 强制更新 id=1 的记录 (我们在 data_seed 中已经保证了 id=1 存在)
+    const char* sql = "UPDATE attendance_rules SET company_name=?, late_threshold=?, early_leave_threshold=? WHERE id=1;";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
+    
+    sqlite3_bind_text(stmt, 1, company_name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, late_min);
+    sqlite3_bind_int(stmt, 3, early_min);
+    
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
 // ================= 3. 用户管理 DAO (升级版) =================
 
 int db_add_user(const UserData& info, const cv::Mat& face_img) {
@@ -372,8 +493,8 @@ int db_add_user(const UserData& info, const cv::Mat& face_img) {
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return -1;
 
     // 2. 绑定参数
-    sqlite3_bind_text(stmt, 1, info.name.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, info.password.c_str(), -1, SQLITE_STATIC);
+    std::string hashed_pwd = simple_hash_password(info.password); 
+    sqlite3_bind_text(stmt, 2, hashed_pwd.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 3, info.card_id.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 4, info.role);
     
@@ -504,6 +625,51 @@ std::vector<UserData> db_get_all_users_info() {
     return list;
 }
 
+bool db_assign_user_shift(int user_id, int shift_id) {
+    const char* sql = "UPDATE users SET default_shift_id=? WHERE id=?;";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
+    
+    if (shift_id > 0) sqlite3_bind_int(stmt, 1, shift_id);
+    else sqlite3_bind_null(stmt, 1); // 解除排班
+    
+    sqlite3_bind_int(stmt, 2, user_id);
+    
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+ShiftInfo db_get_user_shift(int user_id) {
+    ShiftInfo s = {0, "", "", "", "", "", "", "", 0}; // 初始化空结构
+    
+    const char* sql = 
+        "SELECT s.id, s.name, "
+        "s.s1_start, s.s1_end, s.s2_start, s.s2_end, s.s3_start, s.s3_end, s.cross_day "
+        "FROM users u "
+        "JOIN shifts s ON u.default_shift_id = s.id "
+        "WHERE u.id = ?;";
+        
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, user_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            s.id = sqlite3_column_int(stmt, 0);
+            s.name = (const char*)sqlite3_column_text(stmt, 1);
+            
+            // 提取所有时段
+            auto get_col = [&](int i){ const char* t = (const char*)sqlite3_column_text(stmt, i); return t?t:""; };
+            s.s1_start = get_col(2); s.s1_end = get_col(3);
+            s.s2_start = get_col(4); s.s2_end = get_col(5);
+            s.s3_start = get_col(6); s.s3_end = get_col(7);
+            
+            s.cross_day = sqlite3_column_int(stmt, 8);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return s;
+}
+
 // ================= 4. 考勤记录 DAO =================
 
 bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int status) {
@@ -609,6 +775,149 @@ std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_t
     }
     sqlite3_finalize(stmt);
     return list;
+}
+
+// ================= 5.数据库事务接口 =================
+bool db_begin_transaction() {
+    return exec_sql("BEGIN TRANSACTION;", "Tx Begin");
+}
+
+bool db_commit_transaction() {
+    return exec_sql("COMMIT;", "Tx Commit");
+}
+
+// ================= 6. 排班管理接口实现 =================
+
+// 辅助函数：将时间戳转换为 YYYY-MM-DD
+static std::string timestamp_to_date(long long ts) {
+    std::time_t t = (std::time_t)ts;
+    struct tm* tm_info = std::localtime(&t);
+    char buffer[20];
+    std::strftime(buffer, 20, "%Y-%m-%d", tm_info);
+    return std::string(buffer);
+}
+
+// 辅助函数：获取星期几 (0=Sun, 1=Mon...)
+static int timestamp_to_weekday(long long ts) {
+    std::time_t t = (std::time_t)ts;
+    struct tm* tm_info = std::localtime(&t);
+    return tm_info->tm_wday;
+}
+
+// 辅助函数：根据ID获取班次详情 (内部复用)
+static ShiftInfo get_shift_by_id(int shift_id) {
+    ShiftInfo s = {0, "", "", "", "", "", "", "", 0};
+    if (shift_id <= 0) return s; // ID<=0 视为休息
+
+    sqlite3_stmt* stmt;
+    const char* sql = "SELECT id, name, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, cross_day FROM shifts WHERE id=?;";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, shift_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            s.id = sqlite3_column_int(stmt, 0);
+            s.name = (const char*)sqlite3_column_text(stmt, 1);
+            auto get_col = [&](int i){ const char* t = (const char*)sqlite3_column_text(stmt, i); return t?t:""; };
+            s.s1_start = get_col(2); s.s1_end = get_col(3);
+            s.s2_start = get_col(4); s.s2_end = get_col(5);
+            s.s3_start = get_col(6); s.s3_end = get_col(7);
+            s.cross_day = sqlite3_column_int(stmt, 8);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return s;
+}
+
+bool db_set_dept_schedule(int dept_id, int day_of_week, int shift_id) {
+    // 使用 INSERT OR REPLACE (UPSERT)
+    const char* sql = "INSERT OR REPLACE INTO dept_schedule (dept_id, day_of_week, shift_id) VALUES (?, ?, ?);";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
+
+    sqlite3_bind_int(stmt, 1, dept_id);
+    sqlite3_bind_int(stmt, 2, day_of_week);
+    sqlite3_bind_int(stmt, 3, shift_id);
+
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+bool db_set_user_special_schedule(int user_id, const std::string& date_str, int shift_id) {
+    const char* sql = "INSERT OR REPLACE INTO user_schedule (user_id, date_str, shift_id) VALUES (?, ?, ?);";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
+
+    sqlite3_bind_int(stmt, 1, user_id);
+    sqlite3_bind_text(stmt, 2, date_str.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, shift_id);
+
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+// [核心] 智能排班查询
+ShiftInfo db_get_user_shift_smart(int user_id, long long timestamp) {
+    int final_shift_id = 0;
+    
+    std::string date_str = timestamp_to_date(timestamp);
+    int weekday = timestamp_to_weekday(timestamp);
+    
+    // 1. 优先级最高：检查个人特殊排班 (User Schedule)
+    {
+        const char* sql = "SELECT shift_id FROM user_schedule WHERE user_id=? AND date_str=?;";
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, user_id);
+            sqlite3_bind_text(stmt, 2, date_str.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                final_shift_id = sqlite3_column_int(stmt, 0);
+                sqlite3_finalize(stmt);
+                return get_shift_by_id(final_shift_id); // 命中直接返回
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // 2. 优先级第二：检查部门周排班 (Dept Schedule)
+    // 先查用户属于哪个部门
+    int dept_id = 0;
+    {
+        UserData u = db_get_user_info(user_id);
+        dept_id = u.dept_id;
+    }
+    
+    if (dept_id > 0) {
+        const char* sql = "SELECT shift_id FROM dept_schedule WHERE dept_id=? AND day_of_week=?;";
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, dept_id);
+            sqlite3_bind_int(stmt, 2, weekday);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                final_shift_id = sqlite3_column_int(stmt, 0);
+                sqlite3_finalize(stmt);
+                return get_shift_by_id(final_shift_id); // 命中直接返回
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // 3. 优先级最低：使用用户默认班次 (User Default / Fallback)
+    // 复用之前的逻辑，从 users 表拿 default_shift_id
+    // 注意：这里我们不再调用 db_get_user_shift，而是直接查表，避免循环调用
+    {
+        const char* sql = "SELECT default_shift_id FROM users WHERE id=?;";
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, user_id);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                final_shift_id = sqlite3_column_int(stmt, 0);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return get_shift_by_id(final_shift_id);
 }
 
 // ================= 兼容层 (Phase 1 Support) =================

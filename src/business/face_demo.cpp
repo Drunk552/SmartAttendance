@@ -552,47 +552,88 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
                 else {
                     // --- 有效打卡分支 ---
                     
-                    // 3. [Epic 5.1] 调用考勤规则引擎计算状态
-                    // 1. 定义静态变量 (Static Cache)
-                    // static 变量只在程序第一次执行到这里时初始化，之后会一直保留在内存中
-                    // 这样就避免了每一帧都去读取硬盘数据库，极大提升性能
+                    // 调用考勤规则引擎计算状态
+                    // --- 步骤 A: 准备全局配置 (懒加载) ---
                     static RuleConfig rule_cfg;
-                    static std::vector<ShiftInfo> shifts;
-                    static bool is_config_loaded = false;
-
-                    // 2. 懒加载逻辑 (Lazy Loading)
-                    // 如果没加载过，或者需要刷新配置，才去查数据库
-                    // 1. 懒加载检查：如果配置过期或未加载，查数据库
+                    static std::vector<ShiftInfo> all_shifts;
+                    
                     if (!g_is_config_loaded || g_shifts.empty()) {
                         g_rule_cfg = db_get_global_rules();
-                        g_shifts = db_get_shifts();
+                        g_shifts = db_get_shifts(); // 加载所有班次供智能匹配使用
                         g_is_config_loaded = true;
-                        std::cout << "[Business] 配置已刷新: 迟到阈值=" << g_rule_cfg.late_threshold 
-                                << "m, 班次数量=" << g_shifts.size() << std::endl;
                     }
 
-                    ShiftConfig shift_am, shift_pm;
+                    // --- 步骤 B: 确定目标班次 ---
+                    ShiftConfig target_config;
+                    bool is_check_in = true; // 判定是上班卡还是下班卡
+                    int shift_id_for_log = 0; // 用于记录到数据库的班次ID
 
-                    // 2. 动态赋值 (使用 g_shifts 和 g_rule_cfg)
-                    if (g_shifts.size() >= 2) {
-                        shift_am = {g_shifts[0].start_time, g_shifts[0].end_time, g_rule_cfg.late_threshold};
-                        shift_pm = {g_shifts[1].start_time, g_shifts[1].end_time, g_rule_cfg.late_threshold};
-                    } else {
-                        // 兜底默认值
-                        shift_am = {"09:00", "12:00", g_rule_cfg.late_threshold};
-                        shift_pm = {"13:00", "18:00", g_rule_cfg.late_threshold};
+                    // [新增逻辑] 1. 优先检查用户是否绑定了“固定班次”
+                    // 注意：需确保 db_storage.h 中已声明 db_get_user_shift
+                    ShiftInfo user_fixed_shift = db_get_user_shift(pred_label);
+
+                    if (user_fixed_shift.id > 0) {
+                        // === 分支 1: 用户有固定排班 (如: 保安夜班) ===
+                        std::cout << "[Rule] 用户 " << names[pred_label] << " 绑定班次: " << user_fixed_shift.name << std::endl;
+                        
+                        target_config.start_time = user_fixed_shift.s1_start; 
+                        target_config.end_time   = user_fixed_shift.s1_end;
+                        target_config.late_threshold_min = g_rule_cfg.late_threshold;
+                        shift_id_for_log = user_fixed_shift.id;
+
+                        // 简单的“距离判定法”决定是上班还是下班：
+                        // 看当前时间离“上班点”近，还是离“下班点”近
+                        int now_mins = (localtime(&now)->tm_hour * 60) + localtime(&now)->tm_min;
+                        int start_mins = AttendanceRule::timeStringToMinutes(user_fixed_shift.s1_start);
+                        int end_mins   = AttendanceRule::timeStringToMinutes(user_fixed_shift.s1_end);
+
+                        // 简单的跨天处理 (如果跨天，下班时间的分钟数应+1440)
+                        if (user_fixed_shift.cross_day) {
+                             if (end_mins < start_mins) end_mins += 1440;
+                             if (now_mins < start_mins) now_mins += 1440; // 假设打卡也是次日
+                        }
+
+                        int dist_start = std::abs(now_mins - start_mins);
+                        int dist_end = std::abs(now_mins - end_mins);
+                        
+                        is_check_in = (dist_start <= dist_end);
+                    } 
+                    else {
+                        // === 分支 2: 无固定排班，使用原来的“智能匹配” (AM/PM 通排) ===
+                        ShiftConfig shift_am, shift_pm;
+                        int id_am = 0, id_pm = 0;
+
+                        // 默认取前两个班次作为早/晚班
+                        if (g_shifts.size() >= 2) {
+                            if (!g_shifts.empty()) {
+                                // 上午规则：取 s1_start, s1_end
+                                shift_am = {g_shifts[0].s1_start, g_shifts[0].s1_end, g_rule_cfg.late_threshold};
+                                
+                                // 下午规则：取 s2_start, s2_end
+                                shift_pm = {g_shifts[0].s2_start, g_shifts[0].s2_end, g_rule_cfg.late_threshold};
+                            }
+                        } else {
+                            // 兜底默认值
+                            shift_am = {"09:00", "12:00", g_rule_cfg.late_threshold};
+                            shift_pm = {"13:00", "18:00", g_rule_cfg.late_threshold};
+                        }
+
+                        // 使用折中原则判断归属
+                        int shift_owner = AttendanceRule::determineShiftOwner(now, shift_am, shift_pm);
+                        
+                        if (shift_owner == 1) {
+                            target_config = shift_am;
+                            shift_id_for_log = id_am;
+                            is_check_in = true; // 上午班 -> 算上班
+                        } else {
+                            target_config = shift_pm;
+                            shift_id_for_log = id_pm;
+                            is_check_in = false; // 下午班 -> 算下班
+                        }
                     }
-                    
-                    // A. 判断是上午还是下午 (Story 1.1 折中原则)
-                    int shift_owner = AttendanceRule::determineShiftOwner(now, shift_am, shift_pm);
-                    ShiftConfig target_shift = (shift_owner == 1) ? shift_am : shift_pm;
-                    
-                    // B. 计算打卡状态和分钟数 (Story 1.2)
-                    // 简单判定：如果是上午时段且时间靠前算上班(CheckIn)，否则算下班(CheckOut)
-                    // 这里简化为：上午=上班卡，下午=下班卡 (仅作 Phase 5 演示)
-                    bool is_check_in = (shift_owner == 1); 
-                    
-                    PunchResult result = AttendanceRule::calculatePunchStatus(now, target_shift, is_check_in);
+
+                    // --- 步骤 C: 计算最终状态 (迟到/早退/正常) ---
+                    PunchResult result = AttendanceRule::calculatePunchStatus(now, target_config, is_check_in);
                     
                     // 4. 入库保存 (记录详细状态)
                     // 转换状态枚举到 int (0:Normal, 1:Late, 2:Early, 3:Absent)
@@ -601,8 +642,8 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
                     else if (result.status == PunchStatus::EARLY) db_status = 2;
                     else if (result.status == PunchStatus::ABSENT) db_status = 4;
                     
-                    // 调用数据库接口 (Shift ID 暂时传 1)
-                    bool logged = db_log_attendance(pred_label, 1, current_frame, db_status);
+                    // 调用数据库接口 (传入动态计算的 shift_id)
+                    bool logged = db_log_attendance(pred_label, shift_id_for_log, current_frame, db_status);
                     
                     if (logged) {
                         std::cout << "[Business] 打卡成功: " << text 
@@ -711,7 +752,7 @@ bool business_get_user_at(int index, int *id_out, char *name_buf, int len) {
  * @return true 成功注册并写入数据库；false 失败（无帧或 DB 错误）
  * @note 此接口会调用 db_add_user(current_frame) 并刷新用户缓存
  */
-bool business_register_user(const char* name) {
+bool business_register_user(const char* name, int dept_id) {
 
     // [Epic 4.4 新增] 加锁保护读取
     std::lock_guard<std::mutex> lock(g_data_mutex);
@@ -728,7 +769,8 @@ bool business_register_user(const char* name) {
     UserData u;
     u.name = name;
     u.role = 0;      // 默认为普通员工
-    u.dept_id = 0;   // 默认无部门 (或设为1)
+    u.dept_id = dept_id;   // 默认无部门 (或设为1)
+    u.default_shift_id = 0; // 暂时默认
     u.password = ""; 
     u.card_id = "";
 
