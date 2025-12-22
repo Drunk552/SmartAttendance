@@ -77,6 +77,10 @@ static lv_obj_t *screen_sys_settings = nullptr; // 一级菜单
 static lv_obj_t *obj_sys_grid = nullptr;        // 一级菜单的网格容器 (用于修复焦点问题)
 static lv_obj_t *screen_sys_adv = nullptr;      // 二级菜单 (高级设置)
 static lv_obj_t *obj_adv_grid = nullptr;        //  二级菜单的网格容器
+// System Info 全局变量
+static lv_obj_t *screen_sys_info = nullptr;     // Level 1: 系统信息菜单
+static lv_obj_t *obj_info_grid = nullptr;       // 信息菜单容器
+static lv_obj_t *screen_storage_info = nullptr; // Level 2: 存储详情页
 
 // ================= 摄像头多线程优化变量 (Epic 4.4) =================
 // 1. 显示缓冲区 (UI 线程读取) - 替换原有的 cam_buf
@@ -132,6 +136,8 @@ static void load_record_result_screen(int user_id);
 // System Settings 前向声明
 static void load_sys_settings_screen(void);
 static void load_sys_adv_screen(void);
+static void load_sys_info_screen(void);
+static void load_storage_info_screen(void);
 
 // ================= 辅助函数 =================
 
@@ -393,6 +399,9 @@ static void menu_btn_event_cb(lv_event_t *e) {
                 // 进入维护菜单，而不是直接退出
                 load_sys_ops_screen();
             }
+            else if(std::strcmp(tag, "SysInfo") == 0) {
+                load_sys_info_screen(); // 跳转到系统信息
+            }
         }
     }
     
@@ -640,11 +649,11 @@ static void create_menu_screen(void) {
 
     // 4. 定义九宫格布局
     static int32_t col_dsc[] = {100, 100, LV_GRID_TEMPLATE_LAST}; 
-    static int32_t row_dsc[] = {90, 90, LV_GRID_TEMPLATE_LAST}; 
+    static int32_t row_dsc[] = {90, 90, 90, LV_GRID_TEMPLATE_LAST}; 
 
     obj_grid = lv_obj_create(screen_menu); 
-    lv_obj_set_size(obj_grid, 230, 200); 
-    lv_obj_align(obj_grid, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_set_size(obj_grid, 230, 300); // 高度增加
+    lv_obj_align(obj_grid, LV_ALIGN_TOP_MID, 0, 40);
     lv_obj_set_layout(obj_grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(obj_grid, col_dsc, row_dsc);
     lv_obj_set_style_bg_opa(obj_grid, LV_OPA_TRANSP, 0);
@@ -664,11 +673,12 @@ static void create_menu_screen(void) {
     {LV_SYMBOL_DIRECTORY,"User Mgmt", "员工管理", "UserMgmt"}, // 新增入口
     {LV_SYMBOL_EYE_OPEN, "Records",   "记录查询", "Records"},
     {LV_SYMBOL_DRIVE,    "Report",    "导出报表", "Report"},
-    {LV_SYMBOL_SETTINGS, "System",    "系统设置", "System"}    // 原Settings和System合并或保留其一
+    {LV_SYMBOL_SETTINGS, "System",    "系统设置", "System"},// 原Settings和System合并或保留其一
+    {LV_SYMBOL_LIST,     "Info",      "系统信息", "SysInfo"}    
     };
     
     // 6. 循环创建按钮
-    for(int i = 0; i < 4; i++) {
+    for(int i = 0; i < 5; i++) {
         uint8_t col = i % 2;
         uint8_t row = i / 2;
 
@@ -1280,6 +1290,202 @@ static void sys_settings_event_cb(lv_event_t *e) {
             }
         }
     }
+}
+
+// ================= [System Info] 业务与界面实现 =================
+
+// 1. 数据统计辅助函数
+struct StorageStats {
+    int total_users;
+    int admin_count;
+    int pwd_users;
+    int record_count;
+};
+
+static StorageStats get_storage_statistics() {
+    StorageStats stats = {0, 0, 0, 0};
+    
+    // A. 统计人员信息
+    int count = business_get_user_count();
+    stats.total_users = count;
+    
+    // 遍历检查管理员和密码 (虽然有点笨，但这是不修改 DB 接口的最快方法)
+    char name_buf[64];
+    int uid = 0;
+    for(int i=0; i<count; i++) {
+        // 注意：这里假设 business_get_user_at 只返回 ID 和 Name
+        // 为了统计 role 和 password，我们需要查 DB 详情
+        if(business_get_user_at(i, &uid, name_buf, sizeof(name_buf))) {
+             UserData u = db_get_user_info(uid);
+             if (u.role == 1) stats.admin_count++;
+             if (!u.password.empty()) stats.pwd_users++;
+        }
+    }
+    
+    // B. 统计记录数 (获取大范围记录并计数)
+    // 实际项目中建议在 DB 层增加 db_get_record_count() 接口
+    std::time_t now = std::time(nullptr);
+    auto recs = db_get_records(0, now + 864000); // 获取所有
+    stats.record_count = (int)recs.size();
+    
+    return stats;
+}
+
+// 2. Level 2: 存储信息详情页 (Storage Info)
+static void info_back_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ESC) {
+        load_sys_info_screen(); // 返回上一级
+    }
+}
+
+static void create_storage_info_screen() {
+    screen_storage_info = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_storage_info, lv_color_black(), 0);
+    
+    // 标题
+    lv_obj_t *title = lv_label_create(screen_storage_info);
+    lv_label_set_text(title, "Storage Statistics");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    
+    // 中文字体
+    static lv_style_t style_cn;
+    if (style_cn.prop_cnt == 0) {
+        lv_style_init(&style_cn);
+        lv_style_set_text_font(&style_cn, &font_noto_16);
+        lv_style_set_text_color(&style_cn, lv_color_white());
+    }
+    lv_obj_add_style(title, &style_cn, 0);
+
+    // 获取数据
+    StorageStats s = get_storage_statistics();
+
+    // 创建展示容器
+    lv_obj_t *cont = lv_obj_create(screen_storage_info);
+    lv_obj_set_size(cont, 220, 200);
+    lv_obj_align(cont, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(cont, 15, 0);
+    lv_obj_set_style_pad_gap(cont, 15, 0);
+
+    // 辅助宏：创建一行信息 "Label: Value"
+    auto add_item = [&](const char* cn_label, int value, lv_color_t color) {
+        lv_obj_t *item = lv_obj_create(cont);
+        lv_obj_set_size(item, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(item, 0, 0);
+        lv_obj_set_style_pad_all(item, 0, 0);
+        
+        lv_obj_t *lbl = lv_label_create(item);
+        lv_label_set_text_fmt(lbl, "%s: %d", cn_label, value);
+        lv_obj_add_style(lbl, &style_cn, 0);
+        lv_obj_set_style_text_color(lbl, color, 0);
+        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    };
+
+    add_item("员工注册数", s.total_users, lv_palette_main(LV_PALETTE_BLUE));
+    add_item("管理员数",   s.admin_count, lv_palette_main(LV_PALETTE_ORANGE));
+    add_item("密码注册数", s.pwd_users,   lv_palette_main(LV_PALETTE_PURPLE));
+    add_item("总记录数",   s.record_count,lv_palette_main(LV_PALETTE_GREEN));
+    
+    // 绑定 ESC 返回事件到容器（因为这里没有按钮，需要容器接收键盘事件）
+    lv_obj_add_event_cb(screen_storage_info, info_back_event_cb, LV_EVENT_KEY, nullptr);
+    lv_group_add_obj(g_keypad_group, screen_storage_info);
+}
+
+static void load_storage_info_screen() {
+    // 每次加载都重新创建，以刷新数据
+    if (screen_storage_info) lv_obj_delete(screen_storage_info);
+    create_storage_info_screen();
+    
+    std::printf("[UI] Enter: Storage Info\n");
+    lv_group_remove_all_objs(g_keypad_group);
+    lv_group_add_obj(g_keypad_group, screen_storage_info);
+    lv_group_focus_obj(screen_storage_info);
+    
+    lv_screen_load(screen_storage_info);
+}
+
+// 3. Level 1: 系统信息菜单 (System Info Menu)
+static void sys_info_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
+    lv_obj_t *grid = lv_obj_get_parent(btn);
+    const char* tag = (const char*)lv_event_get_user_data(e);
+
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // 上下导航逻辑
+        uint32_t index = lv_obj_get_index(btn);
+        uint32_t total = lv_obj_get_child_cnt(grid);
+        if (key == LV_KEY_DOWN) lv_group_focus_obj(lv_obj_get_child(grid, (index + 1) % total));
+        else if (key == LV_KEY_UP) lv_group_focus_obj(lv_obj_get_child(grid, (index + total - 1) % total));
+        
+        else if (key == LV_KEY_ESC) load_menu_screen(); // 返回主菜单
+        
+        else if (key == LV_KEY_ENTER) {
+            if (std::strcmp(tag, "STORAGE") == 0) {
+                load_storage_info_screen();
+            } else if (std::strcmp(tag, "HARDWARE") == 0) {
+                // 仅占位
+                lv_obj_t * mbox = lv_msgbox_create(NULL);
+                lv_msgbox_add_text(mbox, "Hardware Info\n(Coming Soon)");
+                lv_msgbox_add_close_button(mbox);
+                lv_obj_center(mbox);
+            }
+        }
+    }
+}
+
+static void create_sys_info_screen() {
+    screen_sys_info = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_sys_info, lv_color_black(), 0);
+
+    lv_obj_t *title = lv_label_create(screen_sys_info);
+    lv_label_set_text(title, "System Info / 系统信息");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    
+    static lv_style_t style_cn;
+    if (style_cn.prop_cnt == 0) {
+        lv_style_init(&style_cn);
+        lv_style_set_text_font(&style_cn, &font_noto_16);
+        lv_style_set_text_color(&style_cn, lv_color_white());
+    }
+    lv_obj_add_style(title, &style_cn, 0);
+
+    // 1列 2行 Grid
+    static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST}; 
+    static int32_t row_dsc[] = {60, 60, LV_GRID_TEMPLATE_LAST}; 
+
+    obj_info_grid = lv_obj_create(screen_sys_info);
+    lv_obj_set_size(obj_info_grid, 230, 180);
+    lv_obj_align(obj_info_grid, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_set_layout(obj_info_grid, LV_LAYOUT_GRID);
+    lv_obj_set_grid_dsc_array(obj_info_grid, col_dsc, row_dsc);
+    lv_obj_set_style_bg_opa(obj_info_grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(obj_info_grid, 0, 0);
+    lv_obj_set_style_pad_row(obj_info_grid, 15, 0);
+
+    // 添加两个按钮
+    create_sys_grid_btn(obj_info_grid, 0, LV_SYMBOL_DRIVE, "Storage Info", "存储信息", sys_info_event_cb, "STORAGE");
+    create_sys_grid_btn(obj_info_grid, 1, LV_SYMBOL_SD_CARD, "Hardware Info", "硬件信息", sys_info_event_cb, "HARDWARE");
+}
+
+static void load_sys_info_screen(void) {
+    if (!screen_sys_info) create_sys_info_screen();
+    std::printf("[UI] Enter: System Info Menu\n");
+
+    lv_group_remove_all_objs(g_keypad_group);
+    if (obj_info_grid) {
+        uint32_t cnt = lv_obj_get_child_cnt(obj_info_grid);
+        for(uint32_t i=0; i<cnt; i++) lv_group_add_obj(g_keypad_group, lv_obj_get_child(obj_info_grid, i));
+        if (cnt > 0) lv_group_focus_obj(lv_obj_get_child(obj_info_grid, 0));
+    }
+    lv_screen_load(screen_sys_info);
 }
 
 static void create_sys_settings_screen() {
