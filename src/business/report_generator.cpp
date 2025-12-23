@@ -12,53 +12,738 @@
 #include <ctime>
 #include <algorithm>
 #include <sys/stat.h> // 用于创建目录
+#include <db_storage.h>// 调用数据层接口
 
 ReportGenerator::ReportGenerator() {}
 ReportGenerator::~ReportGenerator() {}
 
-// 辅助：解析日期字符串 "2024-01-01" 到秒级时间戳
+/**
+ * @brief 将日期字符串转换为时间戳
+ * @param date_str 日期字符串 "YYYY-MM-DD"
+ * @param is_end_of_day 是否转换为当天结束时间 (23:59:59)
+ * @return 对应的时间戳 (秒级)
+ */
 long long ReportGenerator::parseDateToTimestamp(const std::string& date_str, bool is_end_of_day) {
+
     std::tm tm = {};
     std::stringstream ss(date_str);
     ss >> std::get_time(&tm, "%Y-%m-%d");
     
-    if (is_end_of_day) {
-        tm.tm_hour = 23; tm.tm_min = 59; tm.tm_sec = 59;
-    } else {
-        tm.tm_hour = 0; tm.tm_min = 0; tm.tm_sec = 0;
+     if (ss.fail()) {
+        ss.clear();
+        ss.str(date_str);
+        ss >> std::get_time(&tm, "%Y/%m/%d");
     }
+    
+    if (ss.fail()) {
+        std::cerr << "[Error] 无法解析日期: " << date_str << std::endl;
+        return 0;
+    }
+    
+    if (is_end_of_day) {
+        tm.tm_hour = 23; 
+        tm.tm_min = 59; 
+        tm.tm_sec = 59;
+    } else {
+        tm.tm_hour = 0; 
+        tm.tm_min = 0; 
+        tm.tm_sec = 0;
+    }
+    
     return std::mktime(&tm);
 }
 
+/**
+ * @brief 将时间戳格式化为 "HH:MM"
+ * @param timestamp 时间戳 (秒级)
+ * @return 格式化字符串 "HH:MM"
+ */
 std::string ReportGenerator::formatTime(long long timestamp) {
     if (timestamp == 0) return "--:--";
     std::time_t t = (std::time_t)timestamp;
+    std::tm *tm = std::localtime(&t);
+    if (!tm) return "--:--";
     char buf[16];
-    std::strftime(buf, sizeof(buf), "%H:%M", std::localtime(&t));
+    std::strftime(buf, sizeof(buf), "%H:%M", tm);
     return std::string(buf);
 }
 
+/**
+ * @brief 将时间戳格式化为 "YYYY-MM-DD"
+ * @param timestamp 时间戳 (秒级)
+ * @return 格式化字符串 "YYYY-MM-DD"
+ */
 std::string ReportGenerator::formatDate(long long timestamp) {
+    if (timestamp == 0) return "0000-00-00";
     std::time_t t = (std::time_t)timestamp;
+    std::tm *tm = std::localtime(&t);
+    if (!tm) return "0000-00-00";
     char buf[16];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::localtime(&t));
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", tm);
     return std::string(buf);
 }
 
+/**
+ * @brief 将年份和月份格式化为 "YYYY-MM"
+ * @param year 年份
+ * @param month 月份
+ * @return 格式化字符串 "YYYY-MM"
+ */
+std::string ReportGenerator::formatMonth(int year, int month) {
+    std::stringstream ss;
+    ss << year << "-" << std::setw(2) << std::setfill('0') << month;
+    return ss.str();
+}
+
+/**
+ * @brief 获取指定月份的天数
+ * @param year 年份
+ * @param month 月份
+ * @return 天数
+ */
+int ReportGenerator::getDaysInMonth(int year, int month) {
+    if (month < 1 || month > 12) return 31;
+    
+    const int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int days = days_in_month[month - 1];
+    
+    // 闰年二月
+    if (month == 2) {
+        bool is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        if (is_leap) days = 29;
+    }
+    
+    return days;
+}
+
+/**
+ * @brief 从时间戳中提取日
+ * @param timestamp 时间戳 (秒级)
+ * @return 日 (1-31)
+ */
+int ReportGenerator::extractDayFromTimestamp(long long timestamp) {
+    if (timestamp == 0) return 0;
+    std::time_t t = (std::time_t)timestamp;
+    std::tm* tm = std::localtime(&t);
+    return tm ? tm->tm_mday : 0;
+}
+
+/**
+ * @brief 从时间戳中提取月
+ * @param timestamp 时间戳 (秒级)
+ * @return 月 (1-12)
+ */
+int ReportGenerator::extractMonthFromTimestamp(long long timestamp) {
+    if (timestamp == 0) return 0;
+    std::time_t t = (std::time_t)timestamp;
+    std::tm* tm = std::localtime(&t);
+    return tm ? tm->tm_mon + 1 : 0;
+}
+
+/**
+ * @brief 从时间戳中提取年
+ * @param timestamp 时间戳 (秒级)
+ * @return 年 (四位数)
+ */
+int ReportGenerator::extractYearFromTimestamp(long long timestamp) {
+    if (timestamp == 0) return 0;
+    std::time_t t = (std::time_t)timestamp;
+    std::tm* tm = std::localtime(&t);
+    return tm ? tm->tm_year + 1900 : 0;
+}
+
+/**
+ * @brief 计算迟到分钟数
+ * @param user_id 用户ID
+ * @param timestamp 打卡时间戳
+ * @return 迟到分钟数
+ */
+int ReportGenerator::calculateLateMinutes(int user_id, long long timestamp) {
+    // 简单实现：假设上班时间是9:00，迟到超过15分钟算迟到
+    // 这里可以根据班次规则计算，暂时返回固定值
+    std::time_t t = (std::time_t)timestamp;
+    std::tm* tm = std::localtime(&t);
+    if (!tm) return 0;
+    
+    int hour = tm->tm_hour;
+    int min = tm->tm_min;
+    int total_minutes = hour * 60 + min;
+    int work_start = 9 * 60; // 9:00
+    
+    if (total_minutes > work_start + 15) { // 迟到15分钟以上
+        return total_minutes - work_start;
+    }
+    return 0;
+}
+
+/**
+ * @brief 计算早退分钟数
+ * @param user_id 用户ID
+ * @param timestamp 打卡时间戳
+ * @return 早退分钟数
+ */
+int ReportGenerator::calculateEarlyMinutes(int user_id, long long timestamp) {
+    // 简单实现：假设下班时间是18:00，早退超过15分钟算早退
+    std::time_t t = (std::time_t)timestamp;
+    std::tm* tm = std::localtime(&t);
+    if (!tm) return 0;
+    
+    int hour = tm->tm_hour;
+    int min = tm->tm_min;
+    int total_minutes = hour * 60 + min;
+    int work_end = 18 * 60; // 18:00
+    
+    if (total_minutes < work_end - 15) { // 早退15分钟以上
+        return work_end - total_minutes;
+    }
+    return 0;
+}
+
+// ==================== 数据库访问函数 ====================
+
+/**
+ * @brief 从数据库获取指定时间范围内的考勤记录
+ * @param start_ts 起始时间戳 (秒级)
+ * @param end_ts 结束时间戳 (秒级)
+ * @return 考勤记录列表
+ */
+std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts, long long end_ts) {
+    std::vector<AttendanceRecord> records;
+
+    auto db_records = ::db_get_records(start_ts, end_ts);
+    for (const auto& record : db_records) {
+        AttendanceRecord rec;// 复制数据
+        rec.id = record.id;// 保留原ID
+        rec.user_id = record.user_id;// 保留原用户ID
+        rec.timestamp = record.timestamp;// 保留原时间戳
+        rec.status = record.status;// 保留原状态
+        rec.user_name = record.user_name;// 保留原用户名
+        rec.dept_name = record.dept_name;// 保留原部门名称
+        rec.image_path = record.image_path;
+
+        rec.minutes_late = 0;// 默认值为0
+        rec.minutes_early = 0;// 默认值为0
+        
+        if (rec.status == 1) { // 迟到
+            // 计算迟到分钟数的逻辑
+            rec.minutes_late = calculateLateMinutes(rec.user_id, rec.timestamp);
+        } 
+        
+        else if (rec.status == 2) { // 早退
+            // 计算早退分钟数的逻辑
+            rec.minutes_early = calculateEarlyMinutes(rec.user_id, rec.timestamp);
+        }
+        records.push_back(rec);
+    }
+    std::cout << "[Report] 从数据库获取 " << records.size() 
+              << " 条考勤记录 (" << formatDate(start_ts) 
+              << " 到 " << formatDate(end_ts) << ")" << std::endl;
+    return records;
+}
+
+/**
+ * @brief 从数据库获取所有用户信息
+ * @return 用户信息列表
+ */
+std::vector<UserData> ReportGenerator::db_get_all_users_info() {
+    std::vector<UserData> users;
+    auto db_users = ::db_get_all_users_info();
+
+     for (const auto& db_user : db_users) {
+        UserData user;
+        user.id = db_user.id;
+        user.name = db_user.name;
+        user.password = db_user.password;
+        user.card_id = db_user.card_id;
+        user.role = db_user.role;
+        user.dept_id = db_user.dept_id;
+        user.dept_name = db_user.dept_name;
+        user.face_feature = db_user.face_feature;
+        user.position = ""; // 数据层没有职位信息，可设为空或根据角色判断
+
+        // 根据privilege设置职位
+        if (db_user.role == 1) {
+            user.position = "管理员";
+        } else {
+            user.position = "员工";
+        }
+        
+        users.push_back(user);
+    }
+    
+    std::cout << "[Report] 从数据库获取 " << users.size() << " 个用户信息" << std::endl;
+    
+    return users;
+}
+
+/**
+ * @brief 从数据库获取指定部门的用户列表
+ * @param dept_name 部门名称
+ * @return 用户信息列表
+ */
+std::vector<UserData> ReportGenerator::db_get_users_by_dept(const std::string& dept_name) {
+    std::vector<UserData> users = db_get_all_users_info();
+    std::vector<UserData> result;
+    
+    // 筛选指定部门的用户
+    for (const auto& user : users) {
+        if (user.dept_name == dept_name) {
+            result.push_back(user);
+        }
+    }
+    
+    std::cout << "[Report] 从部门 '" << dept_name << "' 获取 " 
+              << result.size() << " 个用户" << std::endl;
+    
+    return result;
+}
+
+// ==================== 样式创建函数 ====================
+lxw_format* ReportGenerator::createHeaderFormat(lxw_workbook* workbook) {
+    lxw_format* format = workbook_add_format(workbook);
+    format_set_bold(format);
+    format_set_bg_color(format, 0x366092); // 深蓝色背景
+    format_set_font_color(format, LXW_COLOR_WHITE);
+    format_set_border(format, LXW_BORDER_THIN);
+    format_set_align(format, LXW_ALIGN_CENTER);
+    return format;
+}
+
+lxw_format* ReportGenerator::createNormalFormat(lxw_workbook* workbook) {
+    lxw_format* format = workbook_add_format(workbook);
+    format_set_border(format, LXW_BORDER_THIN);
+    format_set_align(format, LXW_ALIGN_CENTER);
+    return format;
+}
+
+lxw_format* ReportGenerator::createRedFormat(lxw_workbook* workbook) {
+    lxw_format* format = workbook_add_format(workbook);
+    format_set_font_color(format, LXW_COLOR_RED); // Epic5.3: 红色字体
+    format_set_border(format, LXW_BORDER_THIN);
+    format_set_align(format, LXW_ALIGN_CENTER);
+    return format;
+}
+
+lxw_format* ReportGenerator::createGreenFormat(lxw_workbook* workbook) {
+    lxw_format* format = workbook_add_format(workbook);
+    format_set_font_color(format, 0x00A933); // 绿色字体
+    format_set_border(format, LXW_BORDER_THIN);
+    format_set_align(format, LXW_ALIGN_CENTER);
+    return format;
+}
+
+lxw_format* ReportGenerator::createYellowFormat(lxw_workbook* workbook) {
+    lxw_format* format = workbook_add_format(workbook);
+    format_set_font_color(format, 0xFF9900); // 黄色/橙色字体
+    format_set_border(format, LXW_BORDER_THIN);
+    format_set_align(format, LXW_ALIGN_CENTER);
+    return format;
+}
+
+// ==================== 数据辅助函数 ====================
+
+/**
+ * @brief 根据考勤状态获取显示符号
+ * @param check_in 打卡时间字符串
+ * @param check_out 打卡时间字符串
+ * @param status 考勤状态
+ * @return 显示符号字符串
+ */
+std::string ReportGenerator::getAttendanceSymbol(const std::string& check_in,  const std::string& check_out,  int status) {
+
+    if (status == STATUS_ABSENT) return "A";
+    if (status == STATUS_LATE) {
+        if (check_in != "--:--") return "L(" + check_in + ")";
+        return "L";
+    }
+    if (status == STATUS_EARLY) {
+        if (check_out != "--:--") return "E(" + check_out + ")";
+        return "E";
+    }
+    if (status == STATUS_NORMAL) {
+        if (check_in != "--:--") return check_in;
+        return "✓";
+    }
+    return "?";
+}
+
+lxw_color_t ReportGenerator::getStatusColor(int status) {
+    switch (status) {
+        case STATUS_LATE:
+        case STATUS_ABSENT:
+            return LXW_COLOR_RED; // Epic5.3: 红色字体
+        case STATUS_EARLY:
+            return 0xFF9900; // 橙色
+        case STATUS_NORMAL:
+            return 0x00A933; // 绿色
+        default:
+            return LXW_COLOR_BLACK;
+    }
+}
+
+// ==================== 核心数据处理函数 ====================
+
+/**
+ * @brief 处理考勤数据，生成日报和月报
+ * @param records 考勤记录列表
+ * @param users 用户信息列表
+ * @param start_ts 起始时间戳 (秒级)
+ * @param end_ts 结束时间戳 (秒级)
+ * @param detail_data 输出：每日明细数据
+ * @param summaries 输出：月度汇总数据
+ */
+void ReportGenerator::processAttendanceData(
+    const std::vector<AttendanceRecord>& records,
+    const std::vector<UserData>& users,
+    long long start_ts, long long end_ts,
+    std::map<int, std::map<int, DailyCellData>>& detail_data,
+    std::map<int, MonthlySummary>& summaries) {
+    
+    // 初始化数据结构
+    for (const auto& user : users) {
+        detail_data[user.id] = std::map<int, DailyCellData>();
+        
+        MonthlySummary summary;
+        summary.user_name = user.name;
+        summary.user_code = std::to_string(user.id);
+        summary.dept = user.dept_name;
+        summaries[user.id] = summary;
+    }
+    
+    // 处理考勤记录
+    for (const auto& rec : records) {
+        int day = extractDayFromTimestamp(rec.timestamp);
+        if (day == 0) continue;
+        
+        DailyCellData& cell_data = detail_data[rec.user_id][day];
+        
+        if (cell_data.user_name.empty()) {
+            cell_data.user_name = rec.user_name;
+            cell_data.user_code = std::to_string(rec.user_id);
+            cell_data.check_in = "--:--";
+            cell_data.check_out = "--:--";
+            cell_data.status = STATUS_NORMAL;
+        }
+        
+        std::string time_str = formatTime(rec.timestamp);
+        
+        if (cell_data.check_in == "--:--") {
+            cell_data.check_in = time_str;
+            cell_data.status = rec.status;
+            cell_data.late_minutes = rec.minutes_late;
+        } else if (time_str > cell_data.check_in && cell_data.check_out == "--:--") {
+            cell_data.check_out = time_str;
+            if (rec.status == STATUS_EARLY) {
+                cell_data.status = STATUS_EARLY;
+                cell_data.early_minutes = rec.minutes_early;
+            }
+        }
+    }
+    
+    //补全缺失日期并统计
+    int year = extractYearFromTimestamp(start_ts);
+    int month = extractMonthFromTimestamp(start_ts);
+    int days_in_month = getDaysInMonth(year, month);
+    
+    for (auto& [user_id, user_data] : detail_data) {
+        MonthlySummary& summary = summaries[user_id];
+        
+        for (int day = 1; day <= days_in_month; day++) {
+            if (user_data.find(day) == user_data.end()) {
+                DailyCellData absent_data;
+                absent_data.user_name = summary.user_name;
+                absent_data.user_code = summary.user_code;
+                absent_data.check_in = "--:--";
+                absent_data.check_out = "--:--";
+                absent_data.status = STATUS_ABSENT; //缺勤标记
+                user_data[day] = absent_data;
+                
+                summary.absent_days++;
+            } else {
+                DailyCellData& cell_data = user_data[day];
+                switch (cell_data.status) {
+                    case STATUS_NORMAL:
+                        summary.normal_days++;
+                        break;
+                    case STATUS_LATE:
+                        summary.late_count++;
+                        summary.total_late_minutes += cell_data.late_minutes;
+                        break;
+                    case STATUS_EARLY:
+                        summary.early_count++;
+                        summary.total_early_minutes += cell_data.early_minutes;
+                        break;
+                    case STATUS_ABSENT:
+                        summary.absent_days++;
+                        break;
+                }
+            }
+        }
+    }
+}
+
+// ==================== Excel工作表写入函数 ====================
+
+/**
+ * @brief 写入汇总报表工作表
+ * @param workbook 工作簿对象
+ * @param summaries 月度汇总数据
+ */
+void ReportGenerator::writeSummarySheet(lxw_workbook* workbook, 
+                                      const std::map<int, MonthlySummary>& summaries) {
+    lxw_worksheet* sheet = workbook_add_worksheet(workbook, "Summary");
+    
+    // 创建样式
+    lxw_format* header_format = createHeaderFormat(workbook);
+    lxw_format* normal_format = createNormalFormat(workbook);
+    lxw_format* red_format = createRedFormat(workbook);
+    lxw_format* green_format = createGreenFormat(workbook);
+    
+    // 写入表头
+    const char* headers[] = {"姓名", "工号", "部门", "正常天数", "迟到次数", 
+                           "迟到分钟", "早退次数", "早退分钟", "缺勤天数", "备注"};
+    
+    for (int i = 0; i < 10; i++) {
+        worksheet_write_string(sheet, 0, i, headers[i], header_format);
+    }
+    
+    // 写入数据
+    int row = 1;
+    for (const auto& [user_id, summary] : summaries) {
+        worksheet_write_string(sheet, row, 0, summary.user_name.c_str(), normal_format);
+        worksheet_write_string(sheet, row, 1, summary.user_code.c_str(), normal_format);
+        worksheet_write_string(sheet, row, 2, summary.dept.c_str(), normal_format);
+        worksheet_write_number(sheet, row, 3, summary.normal_days, green_format);
+        worksheet_write_number(sheet, row, 4, summary.late_count, red_format);
+        worksheet_write_number(sheet, row, 5, summary.total_late_minutes, red_format);
+        worksheet_write_number(sheet, row, 6, summary.early_count, red_format);
+        worksheet_write_number(sheet, row, 7, summary.total_early_minutes, red_format);
+        worksheet_write_number(sheet, row, 8, summary.absent_days, red_format);
+        
+        // 备注
+        std::string remark;
+        if (summary.late_count > 0) {
+            remark += "迟到" + std::to_string(summary.late_count) + "次";
+            if (summary.total_late_minutes > 0) {
+                remark += "(" + std::to_string(summary.total_late_minutes) + "分钟) ";
+            }
+        }
+        if (summary.early_count > 0) {
+            remark += "早退" + std::to_string(summary.early_count) + "次";
+            if (summary.total_early_minutes > 0) {
+                remark += "(" + std::to_string(summary.total_early_minutes) + "分钟) ";
+            }
+        }
+        if (summary.absent_days > 0) {
+            remark += "缺勤" + std::to_string(summary.absent_days) + "天";
+        }
+        if (remark.empty()) remark = "全勤";
+        
+        worksheet_write_string(sheet, row, 9, remark.c_str(), normal_format);
+        row++;
+    }
+    
+    // 设置列宽
+    worksheet_set_column(sheet, 0, 0, 15, NULL);
+    worksheet_set_column(sheet, 1, 1, 12, NULL);
+    worksheet_set_column(sheet, 2, 2, 12, NULL);
+    worksheet_set_column(sheet, 3, 3, 12, NULL);
+    worksheet_set_column(sheet, 4, 5, 12, NULL);
+    worksheet_set_column(sheet, 6, 7, 12, NULL);
+    worksheet_set_column(sheet, 8, 8, 12, NULL);
+    worksheet_set_column(sheet, 9, 9, 25, NULL);
+}
+
+/**
+ * @brief 写入每日明细工作表
+ * @param workbook 工作簿对象
+ * @param detail_data 每日明细数据
+ * @param days_in_month 当月天数
+ */
+void ReportGenerator::writeDetailSheet(lxw_workbook* workbook,
+                                     const std::map<int, std::map<int, DailyCellData>>& detail_data,
+                                     int days_in_month) {
+    lxw_worksheet* sheet = workbook_add_worksheet(workbook, "Daily Detail");
+    
+    // 创建样式
+    lxw_format* header_format = createHeaderFormat(workbook);
+    lxw_format* normal_format = createNormalFormat(workbook);
+    lxw_format* red_format = createRedFormat(workbook);
+    lxw_format* green_format = createGreenFormat(workbook);
+    lxw_format* yellow_format = createYellowFormat(workbook);
+    
+    // 写入表头
+    worksheet_write_string(sheet, 0, 0, "姓名/工号", header_format);
+    
+    // Epic5.3: 横轴为日期，写入1-31日
+    for (int day = 1; day <= days_in_month; day++) {
+        worksheet_write_number(sheet, 0, day, day, header_format);
+    }
+    
+    // 设置列宽
+    worksheet_set_column(sheet, 0, 0, 20, NULL); // 姓名列
+    for (int day = 1; day <= days_in_month; day++) {
+        worksheet_set_column(sheet, day, day, 10, NULL); // 日期列
+    }
+    
+    // 写入数据
+    int row = 1;
+    for (const auto& [user_id, user_data] : detail_data) {
+        // Epic5.3: 纵轴为员工，第一列为"姓名/工号"
+        std::string name_id;
+        if (!user_data.empty()) {
+            const DailyCellData& first_cell = user_data.begin()->second;
+            name_id = first_cell.user_name + "/" + first_cell.user_code;
+        }
+        worksheet_write_string(sheet, row, 0, name_id.c_str(), normal_format);
+        
+        // 写入每日考勤状态
+        for (int day = 1; day <= days_in_month; day++) {
+            if (user_data.find(day) != user_data.end()) {
+                const DailyCellData& cell_data = user_data.at(day);
+                lxw_format* cell_format = normal_format;
+                std::string display_text;
+                
+                switch (cell_data.status) {
+                    case STATUS_ABSENT: // Epic5.3: 缺勤显示A，红色字体
+                        display_text = "A";
+                        cell_format = red_format;
+                        break;
+                        
+                    case STATUS_LATE: // Epic5.3: 迟到显示L或时间，红色字体
+                        if (cell_data.check_in != "--:--") {
+                            display_text = "L(" + cell_data.check_in + ")";
+                        } else {
+                            display_text = "L";
+                        }
+                        cell_format = red_format; // Epic5.3: 字体颜色为红色
+                        break;
+                        
+                    case STATUS_EARLY: // 早退
+                        if (cell_data.check_out != "--:--") {
+                            display_text = "✓(" + cell_data.check_out + ")";
+                        } else {
+                            display_text = "✓";
+                        }
+                        cell_format = yellow_format;
+                        break;
+                        
+                    case STATUS_NORMAL: // Epic5.3: 正常打卡显示✓或具体时间
+                        if (cell_data.check_in != "--:--") {
+                            display_text = cell_data.check_in;
+                        } else {
+                            display_text = "✓";
+                        }
+                        cell_format = green_format;
+                        break;
+                }
+                
+                worksheet_write_string(sheet, row, day, display_text.c_str(), cell_format);
+            }
+        }
+        row++;
+    }
+    
+    // 冻结窗格
+    worksheet_freeze_panes(sheet, 1, 1);
+}
+
+/**
+ * @brief 生成精细化月度报表
+ * @param month_str 月份字符串 "YYYY-MM"
+ * @param output_path 输出文件路径
+ * @return 是否成功
+ */
+bool ReportGenerator::exportDetailedReport(const std::string& month_str, 
+                                         const std::string& output_path) {
+    std::cout << "[ReportGenerator] 生成Epic5.3精细化月度报表: " << month_str << std::endl;
+    
+    // 解析月份
+    std::tm tm = {};
+    std::stringstream ss(month_str + "-01");
+    ss >> std::get_time(&tm, "%Y-%m-%d");
+    
+    if (ss.fail()) {
+        std::cerr << "[Error] 月份格式错误，请使用YYYY-MM格式" << std::endl;
+        return false;
+    }
+    
+    int year = tm.tm_year + 1900;
+    int month = tm.tm_mon + 1;
+    int days_in_month = getDaysInMonth(year, month);
+    
+    // 计算时间范围
+    std::tm start_tm = tm;
+    start_tm.tm_mday = 1;
+    start_tm.tm_hour = 0;
+    start_tm.tm_min = 0;
+    start_tm.tm_sec = 0;
+    long long start_ts = std::mktime(&start_tm);
+    
+    std::tm end_tm = start_tm;
+    end_tm.tm_mon += 1;
+    end_tm.tm_mday = 0;
+    end_tm.tm_hour = 23;
+    end_tm.tm_min = 59;
+    end_tm.tm_sec = 59;
+    long long end_ts = std::mktime(&end_tm);
+    
+    //获取数据
+    std::vector<AttendanceRecord> records = db_get_records(start_ts, end_ts);
+    std::vector<UserData> users = db_get_all_users_info();
+    
+    //处理数据
+    std::map<int, std::map<int, DailyCellData>> detail_data;
+    std::map<int, MonthlySummary> summaries;
+    
+    processAttendanceData(records, users, start_ts, end_ts, detail_data, summaries);
+    
+    //创建Excel工作簿（要求两个Sheet）
+    lxw_workbook* workbook = workbook_new(output_path.c_str());
+    if (!workbook) {
+        std::cerr << "[Error] 无法创建工作簿: " << output_path << std::endl;
+        return false;
+    }
+    
+    //写入Summary表
+    writeSummarySheet(workbook, summaries);
+    
+    //写入Daily Detail表（横轴日期，纵轴员工）
+    writeDetailSheet(workbook, detail_data, days_in_month);
+    
+    //保存文件
+    workbook_close(workbook);
+    
+    std::cout << "[Success] Epic5.3精细化报表生成成功！" << std::endl;
+    std::cout << "  文件: " << output_path << std::endl;
+    std::cout << "  工作表: Summary, Daily Detail" << std::endl;
+    std::cout << "  月份: " << month_str << " (" << days_in_month << "天)" << std::endl;
+    
+    return true;
+}
+
+/**
+ * @brief 导出报表到指定路径
+ * @param type 报表类型
+ * @param start_date 查询起始日期 "YYYY-MM-DD"
+ * @param end_date 查询结束日期 "YYYY-MM-DD"
+ * @param output_path 输出文件路径 (e.g. "output/usb_sim/report.xlsx")
+ * @return true 导出成功, false 失败
+ */
 bool ReportGenerator::exportReport(ReportType type, 
                                    const std::string& start_date, 
                                    const std::string& end_date, 
                                    const std::string& output_path) {
     
-    // 1. 获取时间范围
+    //获取时间范围
     long long start_ts = parseDateToTimestamp(start_date, false);
     long long end_ts = parseDateToTimestamp(end_date, true);
 
-    // 2. 从数据库获取原始记录
+    // 从数据库获取原始记录
     // 注意：这里使用 data/db_storage.h 中的接口
     std::vector<AttendanceRecord> records = db_get_records(start_ts, end_ts);
 
-    // [优化点 1] 显式按时间戳排序，确保"最早"是签到，"最晚"是签退
+    //显式按时间戳排序，确保"最早"是签到，"最晚"是签退
     std::sort(records.begin(), records.end(), [](const AttendanceRecord& a, const AttendanceRecord& b) {
         return a.timestamp < b.timestamp;
     });
@@ -68,16 +753,16 @@ bool ReportGenerator::exportReport(ReportType type,
         // 即使没有数据，也可以生成一个空表头的文件
     }
 
-    // 3. 数据处理：将原始流水按 (User + Date) 聚合
+    // 数据处理：将原始流水按 (User + Date) 聚合
     // Key: "UserID_YYYY-MM-DD", Value: DailySummary
-    std::map<std::string, DailySummary> summary_map; // 【注意】这里只保留这一行定义
+    std::map<std::string, DailySummary> summary_map; //这里只保留这一行定义
 
     for (const auto& rec : records) {
         std::string date_str = formatDate(rec.timestamp);
         std::string key = std::to_string(rec.user_id) + "_" + date_str;
 
         if (summary_map.find(key) == summary_map.end()) {
-            // 【关键修复】这里定义了 ds 变量
+            
             DailySummary ds; 
             
             ds.date = date_str;
@@ -86,7 +771,7 @@ bool ReportGenerator::exportReport(ReportType type,
             ds.check_in = formatTime(rec.timestamp); // 第一条作为签到
             ds.check_out = formatTime(rec.timestamp); // 暂时也作为签退
             
-            // [优化点 3] 映射具体状态文本
+            //映射具体状态文本
             if (rec.status == 0) ds.status = "正常";
             else if (rec.status == 1) ds.status = "迟到";
             else if (rec.status == 2) ds.status = "早退";
@@ -134,7 +819,7 @@ bool ReportGenerator::exportReport(ReportType type,
         }
     }
 
-    // 4. 使用 libxlsxwriter 写入 Excel
+    //使用 libxlsxwriter 写入 Excel
     lxw_workbook  *workbook  = workbook_new(output_path.c_str());
     if (!workbook) {
         std::cerr << "[Error] Cannot create workbook: " << output_path << std::endl;
@@ -188,4 +873,38 @@ bool ReportGenerator::exportReport(ReportType type,
     workbook_close(workbook);
     std::cout << "[Success] Report generated at: " << output_path << std::endl;
     return true;
+}
+
+/**
+ * @brief 导出周报表
+ * @param week_start_date 查询起始日期 "YYYY-MM-DD"（该周的第一天）
+ * @param output_path 输出文件路径
+ * @return true 导出成功, false 失败
+ */
+bool ReportGenerator::exportWeeklyReport(const std::string& week_start_date,  const std::string& output_path) {
+    long long start_ts = parseDateToTimestamp(week_start_date, false);
+    if (start_ts == 0){
+        return false;
+    }
+    
+    long long end_ts = start_ts + 6 * 86400; // 一周7天
+    std::string end_date = formatDate(end_ts);
+
+    return exportReport(ReportType::WEEKLY, week_start_date, end_date, output_path);
+}
+
+/**
+ * @brief 导出部门报表
+ * @param department_name 部门名称
+ * @param start_date 查询起始日期 "YYYY-MM-DD"
+ * @param end_date 查询结束日期 "YYYY-MM-DD"
+ * @param output_path 输出文件路径
+ * @return true 导出成功, false 失败
+ */
+bool ReportGenerator::exportDepartmentReport(const std::string& department_name, 
+                                              const std::string& start_date, 
+                                              const std::string& end_date, 
+                                              const std::string& output_path) {
+    // 目前与普通报表相同，未来可扩展为只包含某部门员工
+    return exportReport(ReportType::DEPARTMENT, start_date, end_date, output_path);
 }

@@ -80,6 +80,9 @@ struct UserData {
     /// @brief 人脸特征数据 (二进制流)
     /// @details 对应数据库中的 BLOB 字段，存储编码后的 JPG 图片数据
     std::vector<uchar> face_feature; 
+
+    /// @brief 职位信息 (用于报表显示)
+    std::string position;
 };
 
 /**
@@ -108,6 +111,12 @@ struct AttendanceRecord {
     
     /// @brief 现场抓拍图片的文件路径
     std::string image_path;
+
+    /// @brief 迟到分钟数 (用于报表计算)
+    int minutes_late;
+
+    /// @brief 早退分钟数 (用于报表计算)
+    int minutes_early;
 };
 
 // ================= 核心接口声明 =================

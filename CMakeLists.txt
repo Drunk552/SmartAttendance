@@ -33,6 +33,9 @@ find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc videoio highgui objdetect
 find_package(SQLite3 REQUIRED) 
 # 如果 find_package 找不到，可以使用: pkg_check_modules(SQLITE3 REQUIRED sqlite3)
 
+# 2.5 xlsxwriter 依赖
+pkg_check_modules(XLSXWRITER REQUIRED xlsxwriter)
+
 # ==========================================
 # 3. 第三方库配置 (LVGL)
 # ==========================================
@@ -106,6 +109,7 @@ target_include_directories(attendance_app PRIVATE
     ${SDL2_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
     "/usr/include/opencv4"   # [强制] Linux/WSL OpenCV4 标准路径
+    ${XLSXWRITER_INCLUDE_DIRS}
 )
 
 # 链接所有库
@@ -114,7 +118,7 @@ target_link_libraries(attendance_app PRIVATE
     ${OpenCV_LIBS}      # 图像处理库
     SQLite::SQLite3     # 数据库
     ${SDL2_LIBRARIES}   # 驱动支持
-    xlsxwriter  # <--- [新增] 链接 libxlsxwriter
+    ${XLSXWRITER_LIBRARIES}  # 链接 libxlsxwriter
     Threads::Threads  # 链接线程库
 )
 
