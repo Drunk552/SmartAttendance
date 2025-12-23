@@ -126,8 +126,8 @@ private:
     int extractYearFromTimestamp(long long timestamp);
 
     // 计算迟到/早退分钟数
-    int calculateLateMinutes(int user_id, long long timestamp);
-    int calculateEarlyMinutes(int user_id, long long timestamp);
+    int calculateLateMinutes(long long timestamp, const ShiftInfo& shift);
+    int calculateEarlyMinutes(long long timestamp, const ShiftInfo& shift);
 
     // 数据库访问函数
     std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_ts);

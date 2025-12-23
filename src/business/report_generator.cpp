@@ -14,6 +14,23 @@
 #include <sys/stat.h> // 用于创建目录
 #include <db_storage.h>// 调用数据层接口
 
+/**
+ * @brief 将时间字符串 "HH:MM" 转换为分钟数
+ * @param time_str 时间字符串
+ * @return 分钟数
+ */
+int timeStrToMinutes(const std::string& time_str) {
+    if (time_str.empty()) return -1; // 无效时间
+    int h, m;
+    char sep;
+    std::stringstream ss(time_str);
+    ss >> h >> sep >> m;
+    return h * 60 + m;
+}
+
+/**
+ * @brief 构造函数
+ */
 ReportGenerator::ReportGenerator() {}
 ReportGenerator::~ReportGenerator() {}
 
@@ -153,50 +170,75 @@ int ReportGenerator::extractYearFromTimestamp(long long timestamp) {
 }
 
 /**
- * @brief 计算迟到分钟数
- * @param user_id 用户ID
+ * @brief 动态计算迟到分钟数 (修复 Hardcoded 问题)
  * @param timestamp 打卡时间戳
- * @return 迟到分钟数
+ * @param shift 当天的班次信息
  */
-int ReportGenerator::calculateLateMinutes(int user_id, long long timestamp) {
-    // 简单实现：假设上班时间是9:00，迟到超过15分钟算迟到
-    // 这里可以根据班次规则计算，暂时返回固定值
+int ReportGenerator::calculateLateMinutes(long long timestamp, const ShiftInfo& shift) {
+    // 1. 获取打卡时间的分钟数
     std::time_t t = (std::time_t)timestamp;
     std::tm* tm = std::localtime(&t);
-    if (!tm) return 0;
+    int punch_mins = tm->tm_hour * 60 + tm->tm_min;
+
+    // 2. 解析班次的所有上班时间点
+    int s1_start = timeStrToMinutes(shift.s1_start); // 如 08:00 -> 480
+    int s2_start = timeStrToMinutes(shift.s2_start); // 如 14:00 -> 840
+    int s3_start = timeStrToMinutes(shift.s3_start);
+
+    // 3. 寻找最近的“上班时间点”进行对比
+    // 逻辑：如果打卡时间在 S1时间段附近，就跟S1比；如果在S2附近，就跟S2比。
+    // 这里使用简单的“就近原则”或“折中原则”
     
-    int hour = tm->tm_hour;
-    int min = tm->tm_min;
-    int total_minutes = hour * 60 + min;
-    int work_start = 9 * 60; // 9:00
-    
-    if (total_minutes > work_start + 15) { // 迟到15分钟以上
-        return total_minutes - work_start;
+    int late_mins = 0;
+
+    // 假设：如果打卡时间在 12:00 之前，认为是上午班迟到
+    // 这里的 720 (12:00) 是一个简化的分界线，更严谨的做法是参考 attendance_rule.cpp 中的折中逻辑
+    if (s1_start != -1 && punch_mins < 720) { 
+        if (punch_mins > s1_start) {
+            late_mins = punch_mins - s1_start;
+        }
     }
-    return 0;
+    // 如果打卡时间在 12:00 之后，认为是下午班迟到
+    else if (s2_start != -1 && punch_mins >= 720) {
+        if (punch_mins > s2_start) {
+            late_mins = punch_mins - s2_start;
+        }
+    }
+    
+    // 允许迟到阈值 (可从 RuleConfig 获取，这里暂时忽略或默认0)
+    return late_mins > 0 ? late_mins : 0;
 }
 
 /**
- * @brief 计算早退分钟数
+ * @brief 动态计算早退分钟数
  * @param user_id 用户ID
  * @param timestamp 打卡时间戳
  * @return 早退分钟数
  */
-int ReportGenerator::calculateEarlyMinutes(int user_id, long long timestamp) {
-    // 简单实现：假设下班时间是18:00，早退超过15分钟算早退
+int ReportGenerator::calculateEarlyMinutes(long long timestamp, const ShiftInfo& shift) {
     std::time_t t = (std::time_t)timestamp;
     std::tm* tm = std::localtime(&t);
-    if (!tm) return 0;
+    int punch_mins = tm->tm_hour * 60 + tm->tm_min;
+
+    int s1_end = timeStrToMinutes(shift.s1_end); // 如 12:00
+    int s2_end = timeStrToMinutes(shift.s2_end); // 如 18:00
     
-    int hour = tm->tm_hour;
-    int min = tm->tm_min;
-    int total_minutes = hour * 60 + min;
-    int work_end = 18 * 60; // 18:00
-    
-    if (total_minutes < work_end - 15) { // 早退15分钟以上
-        return work_end - total_minutes;
+    int early_mins = 0;
+
+    // 判定逻辑：如果是上午下班
+    if (s1_end != -1 && punch_mins < 780) { // < 13:00
+        if (punch_mins < s1_end) {
+            early_mins = s1_end - punch_mins;
+        }
     }
-    return 0;
+    // 判定逻辑：如果是下午下班
+    else if (s2_end != -1 && punch_mins >= 780) {
+        if (punch_mins < s2_end) {
+            early_mins = s2_end - punch_mins;
+        }
+    }
+
+    return early_mins > 0 ? early_mins : 0;
 }
 
 // ==================== 数据库访问函数 ====================
@@ -211,6 +253,10 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
     std::vector<AttendanceRecord> records;
 
     auto db_records = ::db_get_records(start_ts, end_ts);
+
+    //班次缓存 map，避免同一个人同一天重复查询数据库
+    // Key: "UserID_YYYY-MM-DD", Value: ShiftInfo
+    std::map<std::string, ShiftInfo> shift_cache;
     for (const auto& record : db_records) {
         AttendanceRecord rec;// 复制数据
         rec.id = record.id;// 保留原ID
@@ -223,15 +269,42 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
 
         rec.minutes_late = 0;// 默认值为0
         rec.minutes_early = 0;// 默认值为0
-        
-        if (rec.status == 1) { // 迟到
-            // 计算迟到分钟数的逻辑
-            rec.minutes_late = calculateLateMinutes(rec.user_id, rec.timestamp);
+
+        //动态获取班次信息
+        // 生成缓存 Key (用户ID + 日期)
+        std::string date_str = formatDate(rec.timestamp);
+        std::string cache_key = std::to_string(rec.user_id) + "_" + date_str;
+
+        ShiftInfo current_shift;
+        // 检查缓存或查询数据库
+        if (shift_cache.find(cache_key) != shift_cache.end()) {
+            current_shift = shift_cache[cache_key];
+        } else {
+            // [调用数据层核心接口] 智能获取当天的排班 (个人排班 > 部门排班 > 默认班次)
+            // 注意：需确保已 include "data/db_storage.h"
+            current_shift = ::db_get_user_shift_smart(rec.user_id, rec.timestamp); //
+            shift_cache[cache_key] = current_shift;
         } 
         
-        else if (rec.status == 2) { // 早退
-            // 计算早退分钟数的逻辑
-            rec.minutes_early = calculateEarlyMinutes(rec.user_id, rec.timestamp);
+        // 强制重新计算迟到/早退逻辑，修复历史数据可能不准的问题
+        // 1. 先计算具体的分钟数
+        int late_min = calculateLateMinutes(rec.timestamp, current_shift);
+        int early_min = calculateEarlyMinutes(rec.timestamp, current_shift);
+
+        // 2. 根据计算结果强制更新状态和分钟数
+        if (late_min > 0) {
+            rec.status = STATUS_LATE;       // 强制标记为迟到
+            rec.minutes_late = late_min;    // 记录迟到时长
+        } 
+        else if (early_min > 0) {
+            rec.status = STATUS_EARLY;      // 强制标记为早退
+            rec.minutes_early = early_min;  // 记录早退时长
+        }
+        else {
+            // 如果既不迟到也不早退，但原状态显示异常，则修正为正常
+            if (rec.status == STATUS_LATE || rec.status == STATUS_EARLY) {
+                rec.status = STATUS_NORMAL;
+            }
         }
         records.push_back(rec);
     }
