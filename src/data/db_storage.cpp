@@ -190,7 +190,7 @@ bool data_init() {
                exec_sql(sql_users, "Create Users") &&
                exec_sql(sql_dept_sch, "Create Dept Schedule") && 
                exec_sql(sql_user_sch, "Create User Schedule") && 
-               exec_sql(sql_att, "Create Attendance");
+               exec_sql(sql_att, "Create Attendance")&&
                exec_sql(sql_index, "Create Index");
 
     if(ret) std::cout << "[Data] DAO Layer Initialized (Phase 2)." << std::endl;

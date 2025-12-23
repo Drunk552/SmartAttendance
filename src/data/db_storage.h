@@ -121,6 +121,9 @@ struct UserData {
     
     /// @brief 指纹特征数据 (二进制流)
     std::vector<uint8_t> fingerprint_feature;
+
+    /// @brief 职位信息 (用于报表显示)
+    std::string position;
 };
 
 /**
@@ -149,6 +152,12 @@ struct AttendanceRecord {
     
     /// @brief 现场抓拍图片的文件路径
     std::string image_path;
+
+    /// @brief 迟到分钟数 (用于报表计算)
+    int minutes_late;
+
+    /// @brief 早退分钟数 (用于报表计算)
+    int minutes_early;
 };
 
 // ================= 核心接口声明 =================
