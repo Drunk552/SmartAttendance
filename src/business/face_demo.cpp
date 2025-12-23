@@ -9,6 +9,7 @@
 #include <string>
 #include <filesystem>
 #include <algorithm>
+#include <fstream>
 #include "face_demo.h" // 人脸识别演示模块的头文件
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 #include "db_storage.h"//数据层头文件
@@ -46,6 +47,8 @@ static std::vector<UserData> g_user_cache;
 // [Epic 3.4] 考勤记录缓存
 static std::vector<AttendanceRecord> g_record_cache;
 static PreprocessConfig preprocess_config; // 全局预处理配置
+
+const std::string MODEL_FILE = "face_model.xml"; // 模型文件名
 
 /**
  * @brief 应用直方图均衡化
@@ -257,74 +260,81 @@ bool business_init() {
         return false;
     }
 
-    // [修改] 从数据库加载用所有户数据并训练（BLOB）
-    std::vector<UserData> users = data_getAllUsers();
-    
+    // 准备全局变量
     face_samples.clear();
     labels.clear();
     names.clear(); 
-    names.push_back("Unknown"); // 0号 ID 预留给未知用户
+    names.push_back("Unknown"); // ID=0 预留
 
-    if (!users.empty()) {
-        std::cout << ">>> [Business] 正在从数据库加载用户数据..." << std::endl;
-        
-        for (const auto& u : users) {
-            // 核心步骤：将二进制 BLOB 解码为 OpenCV Mat (灰度图)
-            // 注意：必须使用 IMREAD_GRAYSCALE，因为 LBPH 只接受灰度图
-            cv::Mat sample = cv::imdecode(u.face_feature, cv::IMREAD_GRAYSCALE);
+    bool model_loaded = false;
+
+    // A. 尝试加载本地模型文件
+    std::ifstream f(MODEL_FILE);
+    if (f.good()) {
+        f.close(); // 文件存在，关闭流
+        try {
+            std::cout << ">>> [Business] 发现本地模型 " << MODEL_FILE << "，正在快速加载..." << std::endl;
+            recog->read(MODEL_FILE); // 直接读取 XML
             
-            if (!sample.empty()) {
-                face_samples.push_back(sample); // 添加到训练样本集
-                labels.push_back(u.id);         // 添加对应的 ID 标签
-                
-                // 维护 ID 到 名字 的映射 (names 向量)
-                // 确保 names 向量够长，能存下当前的 u.id
+            // 虽然不用读图片，但必须从数据库加载 ID->姓名的映射关系
+            // 使用 lightweight 接口 (不读 BLOB，速度快)
+            std::vector<UserData> users_info = db_get_all_users_info();
+            
+            for (const auto& u : users_info) {
+                // 确保 names 向量够长
                 if (names.size() <= u.id) {
                     names.resize(u.id + 1, "Unknown");
                 }
                 names[u.id] = u.name;
             }
+
+            model_loaded = true;
+            trained = true;
+            std::cout << ">>> [Business] 模型加载成功！无需重新训练。" << std::endl;
+
+        } catch (const cv::Exception& e) {
+            std::cerr << "[Business] 模型文件可能已损坏，将回退到全量训练。错误: " << e.what() << std::endl;
+            model_loaded = false;
         }
     }
 
-    //  如果加载到了数据，立即进行训练
-    if (!face_samples.empty()) {
-        recog->train(face_samples, labels);
-        trained = true; // 标记为已训练状态，允许进行识别
-        std::cout << "[Business] 模型已恢复，加载了 " << face_samples.size() << " 个样本。" << std::endl;
-    } else {
-        std::cout << "[Business] 数据库为空，等待新用户注册。" << std::endl;
-        trained = false;
+    // B. 如果模型加载失败（或文件不存在），执行全量训练并保存
+    if (!model_loaded) {
+        std::cout << ">>> [Business] 开始执行全量训练 (读取数据库 BLOB)..." << std::endl;
+        
+        // 使用 heavyweight 接口 (读取 BLOB 图片)
+        std::vector<UserData> users = db_get_all_users(); // 注意：这里调用的是原有的全量接口
+        
+        if (!users.empty()) {
+            for (const auto& u : users) {
+                // 解码图片
+                cv::Mat sample = cv::imdecode(u.face_feature, cv::IMREAD_GRAYSCALE);
+                if (!sample.empty()) {
+                    face_samples.push_back(sample);
+                    labels.push_back(u.id);
+                    
+                    // 维护名字映射
+                    if (names.size() <= u.id) {
+                        names.resize(u.id + 1, "Unknown");
+                    }
+                    names[u.id] = u.name;
+                }
+            }
+            
+            // 开始训练
+            if (!face_samples.empty()) {
+                recog->train(face_samples, labels);
+                trained = true;
+                std::cout << ">>> [Business] 训练完成。" << std::endl;
+                
+                // 【保存】训练完成后立即保存模型，下次启动就快了
+                recog->write(MODEL_FILE);
+                std::cout << ">>> [Business] 新模型已保存至: " << MODEL_FILE << std::endl;
+            }
+        } else {
+             std::cout << ">>> [Business] 数据库无用户，跳过训练。" << std::endl;
+        }
     }
-
-    // 初始化变量状态
-    current_id = 0;// 默认选择第一个用户
-    //trained = false;// 未训练状态
-
-    // 【修改这里】将 false 改为 true，让程序启动就开启识别
-    show_recognition = true; // 原本是 false
-
-    //face_samples.clear();// 清空样本
-    //labels.clear();// 清空标签
-
-    // 初始化预处理配置
-    preprocess_config.enable_crop = true;
-    preprocess_config.crop_margin_percent = 5;
-    preprocess_config.enable_resize_eq = true;
-    preprocess_config.hist_eq_method = HIST_EQ_CLAHE;
-    preprocess_config.clahe_clip_limit = 2.0f;
-    preprocess_config.clahe_tile_grid_size = cv::Size(8, 8);
-    preprocess_config.enable_roi_enhance = false;
-    preprocess_config.roi_contrast = 1.2f;
-    preprocess_config.roi_brightness = 10.0f;
-    preprocess_config.enablez_resize = true;
-    preprocess_config.resize_size = cv::Size(128, 128);
-    preprocess_config.debug_show_steps = false;
-    
-    cout << "业务模块初始化成功。预处理配置已设为默认值。\n";
-    cout << "操作说明：\n"
-         << "  [1~5] 切换ID, [c] 采集, [t] 训练, [r] 识别开关, [q] 退出程序\n"
-         << "  新增预处理控制接口可用\n";
          
     return true;
 }
@@ -779,6 +789,47 @@ bool business_register_user(const char* name, int dept_id) {
     
     if (new_id > 0) {
         std::cout << "[Business] Registration Success! ID: " << new_id << "\n";
+        
+        // 注册后更新模型并保存到 XML
+        // A. 图像预处理：LBPH 需要灰度图
+        cv::Mat gray_frame;
+        if (current_frame.channels() == 3) {
+            cv::cvtColor(current_frame, gray_frame, cv::COLOR_BGR2GRAY);
+        } else {
+            gray_frame = current_frame.clone();
+        }
+
+        // B. 更新内存中的 ID->姓名 映射表
+        // 确保 names 向量容量足够，避免越界
+        if ((int)names.size() <= new_id) {
+            names.resize(new_id + 1, "Unknown");
+        }
+        names[new_id] = name;
+
+        // C. 更新识别模型 (增量更新)
+        // 构造临时的 vector 传给 update/train 接口
+        std::vector<cv::Mat> new_imgs = { gray_frame };
+        std::vector<int> new_labels = { new_id };
+
+        // 如果是系统第一个用户，必须用 train 初始化；否则用 update 追加
+        if (!trained) {
+            recog->train(new_imgs, new_labels);
+            trained = true;
+            std::cout << ">>> [Business] 模型初始化训练完成。" << std::endl;
+        } else {
+            recog->update(new_imgs, new_labels);
+            std::cout << ">>> [Business] 模型增量更新完成。" << std::endl;
+        }
+
+        // D. 立即保存到磁盘 (Model Persistence)
+        // 这样下次启动时，business_init 就能直接读取这个 xml 文件
+        try {
+            recog->write(MODEL_FILE);
+            std::cout << ">>> [Business] 模型已成功保存至: " << MODEL_FILE << std::endl;
+        } catch (const cv::Exception& e) {
+            std::cerr << ">>> [Error] 模型文件保存失败: " << e.what() << std::endl;
+        }
+
         // 刷新缓存，确保列表页能看到新用户
         business_get_user_count(); 
         return true;

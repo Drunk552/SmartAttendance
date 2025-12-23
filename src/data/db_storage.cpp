@@ -110,8 +110,16 @@ bool data_init() {
         "CREATE TABLE IF NOT EXISTS attendance_rules ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "company_name TEXT, "
-        "late_threshold INTEGER DEFAULT 0, "
-        "early_leave_threshold INTEGER DEFAULT 0);";
+        "late_threshold INTEGER DEFAULT 15, "
+        "early_leave_threshold INTEGER DEFAULT 0, "
+        // 新增字段
+        "device_id INTEGER DEFAULT 1, "
+        "volume INTEGER DEFAULT 70, "
+        "screensaver_time INTEGER DEFAULT 0, " // 0=关闭
+        "max_admins INTEGER DEFAULT 10, "
+        "relay_delay INTEGER DEFAULT 5, "      // 默认开门5秒
+        "wiegand_fmt INTEGER DEFAULT 26 "      // 默认韦根26
+        ");";
     
     // (D) 用户表 (核心升级：包含权限、密码、关联部门、人脸BLOB)
     const char* sql_users = 
@@ -122,6 +130,7 @@ bool data_init() {
         "card_id TEXT, "
         "privilege INTEGER DEFAULT 0, " // 0:User, 1:Admin
         "face_data BLOB, "              // 人脸二进制数据
+        "fingerprint_data BLOB, "
         "dept_id INTEGER, "
         "default_shift_id INTEGER, " // 绑定的默认班次ID
         "FOREIGN KEY(dept_id) REFERENCES departments(id) ON DELETE SET NULL, "
@@ -139,7 +148,7 @@ bool data_init() {
         "FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, "
         "FOREIGN KEY(shift_id) REFERENCES shifts(id) ON DELETE SET NULL);";
 
-    // (F) [新增] 部门周排班表 (联合主键确保一个部门一天只有一条规则)
+    // (F) 部门周排班表 (联合主键确保一个部门一天只有一条规则)
     const char* sql_dept_sch = 
         "CREATE TABLE IF NOT EXISTS dept_schedule ("
         "dept_id INTEGER, "
@@ -149,7 +158,7 @@ bool data_init() {
         "FOREIGN KEY(dept_id) REFERENCES departments(id) ON DELETE CASCADE, "
         "FOREIGN KEY(shift_id) REFERENCES shifts(id) ON DELETE SET NULL);";
 
-    // (G) [新增] 用户特定日期排班表 (用于调休、加班或特定排班)
+    // (G) 用户特定日期排班表 (用于调休、加班或特定排班)
     const char* sql_user_sch = 
         "CREATE TABLE IF NOT EXISTS user_schedule ("
         "user_id INTEGER, "
@@ -159,6 +168,16 @@ bool data_init() {
         "FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, "
         "FOREIGN KEY(shift_id) REFERENCES shifts(id) ON DELETE SET NULL);";
 
+    // (H) 响铃计划表 (存储16组)
+    const char* sql_bells = 
+        "CREATE TABLE IF NOT EXISTS bells ("
+        "id INTEGER PRIMARY KEY, "    // 固定ID 1-16
+        "time TEXT, "                 // HH:MM
+        "duration INTEGER, "          // 秒
+        "days_mask INTEGER, "         // 位掩码
+        "enabled INTEGER "            // 0/1
+        ");";
+
     // 创建联合索引：加速 "查某人最近打卡" 和 "查某段时间记录"
     // 索引命名为 idx_att_user_time
     const char* sql_index = 
@@ -166,6 +185,7 @@ bool data_init() {
 
     bool ret = exec_sql(sql_dept, "Create Dept") && 
                exec_sql(sql_shifts, "Create Shifts V2") &&
+               exec_sql(sql_bells, "Create Bells") &&
                exec_sql(sql_rules, "Create Rules") && 
                exec_sql(sql_users, "Create Users") &&
                exec_sql(sql_dept_sch, "Create Dept Schedule") && 
@@ -239,7 +259,7 @@ bool data_seed() {
         std::cout << "   [Seed] Created Standard Shift (Seg1: 08-12, Seg2: 14-18)." << std::endl;
     }
 
-    // [新增] 3. 播种默认考勤规则
+    //  3. 播种默认考勤规则
     if (is_table_empty("attendance_rules")) {
         // 默认允许迟到 15 分钟
         const char* sql = "INSERT INTO attendance_rules (company_name, late_threshold, early_leave_threshold) VALUES ('Smart Co.', 15, 0);";
@@ -247,7 +267,7 @@ bool data_seed() {
         std::cout << "   [Seed] Created default rules (Late Threshold: 15m)." << std::endl;
     }
 
-    // 3. 播种默认管理员 (如果用户表为空)
+    // 4. 播种默认管理员 (如果用户表为空)
     if (is_table_empty("users")) {
         UserData admin;
         admin.name = "SuperAdmin";
@@ -266,6 +286,19 @@ bool data_seed() {
         if (uid > 0) {
             std::cout << "   [Seed] Created default admin: 'SuperAdmin' (ID: " << uid << ", Pwd: 888888)" << std::endl;
         }
+    }
+
+    // 5. 初始化 16 组响铃槽位
+    if (is_table_empty("bells")) {
+        db_begin_transaction();
+        for (int i = 1; i <= 16; i++) {
+            // 默认：00:00, 响5秒, 全不选, 禁用
+            std::string sql = "INSERT INTO bells (id, time, duration, days_mask, enabled) VALUES (" 
+                            + std::to_string(i) + ", '00:00', 5, 0, 0);";
+            exec_sql(sql.c_str(), "Seed Bell");
+        }
+        db_commit_transaction();
+        std::cout << "   [Seed] Created 16 empty bell schedules." << std::endl;
     }
 
     return true;
@@ -382,18 +415,39 @@ std::vector<ShiftInfo> db_get_shifts() {
 }
 
 RuleConfig db_get_global_rules() {
-    RuleConfig config = {"MyCompany", 15, 0}; // 默认兜底值
-    
-    // 查询第一条规则记录
-    const char* sql = "SELECT company_name, late_threshold, early_leave_threshold FROM attendance_rules LIMIT 1;";
+    // 1. 设置默认值 (防止数据库字段为NULL或读取失败)
+    RuleConfig config;
+    config.company_name = "Smart Co.";
+    config.late_threshold = 15;
+    config.early_leave_threshold = 0;
+    config.device_id = 1;
+    config.volume = 70;
+    config.screensaver_time = 0;
+    config.max_admins = 10;
+    config.relay_delay = 5;
+    config.wiegand_fmt = 26;
+
+    // 2. 查询所有字段
+    const char* sql = "SELECT company_name, late_threshold, early_leave_threshold, "
+                      "device_id, volume, screensaver_time, max_admins, relay_delay, wiegand_fmt "
+                      "FROM attendance_rules LIMIT 1;";
     
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
         if (sqlite3_step(stmt) == SQLITE_ROW) {
+            // 读取原有字段
             const char* name = (const char*)sqlite3_column_text(stmt, 0);
-            config.company_name = name ? name : "MyCompany";
+            config.company_name = name ? name : "Smart Co.";
             config.late_threshold = sqlite3_column_int(stmt, 1);
             config.early_leave_threshold = sqlite3_column_int(stmt, 2);
+
+            // 读取新字段
+            config.device_id = sqlite3_column_int(stmt, 3);
+            config.volume = sqlite3_column_int(stmt, 4);
+            config.screensaver_time = sqlite3_column_int(stmt, 5);
+            config.max_admins = sqlite3_column_int(stmt, 6);
+            config.relay_delay = sqlite3_column_int(stmt, 7);
+            config.wiegand_fmt = sqlite3_column_int(stmt, 8);
         }
     }
     sqlite3_finalize(stmt);
@@ -459,19 +513,39 @@ bool db_delete_shift(int shift_id) {
     return ok;
 }
 
-bool db_update_global_rules(const std::string& company_name, int late_min, int early_min) {
-    // 强制更新 id=1 的记录 (我们在 data_seed 中已经保证了 id=1 存在)
-    const char* sql = "UPDATE attendance_rules SET company_name=?, late_threshold=?, early_leave_threshold=? WHERE id=1;";
+bool db_update_global_rules(const RuleConfig& config) {
+    // 强制更新 id=1 的记录
+    const char* sql = "UPDATE attendance_rules SET "
+                      "company_name=?, late_threshold=?, early_leave_threshold=?, "
+                      "device_id=?, volume=?, screensaver_time=?, max_admins=?, "
+                      "relay_delay=?, wiegand_fmt=? "
+                      "WHERE id=1;";
     
     sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Update Rules Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
     
-    sqlite3_bind_text(stmt, 1, company_name.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, late_min);
-    sqlite3_bind_int(stmt, 3, early_min);
+    // 绑定原有参数
+    sqlite3_bind_text(stmt, 1, config.company_name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, config.late_threshold);
+    sqlite3_bind_int(stmt, 3, config.early_leave_threshold);
+
+    // [新增] 绑定新参数
+    sqlite3_bind_int(stmt, 4, config.device_id);
+    sqlite3_bind_int(stmt, 5, config.volume);
+    sqlite3_bind_int(stmt, 6, config.screensaver_time);
+    sqlite3_bind_int(stmt, 7, config.max_admins);
+    sqlite3_bind_int(stmt, 8, config.relay_delay);
+    sqlite3_bind_int(stmt, 9, config.wiegand_fmt);
     
     bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
+
+    if(ok) {
+        std::cout << "[Data] System Config Updated." << std::endl;
+    }
     return ok;
 }
 
@@ -522,8 +596,8 @@ UserData db_get_user_info(int user_id) {
     UserData u;
     u.id = 0; // 0 表示无效/未找到
     
-    // 注意：此接口通常用于 UI 显示详情，暂不读取 face_data 以提升性能
-    const char* sql = "SELECT id, name, password, card_id, privilege, dept_id FROM users WHERE id=?;";
+    // 注意：此接口通常用于 UI 显示详情，暂不读取 face_demo 以提升性能
+    const char* sql = "SELECT id, name, password, card_id, privilege, dept_id, fingerprint_data FROM users WHERE id=?;";
     
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
@@ -540,6 +614,15 @@ UserData db_get_user_info(int user_id) {
             
             u.role = sqlite3_column_int(stmt, 4);
             u.dept_id = sqlite3_column_int(stmt, 5);
+            
+            // 读取指纹 BLOB 数据 (索引为 6)
+            const void* fp_blob = sqlite3_column_blob(stmt, 6);
+            int fp_bytes = sqlite3_column_bytes(stmt, 6);
+            if (fp_blob && fp_bytes > 0) {
+                // 将二进制数据拷贝到 UserData 的指纹字段中
+                // 注意：请确保你的 db_storage.h 中 UserData 结构体已添加了 fingerprint_feature 字段
+                u.fingerprint_feature.assign((const unsigned char*)fp_blob, (const unsigned char*)fp_blob + fp_bytes);
+            }
         }
     }
     sqlite3_finalize(stmt);
@@ -669,6 +752,55 @@ ShiftInfo db_get_user_shift(int user_id) {
     }
     sqlite3_finalize(stmt);
     return s;
+}
+
+//  用户信息修改接口 (不含密码)
+bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int privilege, const std::string& card_id) {
+    const char* sql = 
+        "UPDATE users SET name=?, dept_id=?, privilege=?, card_id=? WHERE id=?;";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Update User Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    // 绑定参数
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
+    
+    if (dept_id > 0) sqlite3_bind_int(stmt, 2, dept_id);
+    else sqlite3_bind_null(stmt, 2); // 部门为空
+    
+    sqlite3_bind_int(stmt, 3, privilege);
+    sqlite3_bind_text(stmt, 4, card_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 5, user_id);
+
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    
+    if (ok) std::cout << "[Data] User " << user_id << " info updated." << std::endl;
+    return ok;
+}
+
+// 用户密码更新接口
+bool db_update_user_password(int user_id, const std::string& new_raw_password) {
+    const char* sql = "UPDATE users SET password=? WHERE id=?;";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
+
+    // 1. 对新密码进行哈希处理 (复用现有的哈希函数)
+    std::string hashed_pwd = simple_hash_password(new_raw_password);
+
+    // 2. 绑定参数
+    sqlite3_bind_text(stmt, 1, hashed_pwd.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, user_id);
+
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    
+    if (ok) std::cout << "[Data] User " << user_id << " password updated." << std::endl;
+    return ok;
 }
 
 // ================= 4. 考勤记录 DAO =================
@@ -1004,4 +1136,42 @@ bool db_factory_reset() {
 
     // 重新初始化（会自动建表和播种默认用户）
     return data_init();
+}
+
+// =================  铃声管理接口 =================
+std::vector<BellSchedule> db_get_all_bells() {
+    std::vector<BellSchedule> list;
+    const char* sql = "SELECT id, time, duration, days_mask, enabled FROM bells ORDER BY id ASC;";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            BellSchedule b;
+            b.id = sqlite3_column_int(stmt, 0);
+            b.time = (const char*)sqlite3_column_text(stmt, 1);
+            b.duration = sqlite3_column_int(stmt, 2);
+            b.days_mask = sqlite3_column_int(stmt, 3);
+            b.enabled = sqlite3_column_int(stmt, 4);
+            list.push_back(b);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return list;
+}
+
+// 更新铃声设置
+bool db_update_bell(const BellSchedule& bell) {
+    const char* sql = "UPDATE bells SET time=?, duration=?, days_mask=?, enabled=? WHERE id=?;";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
+    
+    sqlite3_bind_text(stmt, 1, bell.time.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, bell.duration);
+    sqlite3_bind_int(stmt, 3, bell.days_mask);
+    sqlite3_bind_int(stmt, 4, bell.enabled ? 1 : 0);
+    sqlite3_bind_int(stmt, 5, bell.id);
+    
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    return ok;
 }

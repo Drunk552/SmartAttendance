@@ -64,6 +64,25 @@ struct RuleConfig {
     std::string company_name;
     int late_threshold;       // 允许迟到分钟数 (默认 15)
     int early_leave_threshold;// 允许早退分钟数 (默认 0)
+    int device_id;            // 机器号 (1-255)
+    int volume;               // 音量 (0-100)
+    int screensaver_time;     // 屏保等待时间(分)
+    int max_admins;           // 管理员人数限制
+    // --- 门禁参数  ---
+    int relay_delay;          // 继电器延时(秒)
+    int wiegand_fmt;          // 韦根格式 (26/34)
+};
+
+/**
+ * @brief 定时响铃配置结构体 
+ */
+struct BellSchedule {
+    int id;             // 序号 (1-16)
+    std::string time;   // 响铃时间 "HH:MM"
+    int duration;       // 响铃时长 (秒)
+    int days_mask;      // 周期掩码 (位操作): bit0=周日, bit1=周一 ... bit6=周六
+                        // 例如: 01111110 (0x7E) 代表周一到周五
+    bool enabled;       // 是否启用
 };
 
 /**
@@ -99,6 +118,9 @@ struct UserData {
     /// @brief 人脸特征数据 (二进制流)
     /// @details 对应数据库中的 BLOB 字段，存储编码后的 JPG 图片数据
     std::vector<uchar> face_feature; 
+    
+    /// @brief 指纹特征数据 (二进制流)
+    std::vector<uint8_t> fingerprint_feature;
 };
 
 /**
@@ -230,13 +252,23 @@ bool db_delete_shift(int shift_id);
 RuleConfig db_get_global_rules();
 
 /**
- * @brief 更新全局考勤规则
- * @param company_name 公司名称
- * @param late_min 迟到阈值(分钟)
- * @param early_min 早退阈值(分钟)
+ * @brief 更新全局考勤规则配置
+ * @param config 规则配置结构体
  * @return true 更新成功
  */
-bool db_update_global_rules(const std::string& company_name, int late_min, int early_min);
+bool db_update_global_rules(const RuleConfig& config);
+
+/** 获取所有定时响铃配置 
+ * @return std::vector<BellSchedule> 响铃列表
+ */
+std::vector<BellSchedule> db_get_all_bells();
+
+/**
+ * @brief 更新单个定时响铃配置
+ * @param bell 响铃配置结构体
+ * @return true 更新成功
+ */
+bool db_update_bell(const BellSchedule& bell);
 
 // ================= 3. 用户管理接口 (User DAO) =================
 
@@ -292,6 +324,25 @@ bool db_assign_user_shift(int user_id, int shift_id);
  * @return ShiftInfo 班次信息 (如果未绑定，返回ID=0的空结构体)
  */
 ShiftInfo db_get_user_shift(int user_id);
+
+/**
+ * @brief 更新用户基本信息 (不包含密码和人脸)
+ * @param user_id 要修改的用户ID
+ * @param name 新姓名
+ * @param dept_id 新部门ID
+ * @param privilege 新权限 (0:普通用户, 1:管理员)
+ * @param card_id 新卡号
+ * @return true 更新成功
+ */
+bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int privilege, const std::string& card_id);
+
+/**
+ * @brief 单独修改用户密码
+ * @param user_id 用户ID
+ * @param new_raw_password 新密码 (明文，内部会自动哈希)
+ * @return true 修改成功
+ */
+bool db_update_user_password(int user_id, const std::string& new_raw_password);
 
 // ================= 4. 考勤记录接口 (Attendance DAO) =================
 
