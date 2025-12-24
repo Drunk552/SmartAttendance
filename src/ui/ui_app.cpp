@@ -21,24 +21,16 @@
 #include <vector>
 #include <ctime>
 #include <sstream>
-#include <sys/statvfs.h>// [Epic 4.3] 系统调用
-// [Epic 4.4 新增]
 #include <thread>
 #include <mutex>
 #include <atomic>
-
-// 【新增】声明你的自定义字体
-LV_FONT_DECLARE(font_noto_16);
-
-// 业务接口
-#include "../business/face_demo.h"
 #include "lv_conf.h"
-#include "../data/db_storage.h"//数据层接口
-
-// [Epic 4.2 新增] 报表业务
-#include "business/report_generator.h"
 #include <unistd.h> // for sleep (模拟耗时)
-#include <filesystem> // [新增] C++17 标准文件系统库
+#include <filesystem> // C++17 标准文件系统库
+#include "ui_controller.h"
+
+// 声明你的自定义字体
+LV_FONT_DECLARE(font_noto_16);
 
 // ================= 宏定义 =================
 #define SCREEN_W 240
@@ -112,25 +104,6 @@ static lv_obj_t *img_camera = nullptr;
 
 static lv_obj_t *label_time = nullptr;
 
-// 辅助函数：获取数据库中下一个可用的最小工号
-static int get_next_available_id() { 
-    // 1. 获取当前所有用户
-    std::vector<UserData> users = db_get_all_users();
-    
-    // 2. 将现有ID存入集合
-    std::set<int> existing_ids;
-    for (const auto& user : users) {
-        existing_ids.insert(user.id);
-    }
-    
-    // 3. 寻找最小的未被占用的正整数
-    int next_id = 1;
-    while (existing_ids.find(next_id) != existing_ids.end()) {
-        next_id++;
-    }
-    return next_id;
-}
-
 // ================= 样式定义 =================
 static lv_style_t style_base;
 static lv_style_t style_menu_btn;
@@ -173,25 +146,6 @@ static void request_exit(void) {
     g_program_should_exit = true; 
 }
 
-// [Epic 4.3] 检查磁盘空间 (<100MB 返回 true)
-static bool check_disk_low() {
-    struct statvfs stat;
-    if (statvfs(".", &stat) != 0) return false;
-    
-    unsigned long long free_bytes = stat.f_bavail * stat.f_frsize;
-    unsigned long long free_mb = free_bytes / (1024 * 1024);
-    
-    return (free_mb < 100); 
-}
-
-static std::string get_current_time_str() {
-    std::time_t rawtime = std::time(nullptr);
-    std::tm *timeinfo = std::localtime(&rawtime);
-    char buf[16];
-    std::strftime(buf, sizeof(buf), "%H:%M", timeinfo);
-    return std::string(buf);
-}
-
 static void camera_timer_cb(lv_timer_t * /*timer*/) {
     if (g_program_should_exit) return; 
     
@@ -216,13 +170,13 @@ static void time_timer_cb(lv_timer_t * /*timer*/) {
 
     // 1. 更新时间
     if (label_time && lv_obj_is_valid(label_time)) {
-        std::string t = get_current_time_str();
+        std::string t = UiController::getInstance()->getCurrentTimeStr();
         lv_label_set_text(label_time, t.c_str());
     }
 
     // 2. [Epic 4.3] 磁盘监控 (仅在主页显示)
     if (lv_screen_active() == screen_main) {
-        bool is_low = check_disk_low();
+        bool is_low = UiController::getInstance()->isDiskFull();
         g_disk_full = is_low;
 
         if (label_disk_warn) {
@@ -252,65 +206,16 @@ static void ui_download_report_handler() {
     lv_obj_center(mbox);
     lv_timer_handler(); // 强制刷新 UI 显示提示框
     
-    // 2. 模拟耗时 (1秒)
-    // 注意：实际项目中应避免在 UI 线程 sleep，此处仅为演示
-    #ifdef _WIN32
-        _sleep(1000);
-    #else
-        usleep(1000 * 1000); 
-    #endif
+    bool success = UiController::getInstance()->exportReportToUsb();// 调用封装后的报表导出接口
 
-    // 3. 创建目录 (使用 C++17 std::filesystem，跨平台且无需 mkdir 头文件)
-    // 自动创建 output/usb_sim 及其父目录
-    try {
-        std::filesystem::create_directories("output/usb_sim");
-    } catch (const std::exception& e) {
-        // 创建失败的处理
-        #if LV_VERSION_CHECK(9,0,0)
-            lv_obj_delete(mbox); // 关闭之前的提示框
-        #else
-            lv_msgbox_close(mbox);
-        #endif
-        
-        // 弹出错误提示
-        #if LV_VERSION_CHECK(9,0,0)
-            mbox = lv_msgbox_create(NULL);
-            lv_msgbox_add_title(mbox, "Error");
-            lv_msgbox_add_text(mbox, "Cannot create dir!");
-            lv_msgbox_add_close_button(mbox);
-        #else
-            lv_msgbox_create(NULL, "Error", "Cannot create dir!", NULL, true);
-        #endif
-        return;
-    }
-
-    // [优化] 动态计算时间范围 (本月初 ~ 今天)
-    std::time_t t = std::time(nullptr);
-    std::tm* now = std::localtime(&t);
-    
-    char start_date[16];
-    char end_date[16];
-    
-    // 格式化为 YYYY-MM-01 (本月第一天)
-    std::strftime(start_date, sizeof(start_date), "%Y-%m-01", now);
-    // 格式化为 YYYY-MM-DD (今天)
-    std::strftime(end_date, sizeof(end_date), "%Y-%m-%d", now);
-
-    // 4. 调用业务层生成报表
-    ReportGenerator generator;
-    // 使用动态计算的日期
-    bool success = generator.exportReport(ReportType::SUMMARY, 
-                                            start_date, end_date, 
-                                            "output/usb_sim/attendance_report.xlsx");
-
-    // 5. 关闭 "检测中" 的提示框
+    // 2. 关闭 "检测中" 的提示框
 #if LV_VERSION_CHECK(9,0,0)
     lv_obj_delete(mbox); // v9 使用 lv_obj_delete 删除对象
 #else
     lv_msgbox_close(mbox); // v8 使用 lv_msgbox_close
 #endif
 
-    // 6. 显示最终结果
+    // 3. 显示最终结果
 #if LV_VERSION_CHECK(9,0,0)
     mbox = lv_msgbox_create(NULL);
     if (success) {
@@ -485,7 +390,7 @@ static void capture_thread_func() {
     while (!g_program_should_exit) {
         // 调用业务层接口获取一帧 (这是最耗时的步骤：采集+识别+缩放+转码)
         // 注意：business_get_display_frame 内部已通过 face_demo.cpp 的锁保护了 OpenCV 资源
-        bool ret = business_get_display_frame(temp_buf.data(), CAM_W, CAM_H);
+        bool ret = UiController::getInstance()->getDisplayFrame(temp_buf.data(), CAM_W, CAM_H);
 
         if (ret) {
             // 获取锁，快速将数据放入后台缓冲区
@@ -933,7 +838,7 @@ static void register_btn_next_event_handler(lv_event_t * e) {
     }
 
     // 3. 获取部门ID (需要重新获取部门列表以匹配索引)
-    auto depts = db_get_departments();
+    auto depts = UiController::getInstance()->getDepartmentList();
     if (selected_dept_idx < depts.size()) {
         g_reg_dept_id = depts[selected_dept_idx].id;
     } else {
@@ -1326,7 +1231,7 @@ static StorageStats get_storage_statistics() {
     StorageStats stats = {0, 0, 0, 0};
     
     // A. 统计人员信息
-    int count = business_get_user_count();
+    int count = UiController::getInstance()->getUserCount();
     stats.total_users = count;
     
     // 遍历检查管理员和密码 (虽然有点笨，但这是不修改 DB 接口的最快方法)
@@ -1335,7 +1240,7 @@ static StorageStats get_storage_statistics() {
     for(int i=0; i<count; i++) {
         // 注意：这里假设 business_get_user_at 只返回 ID 和 Name
         // 为了统计 role 和 password，我们需要查 DB 详情
-        if(business_get_user_at(i, &uid, name_buf, sizeof(name_buf))) {
+        if(UiController::getInstance()->getUserAt(i, &uid, name_buf, sizeof(name_buf))) {
              UserData u = db_get_user_info(uid);
              if (u.role == 1) stats.admin_count++;
              if (!u.password.empty()) stats.pwd_users++;
@@ -1563,7 +1468,7 @@ static void load_user_list_screen(void) {
     lv_obj_clean(obj_list_view);
     
     // C. 从业务层获取用户数据
-    int count = business_get_user_count(); // 调用 face_demo.cpp 的接口
+    int count = UiController::getInstance()->getUserCount(); // 调用 face_demo.cpp 的接口
     std::printf("[UI] Fetching users: %d\n", count);
     
     if (count == 0) {
@@ -1574,7 +1479,7 @@ static void load_user_list_screen(void) {
         char label_buf[128];
         
         for(int i=0; i<count; i++) {
-            if (business_get_user_at(i, &id, name_buf, sizeof(name_buf))) {
+            if (UiController::getInstance()->getUserAt(i, &id, name_buf, sizeof(name_buf))) {
                 std::snprintf(label_buf, sizeof(label_buf), "[%d] %s", id, name_buf);
                 
                 // 1. 创建按钮
@@ -1644,7 +1549,7 @@ static void reg_step2_event_cb(lv_event_t *e) {
             std::printf("[UI] Capturing face for: %s\n", g_reg_name.c_str());
             
             // 调用业务接口保存
-            if (business_register_user(g_reg_name.c_str(), g_reg_dept_id)) {
+            if (UiController::getInstance()->registerNewUser(g_reg_name.c_str(), g_reg_dept_id)) {
                 std::printf("[UI] Reg Success! Back to Menu.\n");
                 
                 // 简单反馈：延迟或直接返回
@@ -1773,7 +1678,7 @@ void load_register_form_screen() {
     lv_textarea_set_one_line(ta_id, true);
     lv_obj_add_state(ta_id, LV_STATE_DISABLED);
     
-    int new_id = get_next_available_id();
+    int new_id = UiController::getInstance()->generateNextUserId();
     g_reg_user_id = new_id;
     char buf[32];
     lv_snprintf(buf, sizeof(buf), "%06d", new_id);
@@ -1805,7 +1710,7 @@ void load_register_form_screen() {
     lv_obj_remove_flag(dd_dept, LV_OBJ_FLAG_SCROLLABLE);
 
     // 填充数据
-    auto depts = db_get_departments();
+    auto depts = UiController::getInstance()->getDepartmentList();
     std::string opts = "";
     for (const auto& d : depts) {
         if (!opts.empty()) opts += "\n";
@@ -2061,7 +1966,7 @@ static void load_record_result_screen(int user_id) {
     lv_group_remove_all_objs(g_keypad_group);
     
     // 2. [数据层交互] 获取员工详细档案
-    UserData user = db_get_user_info(user_id);
+    UserData user = UiController::getInstance()->getUserInfo(user_id);
     
     // 3. 构建员工信息卡片
     lv_obj_t *header = lv_obj_create(obj_result_container);
