@@ -53,6 +53,12 @@ public:
     bool getDisplayFrame(uint8_t* buffer, int width, int height);
 
     void startBackgroundServices(); // 启动所有后台线程
+    // 更新用户名称
+    bool updateUserName(int userId, const std::string& newName);
+    // 更新用户密码
+    bool updateUserPassword(int userId, const std::string& newPassword);
+    // 更新用户角色 (0:普通, 1:管理员)
+    bool updateUserRole(int userId, int newRole);
 
 private:
     UiController() = default; // 私有构造

@@ -596,35 +596,63 @@ UserData db_get_user_info(int user_id) {
     UserData u;
     u.id = 0; // 0 表示无效/未找到
     
-    // 注意：此接口通常用于 UI 显示详情，暂不读取 face_demo 以提升性能
-    const char* sql = "SELECT id, name, password, card_id, privilege, dept_id, fingerprint_data FROM users WHERE id=?;";
+    const char* sql = 
+        "SELECT u.id, u.name, u.password, u.card_id, u.privilege, u.dept_id, "
+        "u.face_data, u.fingerprint_data, d.name "
+        "FROM users u "
+        "LEFT JOIN departments d ON u.dept_id = d.id "
+        "WHERE u.id=?;";
     
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, user_id);
+        
         if (sqlite3_step(stmt) == SQLITE_ROW) {
+            // [0] ID
             u.id = sqlite3_column_int(stmt, 0);
-            u.name = (const char*)sqlite3_column_text(stmt, 1);
             
+            // [1] Name
+            const char* name = (const char*)sqlite3_column_text(stmt, 1);
+            u.name = name ? name : "";
+            
+            // [2] Password
             const char* pwd = (const char*)sqlite3_column_text(stmt, 2);
             u.password = pwd ? pwd : "";
             
+            // [3] Card ID
             const char* card = (const char*)sqlite3_column_text(stmt, 3);
             u.card_id = card ? card : "";
             
+            // [4] Role (DB字段是 privilege)
             u.role = sqlite3_column_int(stmt, 4);
+            
+            // [5] Dept ID
             u.dept_id = sqlite3_column_int(stmt, 5);
             
-            // 读取指纹 BLOB 数据 (索引为 6)
-            const void* fp_blob = sqlite3_column_blob(stmt, 6);
-            int fp_bytes = sqlite3_column_bytes(stmt, 6);
-            if (fp_blob && fp_bytes > 0) {
-                // 将二进制数据拷贝到 UserData 的指纹字段中
-                // 注意：请确保你的 db_storage.h 中 UserData 结构体已添加了 fingerprint_feature 字段
-                u.fingerprint_feature.assign((const unsigned char*)fp_blob, (const unsigned char*)fp_blob + fp_bytes);
+            // [6] Face Data (人脸数据)
+            const void* face_blob = sqlite3_column_blob(stmt, 6);
+            int face_bytes = sqlite3_column_bytes(stmt, 6);
+            if (face_blob && face_bytes > 0) {
+                const uint8_t* ptr = (const uint8_t*)face_blob;
+                u.face_feature.assign(ptr, ptr + face_bytes);
             }
+
+            // [7] Fingerprint Data (指纹数据)
+            const void* fp_blob = sqlite3_column_blob(stmt, 7);
+            int fp_bytes = sqlite3_column_bytes(stmt, 7);
+            if (fp_blob && fp_bytes > 0) {
+                const uint8_t* ptr = (const uint8_t*)fp_blob;
+                u.fingerprint_feature.assign(ptr, ptr + fp_bytes);
+            }
+
+            // [8] Dept Name (部门名称) - 修复部门不显示的问题
+            const char* dname = (const char*)sqlite3_column_text(stmt, 8);
+            u.dept_name = dname ? dname : "Unknown"; // 如果没部门，显示Unknown
         }
+    } else {
+        std::cerr << "[Data] Get User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
     }
+    
     sqlite3_finalize(stmt);
     return u;
 }
@@ -642,71 +670,47 @@ bool db_delete_user(int user_id) {
 }
 
 std::vector<UserData> db_get_all_users() {
-    std::vector<UserData> list;
-    // 注意：此接口用于模型训练，必须读取 face_data
-    const char* sql = "SELECT id, name, face_data, privilege, dept_id FROM users;";
-    
+    std::vector<UserData> users;
+    // 使用 LEFT JOIN 关联查询 departments 表，获取 dept_name
+    // 假设你的部门表叫 departments，字段是 id 和 name
+    const char* sql = "SELECT u.id, u.name, u.dept_id, u.privilege, u.password, u.card_id, u.face_data, d.name "
+                  "FROM users u "
+                  "LEFT JOIN departments d ON u.dept_id = d.id";
+                      
     sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            UserData u;
-            u.id = sqlite3_column_int(stmt, 0);
-            u.name = (const char*)sqlite3_column_text(stmt, 1);
-            
-            // 读取 BLOB 到 vector<uchar>
-            const void* blob = sqlite3_column_blob(stmt, 2);
-            int bytes = sqlite3_column_bytes(stmt, 2);
-            if(blob && bytes > 0) {
-                u.face_feature.assign((const uchar*)blob, (const uchar*)blob + bytes);
-            }
-            
-            u.role = sqlite3_column_int(stmt, 3);
-            u.dept_id = sqlite3_column_int(stmt, 4);
-            
-            list.push_back(u);
-        }
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        printf("[DB] Prepare error: %s\n", sqlite3_errmsg(db));
+        return users;
     }
-    sqlite3_finalize(stmt);
-    return list;
-}
 
-std::vector<UserData> db_get_all_users_info() {
-    std::vector<UserData> list;
-    // [优化] 只查基本信息，关联部门表获取名称，不查 face_data BLOB
-    const char* sql = 
-        "SELECT u.id, u.name, u.card_id, u.privilege, u.dept_id, d.name "
-        "FROM users u "
-        "LEFT JOIN departments d ON u.dept_id = d.id "
-        "ORDER BY u.id ASC;";
-    
-    sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            UserData u;
-            u.id = sqlite3_column_int(stmt, 0);
-            
-            const char* name = (const char*)sqlite3_column_text(stmt, 1);
-            u.name = name ? name : "Unknown";
-            
-            const char* card = (const char*)sqlite3_column_text(stmt, 2);
-            u.card_id = card ? card : "";
-            
-            u.role = sqlite3_column_int(stmt, 3);
-            u.dept_id = sqlite3_column_int(stmt, 4);
-            
-            // 获取联表查询出的部门名称
-            const char* dname = (const char*)sqlite3_column_text(stmt, 5);
-            u.dept_name = dname ? dname : "Not Set";
-            
-            // 注意：这里没有加载 face_feature，保持轻量
-            
-            list.push_back(u);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        UserData u;
+        u.id = sqlite3_column_int(stmt, 0);
+        u.name = (const char*)sqlite3_column_text(stmt, 1);
+        u.dept_id = sqlite3_column_int(stmt, 2);
+        u.role = sqlite3_column_int(stmt, 3);
+        
+        const char* pwd = (const char*)sqlite3_column_text(stmt, 4);
+        u.password = pwd ? pwd : "";
+        
+        const char* card = (const char*)sqlite3_column_text(stmt, 5);
+        u.card_id = card ? card : "";
+
+        const void* blob = sqlite3_column_blob(stmt, 6);
+        int bytes = sqlite3_column_bytes(stmt, 6);
+        if (bytes > 0 && blob) {
+             const uint8_t* ptr = (const uint8_t*)blob;
+             u.face_feature.assign(ptr, ptr + bytes);
         }
-    } else {
-        std::cerr << "[Data] Get All Users Info Failed: " << sqlite3_errmsg(db) << std::endl;
+
+        // 获取关联查询出来的部门名称 (第7列，索引从0开始是7)
+        const char* d_name = (const char*)sqlite3_column_text(stmt, 7);
+        u.dept_name = d_name ? d_name : "Unknown"; // 如果查不到部门，显示 Unknown
+
+        users.push_back(u);
     }
     sqlite3_finalize(stmt);
-    return list;
+    return users;
 }
 
 bool db_assign_user_shift(int user_id, int shift_id) {

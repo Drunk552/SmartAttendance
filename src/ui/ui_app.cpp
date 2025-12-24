@@ -53,6 +53,9 @@ static lv_obj_t *obj_list_view = nullptr;  // 列表控件容器
 static lv_obj_t *screen_register = nullptr;
 static lv_obj_t *ta_name = nullptr;      // 名字输入框
 static lv_obj_t *img_face_reg = nullptr; // 注册页面的摄像头预览
+static lv_obj_t *screen_user_info = nullptr;    // Level 2: 详情页
+static lv_obj_t *screen_pwd_change = nullptr;   // Level 3-A: 改密页
+static lv_obj_t *screen_role_auth = nullptr;    // Level 3-B: 权限变更页
 // [Epic 3.4 新增] 考勤记录页
 static lv_obj_t *screen_records = nullptr;
 static lv_obj_t *obj_record_list = nullptr;
@@ -79,6 +82,9 @@ static lv_obj_t *obj_info_grid = nullptr;       // 信息菜单容器
 static lv_obj_t *screen_storage_info = nullptr; // Level 2: 存储详情页
 static lv_obj_t *btn_query_back = nullptr; //  返回按钮指针
 static lv_obj_t *btn_result_back = nullptr; //  结果页返回按钮
+// 强视觉反馈样式 (红底黄框)
+static lv_style_t style_focus_red;
+static bool style_focus_red_inited = false;
 
 // 这些变量用于在注册流程中临时存储数据
 int g_reg_user_id = 0;      // 全局变量：注册时的工号
@@ -119,6 +125,9 @@ static void load_sys_settings_screen(void);
 static void load_sys_adv_screen(void);
 static void load_sys_info_screen(void);
 static void load_storage_info_screen(void);
+static void load_user_info_screen(int user_id);// 详情页
+static void load_password_change_screen(int user_id);// 改密页
+static void load_role_change_auth_screen(int user_id, int current_role);// 权限变更页
 
 // 前向声明：确保编译器知道这个函数存在 // 或者你原来返回上一级菜单的函数名
 void load_register_form_screen();
@@ -140,6 +149,28 @@ static lv_image_dsc_t img_dsc = {
 };
 
 // ================= 辅助函数 =================
+
+/**
+ * @brief 初始化强视觉反馈样式 (红底黄框)
+ */
+static void init_focus_style() {
+    if (style_focus_red_inited) return;
+    
+    lv_style_init(&style_focus_red);
+    
+    // 背景：鲜艳红色
+    lv_style_set_bg_color(&style_focus_red, lv_palette_main(LV_PALETTE_RED));
+    lv_style_set_bg_opa(&style_focus_red, LV_OPA_COVER);
+    
+    // 边框：黄色，3px
+    lv_style_set_border_color(&style_focus_red, lv_palette_main(LV_PALETTE_YELLOW));
+    lv_style_set_border_width(&style_focus_red, 3);
+    
+    // 文本：白色
+    lv_style_set_text_color(&style_focus_red, lv_color_white());
+    
+    style_focus_red_inited = true;
+}
 
 // ================= [内存管理核心] =================
 
@@ -190,6 +221,11 @@ static void free_screen_resources(lv_obj_t** screen_ptr) {
     }
     // screen_storage_info 没有全局子控件，无需特殊处理
 
+    // 如果是新屏幕，不需要特殊置空子对象（因为我们没用全局变量存子对象），直接通过
+    if (screen_ptr == &screen_user_info) {
+        // 这里的子对象都是局部的，不需要置空全局变量
+    }
+
     // 2. 销毁 LVGL 对象 (这会递归销毁所有子对象)
     lv_obj_delete(*screen_ptr);
     
@@ -205,9 +241,8 @@ static void free_screen_resources(lv_obj_t** screen_ptr) {
  */
 static void async_screen_cleanup_cb(lv_timer_t * t) {
     // 1. 获取当前系统真正正在显示的屏幕
-    lv_obj_t * act_scr = nullptr;
-    act_scr = lv_screen_active();
-
+    lv_obj_t * act_scr = lv_screen_active(); // 获取当前活跃屏幕
+    lv_obj_t * keep_scr = (lv_obj_t *)lv_timer_get_user_data(t);
     // 2. 维护所有屏幕指针的列表
     lv_obj_t** all_screens[] = {
         &screen_main, 
@@ -220,13 +255,16 @@ static void async_screen_cleanup_cb(lv_timer_t * t) {
         &screen_sys_settings, 
         &screen_sys_adv, 
         &screen_sys_info,
-        &screen_storage_info
+        &screen_storage_info,
+        &screen_user_info,      // Level 2
+        &screen_pwd_change,     // Level 3-A
+        &screen_role_auth       // Level 3-B
     };
 
     // 3. 遍历销毁所有“非当前显示”的屏幕
     for (auto ptr : all_screens) {
         // 如果屏幕已创建(非空) 且 不是当前活跃屏幕，则销毁
-        if (*ptr != nullptr && *ptr != act_scr) {
+        if (*ptr != nullptr && *ptr != act_scr && *ptr != keep_scr) {
             free_screen_resources(ptr);
         }
     }
@@ -236,10 +274,10 @@ static void async_screen_cleanup_cb(lv_timer_t * t) {
  * @brief 启动异步销毁任务
  * 原来的参数 active_screen 被忽略，改用 lv_screen_active() 动态判断，防止竞态问题
  */
-static void destroy_all_screens_except(lv_obj_t* /*unused*/) {
+static void destroy_all_screens_except(lv_obj_t* screen_to_keep) {
     // 创建一个 10ms 的单次定时器
     // 这样可以确保当前的按键事件回调完全执行完毕后，再执行销毁
-    lv_timer_t * t = lv_timer_create(async_screen_cleanup_cb, 10, nullptr);
+    lv_timer_t * t = lv_timer_create(async_screen_cleanup_cb, 10, screen_to_keep);
     lv_timer_set_repeat_count(t, 1); // 只运行一次，运行完自动删除定时器
 }
 
@@ -893,6 +931,365 @@ static void register_btn_next_event_handler(lv_event_t * e) {
     // 5. 跳转到原有的人脸录入界面
     load_register_step();
 }
+//------------------------------------------------------
+// ================= 员工浏览器界面逻辑 =================
+//------------------------------------------------------
+
+
+// ================= Level 2: 员工信息详情 =================
+
+static void load_user_info_screen(int user_id) {
+    // 1. 创建屏幕
+    if (screen_user_info) lv_obj_delete(screen_user_info);
+    screen_user_info = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_user_info, lv_color_hex(0x0F1C2E), 0);// 深蓝背景
+    // 2. 获取数据
+    UserData u = UiController::getInstance()->getUserInfo(user_id);
+
+    // 3. Grid 容器
+    lv_obj_t *grid = lv_obj_create(screen_user_info);
+    lv_obj_set_size(grid, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(grid, lv_color_hex(0x172A45), 0);// 稍浅的蓝色背景
+    lv_obj_set_style_border_width(grid, 0, 0);
+
+    // 布局定义: 2列 (标签列80px, 内容列其余) x 8行
+    static int32_t col_dsc[] = {80, LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+    static int32_t row_dsc[] = {35, 35, 35, 35, 35, 35, 35, 35, LV_GRID_TEMPLATE_LAST};
+    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
+    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
+
+    lv_group_remove_all_objs(g_keypad_group);
+
+    // --- 辅助 Lambda: 创建行 ---
+    auto create_row = [&](int row, const char* label, lv_obj_t* content) {
+        // Label
+        lv_obj_t *lbl = lv_label_create(grid);
+        lv_label_set_text(lbl, label);
+        lv_obj_add_style(lbl, &style_text_cn, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xAAAAAA), 0); // 灰色标签
+        lv_obj_set_grid_cell(lbl, LV_GRID_ALIGN_START, 0, 1, LV_GRID_ALIGN_CENTER, row, 1);
+        
+        // Content
+        if (content) {
+            lv_obj_set_grid_cell(content, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, row, 1);
+            // 如果是可交互对象，添加红色高亮样式
+            if (lv_obj_has_flag(content, LV_OBJ_FLAG_CLICKABLE) || lv_obj_check_type(content, &lv_textarea_class)) {
+                lv_obj_add_style(content, &style_focus_red, LV_STATE_FOCUSED);
+                lv_group_add_obj(g_keypad_group, content);
+                
+                // 通用 ESC 返回处理
+                lv_obj_add_event_cb(content, [](lv_event_t* e){
+                    if (lv_event_get_key(e) == LV_KEY_ESC) load_user_list_screen();
+                }, LV_EVENT_KEY, nullptr);
+            }
+        }
+        return content;
+    };
+
+    // 1. 工号 (Label)
+    lv_obj_t *lbl_id = lv_label_create(grid);
+    lv_label_set_text_fmt(lbl_id, "%d", u.id);
+    lv_obj_set_style_text_color(lbl_id, lv_color_white(), 0);
+    create_row(0, "工号", lbl_id);
+
+    // 2. 姓名 (Textarea)
+    lv_obj_t *ta_name = lv_textarea_create(grid);
+    lv_textarea_set_one_line(ta_name, true);
+    lv_textarea_set_text(ta_name, u.name.c_str());
+    lv_obj_set_user_data(ta_name, (void*)(intptr_t)u.id);
+    // 失去焦点时保存
+    lv_obj_add_event_cb(ta_name, [](lv_event_t* e){
+         if(lv_event_get_code(e) == LV_EVENT_DEFOCUSED) {
+             // 简单保存逻辑
+             lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
+             int uid = (int)(intptr_t)lv_event_get_user_data(e);
+             UiController::getInstance()->updateUserName(uid, lv_textarea_get_text(ta));
+         }
+    }, LV_EVENT_ALL, nullptr);
+    create_row(1, "姓名", ta_name);
+
+    // 3. 人脸 (Button)
+    lv_obj_t *btn_face = lv_button_create(grid);
+    lv_obj_t *lbl_face = lv_label_create(btn_face);
+    bool has_face = !u.face_feature.empty();
+    lv_label_set_text(lbl_face, has_face ? "已注册 (重录)" : "未注册 (录入)");
+    lv_obj_add_style(lbl_face, &style_text_cn, 0);
+    lv_obj_center(lbl_face);
+    lv_obj_set_user_data(btn_face, (void*)(intptr_t)u.id);
+    lv_obj_add_event_cb(btn_face, [](lv_event_t* e){
+        if (lv_event_get_key(e) == LV_KEY_ENTER) {
+            int uid = (int)(intptr_t)lv_event_get_user_data(e);
+            // 设置全局注册ID，复用现有的注册逻辑
+            g_reg_user_id = uid; 
+            g_reg_name = UiController::getInstance()->getUserInfo(uid).name;
+            load_register_step(); // 跳转去拍照
+        }
+    }, LV_EVENT_KEY, nullptr);
+    create_row(2, "人脸", btn_face);
+
+    // 4. 部门 (Label)
+    lv_obj_t *lbl_dept = lv_label_create(grid);
+    lv_label_set_text(lbl_dept, u.dept_name.c_str());
+    lv_obj_add_style(lbl_dept, &style_text_cn, 0);
+    lv_obj_set_style_text_color(lbl_dept, lv_color_white(), 0);
+    create_row(3, "部门", lbl_dept);
+
+    // 5. 指纹 (Label)
+    lv_obj_t *lbl_fp = lv_label_create(grid);
+    lv_label_set_text(lbl_fp, "未录入 (暂不支持)");
+    lv_obj_add_style(lbl_fp, &style_text_cn, 0);
+    lv_obj_set_style_text_color(lbl_fp, lv_palette_main(LV_PALETTE_GREY), 0);
+    create_row(4, "指纹", lbl_fp);
+
+    // 6. 密码 (Button)
+    lv_obj_t *btn_pwd = lv_button_create(grid);
+    lv_obj_t *lbl_pwd = lv_label_create(btn_pwd);
+    bool has_pwd = !u.password.empty();
+    lv_label_set_text(lbl_pwd, has_pwd ? "已注册 (修改)" : "未注册 (设置)");
+    lv_obj_add_style(lbl_pwd, &style_text_cn, 0);
+    lv_obj_center(lbl_pwd);
+    lv_obj_set_user_data(btn_pwd, (void*)(intptr_t)u.id);
+    lv_obj_add_event_cb(btn_pwd, [](lv_event_t* e){
+        if (lv_event_get_key(e) == LV_KEY_ENTER) {
+            load_password_change_screen((int)(intptr_t)lv_event_get_user_data(e));
+        }
+    }, LV_EVENT_KEY, nullptr);
+    create_row(5, "密码", btn_pwd);
+
+    // 7. 卡号 (Label)
+    lv_obj_t *lbl_card = lv_label_create(grid);
+    lv_label_set_text(lbl_card, u.card_id.empty() ? "无" : u.card_id.c_str());
+    lv_obj_set_style_text_color(lbl_card, lv_color_white(), 0);
+    create_row(6, "卡号", lbl_card);
+
+    // 8. 权限 (Button)
+    lv_obj_t *btn_role = lv_button_create(grid);
+    lv_obj_t *lbl_role = lv_label_create(btn_role);
+    lv_label_set_text(lbl_role, (u.role == 1) ? "管理员" : "普通员工");
+    lv_obj_add_style(lbl_role, &style_text_cn, 0);
+    lv_obj_center(lbl_role);
+    
+    // 我们需要传递 uid 和 current_role，这里简单用 struct 指针或位运算压缩
+    // 简单起见，仅传 uid，进下一级再查一次 role
+    lv_obj_set_user_data(btn_role, (void*)(intptr_t)u.id);
+    lv_obj_add_event_cb(btn_role, [](lv_event_t* e){
+        if (lv_event_get_key(e) == LV_KEY_ENTER) {
+            int uid = (int)(intptr_t)lv_event_get_user_data(e);
+            // 重新获取一下 role 确保准确
+            int r = UiController::getInstance()->getUserInfo(uid).role;
+            load_role_change_auth_screen(uid, r);
+        }
+    }, LV_EVENT_KEY, nullptr);
+    create_row(7, "权限", btn_role);
+
+    // 4. 显示
+    lv_screen_load(screen_user_info);
+    destroy_all_screens_except(screen_user_info);
+    
+    // 默认聚焦姓名
+    lv_group_focus_obj(ta_name);
+}
+
+// ================= Level 3-A: 修改密码 =================
+
+static void load_password_change_screen(int user_id) {
+    if (screen_pwd_change) lv_obj_delete(screen_pwd_change);
+    screen_pwd_change = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_pwd_change, lv_color_black(), 0);
+
+    lv_obj_t *title = lv_label_create(screen_pwd_change);
+    lv_label_set_text(title, "设置密码 / Set Password");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_add_style(title, &style_text_cn, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+
+    lv_group_remove_all_objs(g_keypad_group);
+
+    // 容器
+    lv_obj_t *cont = lv_obj_create(screen_pwd_change);
+    lv_obj_set_size(cont, 220, 200);
+    lv_obj_align(cont, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(0x222222), 0);
+
+    // 输入框 1
+    lv_obj_t *p1 = lv_textarea_create(cont);
+    lv_textarea_set_password_mode(p1, true);
+    lv_textarea_set_placeholder_text(p1, "输入新密码");
+    lv_textarea_set_one_line(p1, true);
+    lv_obj_set_width(p1, LV_PCT(100));
+    lv_obj_add_style(p1, &style_focus_red, LV_STATE_FOCUSED);
+
+    // 输入框 2
+    lv_obj_t *p2 = lv_textarea_create(cont);
+    lv_textarea_set_password_mode(p2, true);
+    lv_textarea_set_placeholder_text(p2, "再次输入");
+    lv_textarea_set_one_line(p2, true);
+    lv_obj_set_width(p2, LV_PCT(100));
+    lv_obj_add_style(p2, &style_focus_red, LV_STATE_FOCUSED);
+
+    // 按钮区
+    lv_obj_t *btn_box = lv_obj_create(cont);
+    lv_obj_set_size(btn_box, LV_PCT(100), 50);
+    lv_obj_set_layout(btn_box, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(btn_box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_box, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(btn_box, LV_OPA_TRANSP, 0);
+
+    // 注册按钮
+    lv_obj_t *btn_ok = lv_button_create(btn_box);
+    lv_label_set_text(lv_label_create(btn_ok), "注册");
+    lv_obj_add_style(btn_ok, &style_focus_red, LV_STATE_FOCUSED);
+    lv_obj_add_style(lv_obj_get_child(btn_ok, 0), &style_text_cn, 0);
+
+    // 上下文数据
+    struct Ctx { int uid; lv_obj_t *t1; lv_obj_t *t2; };
+    Ctx *ctx = new Ctx{user_id, p1, p2}; // 注意：需处理内存释放，此处简化
+
+    // 给 btn_ok 添加销毁回调，当按钮被删除时，自动 delete ctx
+    lv_obj_add_event_cb(btn_ok, [](lv_event_t* e){
+        Ctx* c = (Ctx*)lv_event_get_user_data(e);
+        if (c) delete c; // 释放内存
+    }, LV_EVENT_DELETE, NULL);
+
+    lv_obj_add_event_cb(btn_ok, [](lv_event_t* e){
+        if (lv_event_get_key(e) == LV_KEY_ENTER) {
+            Ctx* c = (Ctx*)lv_event_get_user_data(e);
+            const char* s1 = lv_textarea_get_text(c->t1);
+            const char* s2 = lv_textarea_get_text(c->t2);
+            
+            if (strlen(s1) > 0 && strcmp(s1, s2) == 0) {
+                UiController::getInstance()->updateUserPassword(c->uid, s1);
+                // 提示并返回
+                lv_obj_t *m = lv_msgbox_create(NULL);
+                lv_msgbox_add_text(m, "注册密码成功");
+                lv_msgbox_add_close_button(m);
+                lv_obj_center(m);
+                // 延时返回逻辑省略，需用户手动关框后按ESC返回
+                // 或者直接:
+                load_user_info_screen(c->uid);
+            } else {
+                lv_obj_t *m = lv_msgbox_create(NULL);
+                lv_msgbox_add_text(m, "密码不一致或为空");
+                lv_msgbox_add_close_button(m);
+                lv_obj_center(m);
+            }
+        }
+    }, LV_EVENT_KEY, ctx);
+    lv_obj_set_user_data(btn_ok, ctx);
+
+    // 取消按钮
+    lv_obj_t *btn_cancel = lv_button_create(btn_box);
+    lv_label_set_text(lv_label_create(btn_cancel), "取消");
+    lv_obj_add_style(btn_cancel, &style_focus_red, LV_STATE_FOCUSED);
+    lv_obj_add_style(lv_obj_get_child(btn_cancel, 0), &style_text_cn, 0);
+    lv_obj_add_event_cb(btn_cancel, [](lv_event_t* e){
+         if (lv_event_get_key(e) == LV_KEY_ENTER) {
+             Ctx* c = (Ctx*)lv_event_get_user_data(e);
+             lv_textarea_set_text(c->t1, "");
+             lv_textarea_set_text(c->t2, "");
+         }
+    }, LV_EVENT_KEY, ctx);
+    lv_obj_set_user_data(btn_cancel, ctx);
+
+    // 加入组
+    lv_group_add_obj(g_keypad_group, p1);
+    lv_group_add_obj(g_keypad_group, p2);
+    lv_group_add_obj(g_keypad_group, btn_ok);
+    lv_group_add_obj(g_keypad_group, btn_cancel);
+    lv_group_focus_obj(p1);
+
+    // 全局 ESC
+    lv_obj_add_event_cb(p1, [](lv_event_t* e){
+        if (lv_event_get_key(e) == LV_KEY_ESC) load_user_info_screen((int)(intptr_t)lv_event_get_user_data(e));
+    }, LV_EVENT_KEY, (void*)(intptr_t)user_id);
+    // 给其他控件也加 ESC 监听...
+
+    lv_screen_load(screen_pwd_change);
+    destroy_all_screens_except(screen_pwd_change);
+}
+
+// ================= Level 3-B: 权限变更认证 =================
+
+static void load_role_change_auth_screen(int user_id, int current_role) {
+    if (screen_role_auth) lv_obj_delete(screen_role_auth);
+    screen_role_auth = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_role_auth, lv_color_black(), 0);
+
+    lv_obj_t *title = lv_label_create(screen_role_auth);
+    const char* txt = (current_role == 0) ? "录入管理员" : "取消管理员";
+    lv_label_set_text(title, txt);
+    lv_obj_add_style(title, &style_text_cn, 0);
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+
+    lv_group_remove_all_objs(g_keypad_group);
+
+    // 密码框
+    lv_obj_t *ta = lv_textarea_create(screen_role_auth);
+    lv_textarea_set_password_mode(ta, true);
+    lv_textarea_set_placeholder_text(ta, "请输入管理员密码");
+    lv_textarea_set_one_line(ta, true);
+    lv_obj_set_width(ta, 200);
+    lv_obj_align(ta, LV_ALIGN_CENTER, 0, -20);
+    lv_obj_add_style(ta, &style_focus_red, LV_STATE_FOCUSED);
+
+    // 确认按钮
+    lv_obj_t *btn = lv_button_create(screen_role_auth);
+    lv_label_set_text(lv_label_create(btn), "确认");
+    lv_obj_add_style(lv_obj_get_child(btn, 0), &style_text_cn, 0);
+    lv_obj_align(btn, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_add_style(btn, &style_focus_red, LV_STATE_FOCUSED);
+
+    struct Ctx { int uid; int cur_r; lv_obj_t *ta; };
+    Ctx *ctx = new Ctx{user_id, current_role, ta};
+
+    // 添加内存清理回调
+    lv_obj_add_event_cb(btn, [](lv_event_t* e){
+        Ctx* c = (Ctx*)lv_event_get_user_data(e);
+        if (c) delete c;
+    }, LV_EVENT_DELETE, NULL);
+
+    lv_obj_add_event_cb(btn, [](lv_event_t* e){
+        if (lv_event_get_key(e) == LV_KEY_ENTER) {
+            Ctx* c = (Ctx*)lv_event_get_user_data(e);
+            const char* pwd = lv_textarea_get_text(c->ta);
+            
+            // 模拟验证 logic
+            if (strcmp(pwd, "123456") == 0) {
+                int new_role = (c->cur_r == 0) ? 1 : 0;
+                UiController::getInstance()->updateUserRole(c->uid, new_role);
+                
+                lv_obj_t *m = lv_msgbox_create(NULL);
+                lv_msgbox_add_text(m, "操作成功");
+                lv_msgbox_add_close_button(m);
+                lv_obj_center(m);
+                
+                // 返回详情页
+                load_user_info_screen(c->uid);
+            } else {
+                lv_obj_t *m = lv_msgbox_create(NULL);
+                lv_msgbox_add_text(m, "密码错误");
+                lv_msgbox_add_close_button(m);
+                lv_obj_center(m);
+                lv_textarea_set_text(c->ta, "");
+            }
+        }
+    }, LV_EVENT_KEY, ctx);
+    lv_obj_set_user_data(btn, ctx);
+
+    // 导航 ESC
+    lv_obj_add_event_cb(ta, [](lv_event_t* e){
+        if (lv_event_get_key(e) == LV_KEY_ESC) load_user_info_screen((int)(intptr_t)lv_event_get_user_data(e));
+    }, LV_EVENT_KEY, (void*)(intptr_t)user_id);
+
+    lv_group_add_obj(g_keypad_group, ta);
+    lv_group_add_obj(g_keypad_group, btn);
+    lv_group_focus_obj(ta);
+
+    lv_screen_load(screen_role_auth);
+    destroy_all_screens_except(screen_role_auth);
+}
 
 // ================= [Epic 5.2] 记录查询功能实现 =================
 
@@ -1056,22 +1453,39 @@ static void list_btn_event_cb(lv_event_t *e) {
 }
 
 // 创建列表屏幕 UI
-static void create_user_list_screen(void) {
-    screen_list = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(screen_list, THEME_COLOR_BG, 0);
+static void user_list_item_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
     
-    // 标题
-    lv_obj_t *title = lv_label_create(screen_list);
-    lv_label_set_text(title, "User List");
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    // 获取触发事件的对象 (按钮)，而不是事件数据
+    lv_obj_t * btn = (lv_obj_t*)lv_event_get_target(e);
     
-    // 列表控件容器
-    obj_list_view = lv_list_create(screen_list);
-    lv_obj_set_size(obj_list_view, 220, 260);
-    lv_obj_align(obj_list_view, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_style_bg_color(obj_list_view, lv_color_hex(0x222222), 0);
-    lv_obj_set_style_border_width(obj_list_view, 0, 0);
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        // 按下 Enter 进入详情页 (Level 2)
+        if (key == LV_KEY_ENTER) {
+            // 从按钮对象中取出 user_id
+            int user_id = (int)(intptr_t)lv_obj_get_user_data(btn);
+            
+            std::printf("[UI] Click User ID: %d\n", user_id); // 添加调试打印
+            load_user_info_screen(user_id);
+        }
+        // 按下 ESC 返回员工管理菜单
+        else if (key == LV_KEY_ESC) {
+            load_user_mgmt_screen();
+        }
+        // 上下导航
+        else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(g_keypad_group);
+        }
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(g_keypad_group);
+        }
+    }
+    // 增加点击支持 (触摸/鼠标)
+    else if (code == LV_EVENT_CLICKED) {
+         int user_id = (int)(intptr_t)lv_obj_get_user_data(btn);
+         load_user_info_screen(user_id);
+    }
 }
 
 // --- 辅助：关闭 Msgbox 的通用回调 ---
@@ -1503,52 +1917,85 @@ static void load_sys_settings_screen(void) {
 
 //  加载数据并显示
 static void load_user_list_screen(void) {
-    if (!screen_list) create_user_list_screen();
-    
-    std::printf("[UI] Switch to User List\n");
-    
-    // A. 清空输入组 (准备接管键盘)
-    lv_group_remove_all_objs(g_keypad_group);
-    
-    // B. 从业务层获取用户数据
-    int count = UiController::getInstance()->getUserCount(); // 调用 face_demo.cpp 的接口
-    std::printf("[UI] Fetching users: %d\n", count);
-    
-    if (count == 0) {
-        lv_list_add_text(obj_list_view, "No Users Found");
-    } else {
-        char name_buf[64];
-        int id = 0;
-        char label_buf[128];
+// 1. 创建屏幕 (如果未创建)
+    if (!screen_list) {
+        screen_list = lv_obj_create(nullptr);
         
-        for(int i=0; i<count; i++) {
-            if (UiController::getInstance()->getUserAt(i, &id, name_buf, sizeof(name_buf))) {
-                std::snprintf(label_buf, sizeof(label_buf), "[%d] %s", id, name_buf);
-                
-                // 1. 创建按钮
-                lv_obj_t *btn = lv_list_add_button(obj_list_view, LV_SYMBOL_BULLET, label_buf);
-                lv_obj_set_style_text_font(btn, &font_noto_16, 0);
-                // [新增] 2. 检查是否创建成功 (防崩溃)
-                if (btn == nullptr) {
-                    std::printf("[Error] LVGL Out of Memory! Stopped at user %d\n", i);
-                    lv_label_set_text(lv_list_add_text(obj_list_view, "Memory Full!"), "System Out of Memory");
-                    break; // 停止继续创建，保护程序不崩
-                }
+        //  主背景设为 深邃午夜蓝 (#0F1C2E)
+        lv_obj_set_style_bg_color(screen_list, lv_color_hex(0x0F1C2E), 0); 
+        
+        lv_obj_t *title = lv_label_create(screen_list);
+        lv_label_set_text(title, "员工列表 / User List");
+        lv_obj_set_style_text_color(title, lv_color_white(), 0);
+        lv_obj_add_style(title, &style_text_cn, 0);
+        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
-                // 3. 设置事件和组
-                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_KEY, nullptr);
-                lv_group_add_obj(g_keypad_group, btn);
-                
-                if (i == 0) lv_group_focus_obj(btn);
-            }
-        }
+        // 创建列表容器
+        obj_list_view = lv_obj_create(screen_list);
+        lv_obj_set_size(obj_list_view, LV_PCT(95), LV_PCT(80));
+        lv_obj_align(obj_list_view, LV_ALIGN_BOTTOM_MID, 0, -10);
+        lv_obj_set_flex_flow(obj_list_view, LV_FLEX_FLOW_COLUMN); 
+
+        // 列表容器设为 你选择的稍亮蓝灰 (#172A45)
+        lv_obj_set_style_bg_color(obj_list_view, lv_color_hex(0x172A45), 0);
+        
+        // 建议：移除容器的边框，让色块更纯净
+        lv_obj_set_style_border_width(obj_list_view, 0, 0);
+
+        lv_obj_set_style_pad_all(obj_list_view, 5, 0);
+        lv_obj_set_style_pad_gap(obj_list_view, 5, 0); 
     }
-    
-    // D. 切换屏幕
-    lv_screen_load(screen_list);
 
-    destroy_all_screens_except(screen_list);// 清理其他屏幕资源
-    // E. 兜底：把背景也加入组，防止列表为空时按键失效
+    // 2. 清理旧数据并准备输入组
+    lv_obj_clean(obj_list_view); 
+    lv_group_remove_all_objs(g_keypad_group);
+
+    // 3. 获取所有用户数据
+    // 注意：这里假设 Controller 有这个方法，如果没有，请参考 ui_controller.h 修改建议
+    std::vector<UserData> users = UiController::getInstance()->getAllUsers();
+
+    if (users.empty()) {
+        lv_obj_t *lbl = lv_label_create(obj_list_view);
+        lv_label_set_text(lbl, "暂无员工数据");
+        lv_obj_add_style(lbl, &style_text_cn, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    } else {
+        for (const auto& u : users) {
+            // 创建列表项按钮
+            lv_obj_t *btn = lv_button_create(obj_list_view);
+            lv_obj_set_width(btn, LV_PCT(100));
+            lv_obj_set_height(btn, 45); // 稍微加高一点
+            lv_obj_add_style(btn, &style_btn_default, 0);
+
+            // 布局：左中右
+            lv_obj_t *lbl = lv_label_create(btn);
+            
+            // 确保 dept_name 不为空，如果为空手动赋值，避免显示异常
+            std::string d_name = u.dept_name.empty() ? "-" : u.dept_name;
+            
+            // 使用固定宽度格式化，或者简单的 | 分隔
+            // 格式： ID  |  Name  |  Dept
+            lv_label_set_text_fmt(lbl, "%d  |  %s  |  %s", u.id, u.name.c_str(), d_name.c_str());
+            
+            lv_obj_add_style(lbl, &style_text_cn, 0);
+            lv_obj_center(lbl);
+
+            // 绑定数据和事件
+            lv_obj_set_user_data(btn, (void*)(intptr_t)u.id);
+            lv_obj_add_event_cb(btn, user_list_item_event_cb, LV_EVENT_KEY, nullptr);
+            
+            // 加入键盘组
+            lv_group_add_obj(g_keypad_group, btn);
+        }
+        // 聚焦第一个
+        lv_group_focus_obj(lv_obj_get_child(obj_list_view, 0));
+    }
+
+    // 4. 显示
+    lv_screen_load(screen_list);
+    destroy_all_screens_except(screen_list);
+    
+    // 兜底，防止空列表导致按键失效
     lv_group_add_obj(g_keypad_group, screen_list);
 }
 
@@ -1846,6 +2293,7 @@ static void load_register_step(void) {
 
 void ui_init(void) {
     lv_init();
+    init_focus_style();
     lv_display_t *disp = lv_sdl_window_create(SCREEN_W, SCREEN_H);
     (void)disp;
     

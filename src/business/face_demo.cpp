@@ -278,7 +278,7 @@ bool business_init() {
             
             // 虽然不用读图片，但必须从数据库加载 ID->姓名的映射关系
             // 使用 lightweight 接口 (不读 BLOB，速度快)
-            std::vector<UserData> users_info = db_get_all_users_info();
+            std::vector<UserData> users_info = db_get_all_users();
             
             for (const auto& u : users_info) {
                 // 确保 names 向量够长

@@ -137,6 +137,37 @@ bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
     
     return true;
 }
+
+// 更新用户名称实现
+bool UiController::updateUserName(int userId, const std::string& newName) {
+    // 1. 先获取当前用户完整信息
+    UserData user = db_get_user_info(userId);
+    
+    // 2. 检查用户是否存在 (假设ID为0表示不存在)
+    if (user.id == 0) return false; 
+
+    // 3. 调用底层更新接口：
+    //    保留原有的 dept_id, role, card_id 不变，只修改 name
+    return db_update_user_basic(userId, newName, user.dept_id, user.role, user.card_id);
+}
+
+// 更新用户密码实现
+bool UiController::updateUserPassword(int userId, const std::string& newPassword) {
+    // 底层有单独修改密码的接口，直接调用即可
+    return db_update_user_password(userId, newPassword);
+}
+
+// 更新用户角色实现
+bool UiController::updateUserRole(int userId, int newRole) {
+    // 1. 获取当前信息
+    UserData user = db_get_user_info(userId);
+    if (user.id == 0) return false;
+
+    // 2. 调用底层更新接口：
+    //    保留原有的 name, dept_id, card_id 不变，只修改 role (privilege)
+    return db_update_user_basic(userId, user.name, user.dept_id, newRole, user.card_id);
+}
+
 void UiController::clearAllRecords() {
     db_clear_attendance();
 }
@@ -217,6 +248,7 @@ void UiController::captureThreadFunc() {
 
             // 3. 通知 UI 线程“数据准备好了”
             EventBus::getInstance().publish(EventType::CAMERA_FRAME_READY, nullptr);
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));// 大约30FPS
         } else {
             // 获取失败 (比如摄像头没插好)，休眠长一点避免空转
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

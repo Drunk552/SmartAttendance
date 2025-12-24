@@ -320,7 +320,7 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
  */
 std::vector<UserData> ReportGenerator::db_get_all_users_info() {
     std::vector<UserData> users;
-    auto db_users = ::db_get_all_users_info();
+    auto db_users = ::db_get_all_users();
 
      for (const auto& db_user : db_users) {
         UserData user;
