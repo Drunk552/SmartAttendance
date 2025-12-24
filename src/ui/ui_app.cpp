@@ -21,14 +21,12 @@
 #include <vector>
 #include <ctime>
 #include <sstream>
-#include <thread>
-#include <mutex>
-#include <atomic>
 #include "lv_conf.h"
 #include <unistd.h> // for sleep (模拟耗时)
 #include <filesystem> // C++17 标准文件系统库
 #include "ui_controller.h"
 #include "ui_theme.h"
+#include "../business/event_bus.h"
 
 // 声明你的自定义字体
 LV_FONT_DECLARE(font_noto_16);
@@ -91,23 +89,9 @@ int g_reg_dept_id = 0;      // 全局变量：注册时的部门ID
 // 1. 显示缓冲区 (UI 线程读取) - 替换原有的 cam_buf
 static std::array<uint8_t, CAM_W * CAM_H * 3> cam_buf_display;
 
-// 2. 后台缓冲区 (采集线程写入)
-static std::vector<uint8_t> cam_buf_back(CAM_W * CAM_H * 3);
-
-// 3. 线程控制
-static std::mutex g_frame_mutex;          // 保护缓冲区交换
-static std::atomic<bool> g_frame_ready{false}; // 标志位：后台是否有新图
-static std::thread g_capture_thread;      // 采集线程对象
-
 extern volatile bool g_program_should_exit; // 引用 main.cpp 中的退出标志
 
 static lv_obj_t *img_camera = nullptr;
-
-#if LV_VERSION_CHECK(9,0,0)
-    static lv_image_dsc_t img_dsc;
-#else
-    static lv_img_dsc_t img_dsc;
-#endif
 
 static lv_obj_t *label_time = nullptr;
 
@@ -127,7 +111,6 @@ static void list_btn_event_cb(lv_event_t *e);
 // [Epic 3.3 注册向导] 函数声明
 static void create_register_screen(void);
 static void load_register_step(void); // 采集人脸
-static void register_face_timer_cb(lv_timer_t *timer); // 注册页面的摄像头刷新
 static void load_user_mgmt_screen(void); // 新增：声明加载员工管理页函数
 static void load_record_query_screen(void);
 static void load_record_result_screen(int user_id);
@@ -140,6 +123,21 @@ static void load_storage_info_screen(void);
 // 前向声明：确保编译器知道这个函数存在 // 或者你原来返回上一级菜单的函数名
 void load_register_form_screen();
 
+// 摄像头图像描述符 (v9 格式)
+static lv_image_dsc_t img_dsc = {
+    .header = {
+        .magic = LV_IMAGE_HEADER_MAGIC,
+        .cf = LV_COLOR_FORMAT_RGB888,
+        .flags = 0,
+        .w = CAM_W,
+        .h = CAM_H,
+        .stride = CAM_W * 3,
+        .reserved_2 = 0
+    },
+    .data_size = CAM_W * CAM_H * 3,
+    .data = nullptr, // 稍后在 create_main_screen 中赋值
+    .reserved = 0
+};
 
 // ================= 辅助函数 =================
 
@@ -208,11 +206,7 @@ static void free_screen_resources(lv_obj_t** screen_ptr) {
 static void async_screen_cleanup_cb(lv_timer_t * t) {
     // 1. 获取当前系统真正正在显示的屏幕
     lv_obj_t * act_scr = nullptr;
-#if LV_VERSION_CHECK(9,0,0)
     act_scr = lv_screen_active();
-#else
-    act_scr = lv_scr_act();
-#endif
 
     // 2. 维护所有屏幕指针的列表
     lv_obj_t** all_screens[] = {
@@ -254,60 +248,11 @@ static void request_exit(void) {
     g_program_should_exit = true; 
 }
 
-static void camera_timer_cb(lv_timer_t * /*timer*/) {
-    if (g_program_should_exit) return; 
-    
-    // 只有在主界面且图像控件存在时才更新
-    if (lv_screen_active() == screen_main && img_camera) {
-        // 检查后台是否准备好了新数据
-        if (g_frame_ready) {
-            {
-                std::lock_guard<std::mutex> lock(g_frame_mutex);
-                // 极速拷贝 (320x240 RGB 仅约 200KB，耗时 < 1ms)
-                std::memcpy(cam_buf_display.data(), cam_buf_back.data(), cam_buf_back.size());
-                g_frame_ready = false; // 放下标志
-            }
-            // 通知 LVGL 图像已脏，需要重绘
-            lv_obj_invalidate(img_camera);
-        }
-    }
-}
-
-static void time_timer_cb(lv_timer_t * /*timer*/) {
-    if (g_program_should_exit) return;
-
-    // 1. 更新时间
-    if (label_time) { 
-        std::string t = UiController::getInstance()->getCurrentTimeStr();
-        lv_label_set_text(label_time, t.c_str());
-    }
-
-    // 2.  磁盘监控 (仅在主页显示)
-    if (label_disk_warn) {
-        bool is_low = UiController::getInstance()->isDiskFull();
-        g_disk_full = is_low;
-        
-        if (is_low) lv_obj_remove_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
 // ================= [Epic 4.2] 报表导出逻辑 =================
 
 static void ui_download_report_handler() {
     // 1. 弹出提示 "正在检测 U 盘..."
     lv_obj_t * mbox = nullptr;
-
-    // [LVGL v9 适配]
-#if LV_VERSION_CHECK(9,0,0)
-    mbox = lv_msgbox_create(NULL);             // v9 仅接受 parent 参数
-    lv_msgbox_add_title(mbox, "System Info");  // 单独添加标题
-    lv_msgbox_add_text(mbox, "Detecting USB Drive..."); // 单独添加文本
-    // v9 中不显示关闭按钮，防止用户误触
-#else
-    // [LVGL v8] 旧版写法
-    mbox = lv_msgbox_create(NULL, "System Info", "Detecting USB Drive...", NULL, true);
-#endif
 
     lv_obj_center(mbox);
     lv_timer_handler(); // 强制刷新 UI 显示提示框
@@ -315,14 +260,10 @@ static void ui_download_report_handler() {
     bool success = UiController::getInstance()->exportReportToUsb();// 调用封装后的报表导出接口
 
     // 2. 关闭 "检测中" 的提示框
-#if LV_VERSION_CHECK(9,0,0)
     lv_obj_delete(mbox); // v9 使用 lv_obj_delete 删除对象
-#else
-    lv_msgbox_close(mbox); // v8 使用 lv_msgbox_close
-#endif
+
 
     // 3. 显示最终结果
-#if LV_VERSION_CHECK(9,0,0)
     mbox = lv_msgbox_create(NULL);
     if (success) {
         lv_msgbox_add_title(mbox, "Export Success");
@@ -332,13 +273,7 @@ static void ui_download_report_handler() {
         lv_msgbox_add_text(mbox, "Write error or No data.");
     }
     lv_msgbox_add_close_button(mbox); // v9 添加关闭按钮
-#else
-    if (success) {
-        lv_msgbox_create(NULL, "Export Success", "Saved to:\n/output/usb_sim/", NULL, true);
-    } else {
-        lv_msgbox_create(NULL, "Export Failed", "Write error or No data.", NULL, true);
-    }
-#endif
+
 }
 
 // ================= 事件处理 =================
@@ -451,38 +386,6 @@ static void menu_btn_event_cb(lv_event_t *e) {
             g_program_should_exit = true; 
         }  
     }
-}
-
-/**
- * @brief [Epic 4.4] 后台采集线程函数
- * 负责死循环读取摄像头、人脸识别和缩放，不阻塞 UI
- */
-static void capture_thread_func() {
-    std::printf("[System] Capture Thread Started.\n");
-    
-    // 临时缓存，避免长时间持有锁
-    std::vector<uint8_t> temp_buf(CAM_W * CAM_H * 3);
-
-    while (!g_program_should_exit) {
-        // 调用业务层接口获取一帧 (这是最耗时的步骤：采集+识别+缩放+转码)
-        // 注意：business_get_display_frame 内部已通过 face_demo.cpp 的锁保护了 OpenCV 资源
-        bool ret = UiController::getInstance()->getDisplayFrame(temp_buf.data(), CAM_W, CAM_H);
-
-        if (ret) {
-            // 获取锁，快速将数据放入后台缓冲区
-            {
-                std::lock_guard<std::mutex> lock(g_frame_mutex);
-                std::memcpy(cam_buf_back.data(), temp_buf.data(), temp_buf.size());
-                g_frame_ready = true; // 举手：我有新图了！
-            }
-            // 简单休眠控制采集帧率 (约 30-60 FPS)
-            //std::this_thread::sleep_for(std::chrono::milliseconds(15));
-        } else {
-            // 采集失败时休眠久一点
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    }
-    std::printf("[System] Capture Thread Stopped.\n");
 }
 
 // ================= [System Settings] 业务逻辑接口 =================
@@ -601,17 +504,13 @@ static void create_main_screen(void) {
     // [Epic 4.4 修改] 指向新的显示缓冲区
     img_dsc.data = cam_buf_display.data(); 
     img_dsc.data_size = static_cast<uint32_t>(cam_buf_display.size());
-    #if LV_VERSION_CHECK(9,0,0)
+   
         img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
         img_dsc.header.cf = LV_COLOR_FORMAT_RGB888;
         img_dsc.header.stride = CAM_W * 3;
         img_camera = lv_image_create(screen_main);
         lv_image_set_src(img_camera, &img_dsc);
-    #else
-        img_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
-        img_camera = lv_img_create(screen_main);
-        lv_img_set_src(img_camera, &img_dsc);
-    #endif
+
     lv_obj_set_size(img_camera, CAM_W, CAM_H);
     lv_obj_align(img_camera, LV_ALIGN_TOP_MID, 0, 40);
 
@@ -715,6 +614,72 @@ static void create_menu_screen(void) {
     }
 }
 
+// ================= 事件回调适配器 =================
+
+// 时间更新回调 (运行在 UI 线程)
+static void ui_update_time_async(void* data) {
+    // data 是 new 出来的 string，用完要删
+    std::string* t_ptr = static_cast<std::string*>(data);
+    if (label_time && t_ptr) {
+        lv_label_set_text(label_time, t_ptr->c_str());
+    }
+    delete t_ptr;
+}
+
+// 磁盘报警回调
+static void ui_update_disk_async(void* data) {
+    bool is_full = (bool)(intptr_t)data; // 强转回 bool
+    if (label_disk_warn) {
+        g_disk_full = is_full;
+        if (is_full) lv_obj_remove_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// 摄像头刷新回调
+static void ui_update_camera_async(void* /*data*/) {
+    // 从 Controller 获取最新帧并拷贝到 cam_buf_display
+    // 这里我们依然调用 Controller 的 getDisplayFrame，但它现在只需负责数据拷贝
+    // 假设 UiController 内部维护了最新的帧
+    // 为了简化，这里我们复用原来的 cam_buf_display 逻辑
+    if (lv_screen_active() == screen_main && img_camera) {
+         // 从业务层拉取最新数据到 UI 缓存
+         UiController::getInstance()->getDisplayFrame(cam_buf_display.data(), CAM_W, CAM_H);
+         lv_obj_invalidate(img_camera);
+    }
+    // 如果是注册页面的摄像头
+    if (lv_screen_active() == screen_register && img_face_reg) {
+         UiController::getInstance()->getDisplayFrame(cam_buf_display.data(), CAM_W, CAM_H);
+         lv_obj_invalidate(img_face_reg);
+    }
+}
+
+// ================= 事件订阅初始化 =================
+static void init_event_subscriptions() {
+    auto& bus = EventBus::getInstance();
+
+    // 1. 时间更新
+    bus.subscribe(EventType::TIME_UPDATE, [](void* data) {
+        // data 是后台线程传来的 string 指针，我们需要拷贝一份传给 UI 线程
+        // 或者直接传值。这里演示 copy 方式：
+        std::string* new_str = new std::string(*(std::string*)data);
+        lv_async_call(ui_update_time_async, new_str);
+    });
+
+    // 2. 磁盘状态
+    bus.subscribe(EventType::DISK_FULL, [](void*) {
+        lv_async_call(ui_update_disk_async, (void*)1);
+    });
+    bus.subscribe(EventType::DISK_NORMAL, [](void*) {
+        lv_async_call(ui_update_disk_async, (void*)0);
+    });
+
+    // 3. 摄像头帧
+    bus.subscribe(EventType::CAMERA_FRAME_READY, [](void*) {
+        lv_async_call(ui_update_camera_async, nullptr);
+    });
+}
+
 // ================= 页面切换 =================
 
 static void load_main_screen(void) {
@@ -723,11 +688,7 @@ static void load_main_screen(void) {
     std::printf("[UI] Switch to Main\n");
     lv_group_remove_all_objs(g_keypad_group);
 
-    #if LV_VERSION_CHECK(9,0,0)
-        lv_screen_load(screen_main);
-    #else
-        lv_scr_load(screen_main);
-    #endif
+    lv_screen_load(screen_main);
 
     destroy_all_screens_except(screen_main);// 销毁其他屏幕，释放内存
     lv_group_add_obj(g_keypad_group, screen_main);
@@ -740,11 +701,7 @@ static void load_menu_screen(void) {
     std::printf("[UI] Switch to Menu\n");
     lv_group_remove_all_objs(g_keypad_group);
 
-    #if LV_VERSION_CHECK(9,0,0)
-        lv_screen_load(screen_menu);
-    #else
-        lv_scr_load(screen_menu);
-    #endif
+    lv_screen_load(screen_menu);
 
     destroy_all_screens_except(screen_menu);// 销毁其他屏幕，释放内存
     // 加入按钮到组
@@ -1588,11 +1545,8 @@ static void load_user_list_screen(void) {
     }
     
     // D. 切换屏幕
-    #if LV_VERSION_CHECK(9,0,0)
-        lv_screen_load(screen_list);
-    #else
-        lv_scr_load(screen_list);
-    #endif
+    lv_screen_load(screen_list);
+
     destroy_all_screens_except(screen_list);// 清理其他屏幕资源
     // E. 兜底：把背景也加入组，防止列表为空时按键失效
     lv_group_add_obj(g_keypad_group, screen_list);
@@ -1601,29 +1555,6 @@ static void load_user_list_screen(void) {
 // =================================================================
 // [Epic 3.3] 注册向导实现 (Wizard Implementation)
 // =================================================================
-
-// --- [Epic 4.4 修正] 注册页面的摄像头刷新 ---
-static void register_face_timer_cb(lv_timer_t * /*timer*/) {
-    // 1. 只有在注册界面才刷新
-    if (lv_screen_active() != screen_register) return;
-    
-    // 2. 检查后台线程是否准备好了新帧
-    if (g_frame_ready) {
-        // 加锁并从后台缓冲区拷贝最新数据到显示缓冲区
-        {
-            std::lock_guard<std::mutex> lock(g_frame_mutex);
-            std::memcpy(cam_buf_display.data(), cam_buf_back.data(), cam_buf_back.size());
-            // 注意：这里不要把 g_frame_ready 设为 false，因为可能还有其他地方想读（虽然后台线程很快会覆盖它）
-            // 或者如果不介意，也可以设为 false。这里我们为了保险，只读数据。
-             g_frame_ready = false; 
-        }
-
-        // 3. 刷新注册页面的图像控件
-        if (img_face_reg) {
-            lv_obj_invalidate(img_face_reg);
-        }
-    }
-}
 
 // --- Step 2 事件: 处理按键 (拍照/返回) ---
 static void reg_step2_event_cb(lv_event_t *e) {
@@ -1660,9 +1591,6 @@ static void create_register_screen(void) {
     if (screen_register) return;
     screen_register = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(screen_register, lv_color_black(), 0);
-    
-    // 注册专用的定时器 (100ms刷新)，与主页定时器分开
-    lv_timer_create(register_face_timer_cb, 100, nullptr);
 }
 
 /* --- ：强制导航模式的定时器回调 --- */
@@ -1887,13 +1815,8 @@ static void load_register_step(void) {
     lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 5);
     
     // 3. 摄像头预览区域 (复用全局 dsc)
-    #if LV_VERSION_CHECK(9,0,0)
-        img_face_reg = lv_image_create(screen_register);
-        lv_image_set_src(img_face_reg, &img_dsc); 
-    #else
-        img_face_reg = lv_img_create(screen_register);
-        lv_img_set_src(img_face_reg, &img_dsc);
-    #endif
+    img_face_reg = lv_image_create(screen_register);
+    lv_image_set_src(img_face_reg, &img_dsc); 
     lv_obj_set_size(img_face_reg, CAM_W, CAM_H);
     lv_obj_align(img_face_reg, LV_ALIGN_CENTER, 0, 0);
     
@@ -1916,12 +1839,7 @@ static void load_register_step(void) {
     // 6. 焦点设置
     lv_group_add_obj(g_keypad_group, img_face_reg);
     lv_group_focus_obj(img_face_reg);
-
-    #if LV_VERSION_CHECK(9,0,0)
-        lv_screen_load(screen_register);
-    #else
-        lv_scr_load(screen_register);
-    #endif
+    lv_screen_load(screen_register);
 }
 
 // ================= 初始化 =================
@@ -1937,7 +1855,7 @@ void ui_init(void) {
     lv_indev_t *kbd = lv_sdl_keyboard_create();
     
     if (kbd) {
-        // [核心修复] 强制将键盘类型设为 Keypad (考勤机模式)
+        // 强制将键盘类型设为 Keypad (考勤机模式)
         // 这样 LVGL 才会把 方向键 当作 焦点切换键
         lv_indev_set_type(kbd, LV_INDEV_TYPE_KEYPAD);
         std::printf("[UI] Keyboard force set to KEYPAD mode.\n");
@@ -1953,18 +1871,10 @@ void ui_init(void) {
     if (kbd) lv_indev_set_group(kbd, g_keypad_group);
 
     ui_theme_init();
-    create_main_screen();
+    init_event_subscriptions();//订阅事件
     
-    // [Epic 4.4 新增] 启动后台采集线程
-    g_capture_thread = std::thread(capture_thread_func);
-    g_capture_thread.detach(); // 分离线程，随主进程结束
-
-    // [Epic 4.4 优化] 提升 UI 刷新频率
-    // 从 100ms 改为 20ms (目标 50 FPS)
-    // 因为现在 timer 只做内存拷贝，非常快，不会卡顿
-    lv_timer_create(camera_timer_cb, 20, nullptr);
-
-    lv_timer_create(time_timer_cb, 1000, nullptr);
+    UiController::getInstance()->startBackgroundServices();// 通知 Controller 启动后台服务 (不再在 UI 层直接开线程)
+    create_main_screen();
 
     load_main_screen();
     std::printf("[UI] Epic 4.4 Optimization: Threaded Capture Started.\n");

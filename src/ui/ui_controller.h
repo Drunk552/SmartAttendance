@@ -10,6 +10,9 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <mutex>
+#include <thread>
+#include <atomic>
 
 // 这里为了简化，我们暂时复用 data 层的结构体定义
 // 理想情况下应该定义 UI 专用的 Struct，但为了第一阶段快速重构，先复用
@@ -49,9 +52,23 @@ public:
     // --- 5. 摄像头图像获取  ---
     bool getDisplayFrame(uint8_t* buffer, int width, int height);
 
+    void startBackgroundServices(); // 启动所有后台线程
+
 private:
     UiController() = default; // 私有构造
     ~UiController() = default;
+
+    void monitorThreadFunc(); // 监控时间与磁盘
+    void captureThreadFunc(); // 监控摄像头 (从 ui_app.cpp 移入)
+    
+    // 线程控制
+    std::atomic<bool> m_running{false};
+    std::thread m_monitor_thread;
+    std::thread m_capture_thread;
+
+    // 线程安全相关的成员
+    std::mutex m_frame_mutex;            // 保护图像数据的锁
+    std::vector<uint8_t> m_cached_frame; // 缓存最新的一帧图像
 };
 
 #endif // UI_CONTROLLER_H

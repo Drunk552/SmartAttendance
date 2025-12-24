@@ -92,6 +92,7 @@ file(GLOB_RECURSE SRC_FILES
     "src/ui/*.cpp"              
 
     # 业务层
+    "src/business/event_bus.cpp"
     "src/business/*.cpp"
 
     # 数据层

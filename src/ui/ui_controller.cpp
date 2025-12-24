@@ -9,6 +9,7 @@
 #include "../data/db_storage.h"
 #include "../business/face_demo.h"
 #include "../business/report_generator.h"
+#include "../business/event_bus.h"
 #include <sys/statvfs.h>
 #include <algorithm>
 #include <set>
@@ -117,10 +118,25 @@ bool UiController::exportReportToUsb() {
 }
 
 bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
-    // 调用底层的 business 接口
-    return business_get_display_frame(buffer, width, height);
-}
+    // 1. 加锁
+    std::lock_guard<std::mutex> lock(m_frame_mutex);
+    
+    // 2. 检查是否有数据
+    if (m_cached_frame.empty()) {
+        return false; // 还没采集到第一帧
+    }
+    
+    // 3. 检查缓冲区大小是否匹配 (防止越界)
+    size_t required_size = width * height * 3;
+    if (m_cached_frame.size() < required_size) {
+        return false;
+    }
 
+    // 4. [快速操作] 仅拷贝内存，不进行任何硬件IO
+    std::memcpy(buffer, m_cached_frame.data(), required_size);
+    
+    return true;
+}
 void UiController::clearAllRecords() {
     db_clear_attendance();
 }
@@ -142,4 +158,68 @@ void UiController::clearAllData() {
     db_clear_users();
     db_clear_attendance();
     // 可能还需要删除特征文件等，视具体业务而定
+}
+
+// 后台服务与事件总线
+void UiController::startBackgroundServices() {
+    if (m_running) return;
+    m_running = true;
+
+    // 1. 启动系统监控线程
+    m_monitor_thread = std::thread(&UiController::monitorThreadFunc, this);
+    m_monitor_thread.detach();
+
+    // 2. 启动摄像头采集线程
+    m_capture_thread = std::thread(&UiController::captureThreadFunc, this);
+    m_capture_thread.detach();
+}
+
+// 监控线程实现
+void UiController::monitorThreadFunc() {
+    while (m_running) {
+        // A. 时间事件 (每秒)
+        std::string timeStr = getCurrentTimeStr();
+        EventBus::getInstance().publish(EventType::TIME_UPDATE, &timeStr);
+
+        // B. 磁盘监控 (每 5 秒)
+        static int disk_check_counter = 0;
+        if (++disk_check_counter >= 5) {
+            disk_check_counter = 0;
+            if (isDiskFull()) EventBus::getInstance().publish(EventType::DISK_FULL);
+            else EventBus::getInstance().publish(EventType::DISK_NORMAL);
+        }
+
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+// 摄像头采集线程
+void UiController::captureThreadFunc() {
+    // 临时读取缓冲 (避免长时间持有锁)
+    std::vector<uint8_t> temp_buf(240 * 180 * 3); 
+
+    while (m_running) {
+        // 1. [耗时操作] 从底层业务/摄像头获取数据
+        // 注意：这是唯一调用 business_get_display_frame 的地方！
+        bool ret = business_get_display_frame(temp_buf.data(), 240, 180);
+        
+        if (ret) {
+            // 2. [快速操作] 加锁，将数据更新到 cached_frame
+            {
+                std::lock_guard<std::mutex> lock(m_frame_mutex);
+                // 如果缓存区大小不对，调整大小
+                if (m_cached_frame.size() != temp_buf.size()) {
+                    m_cached_frame.resize(temp_buf.size());
+                }
+                // 内存拷贝
+                std::memcpy(m_cached_frame.data(), temp_buf.data(), temp_buf.size());
+            } // 锁在这里自动释放
+
+            // 3. 通知 UI 线程“数据准备好了”
+            EventBus::getInstance().publish(EventType::CAMERA_FRAME_READY, nullptr);
+        } else {
+            // 获取失败 (比如摄像头没插好)，休眠长一点避免空转
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
 }

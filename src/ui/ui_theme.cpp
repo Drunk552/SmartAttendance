@@ -3,6 +3,9 @@
  * @brief UI 主题实现
  */
 #include "ui_theme.h"
+#include "../business/event_bus.h"
+#include <thread>
+#include <chrono>
 
 // 定义全局样式对象
 lv_style_t style_base;
