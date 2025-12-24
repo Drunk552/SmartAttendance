@@ -28,9 +28,14 @@
 #include <unistd.h> // for sleep (模拟耗时)
 #include <filesystem> // C++17 标准文件系统库
 #include "ui_controller.h"
+#include "ui_theme.h"
 
 // 声明你的自定义字体
 LV_FONT_DECLARE(font_noto_16);
+
+// 声明 LVGL 内置字体 (用于显示图标)
+// 如果你的 lv_conf.h 没开启 16 号字体，这里可以改成 lv_font_montserrat_14
+LV_FONT_DECLARE(lv_font_montserrat_16);
 
 // ================= 宏定义 =================
 #define SCREEN_W 240
@@ -105,12 +110,6 @@ static lv_obj_t *img_camera = nullptr;
 #endif
 
 static lv_obj_t *label_time = nullptr;
-
-// ================= 样式定义 =================
-static lv_style_t style_base;
-static lv_style_t style_menu_btn;
-static lv_style_t style_menu_btn_focused; // 焦点样式
-static lv_style_t style_text_cn;
 
 // ================= 核心导航函数前向声明 =================
 static void load_main_screen(void);
@@ -454,36 +453,6 @@ static void menu_btn_event_cb(lv_event_t *e) {
     }
 }
 
-// ================= 初始化 =================
-
-static void init_styles(void) {
-    lv_style_init(&style_base);
-    lv_style_set_bg_color(&style_base, lv_color_hex(0x000000));
-    lv_style_set_bg_opa(&style_base, LV_OPA_COVER);
-    lv_style_set_text_color(&style_base, lv_color_hex(0xFFFFFF));
-
-    // 中文文字样式
-    lv_style_init(&style_text_cn);
-    lv_style_set_text_font(&style_text_cn, &font_noto_16); // 设定中文字体
-    lv_style_set_text_color(&style_text_cn, lv_color_white()); // 默认白色文字
-
-    // 普通按钮：深灰色
-    lv_style_init(&style_menu_btn);
-    lv_style_set_bg_color(&style_menu_btn, lv_color_hex(0x444444));
-    lv_style_set_bg_opa(&style_menu_btn, LV_OPA_COVER);
-    lv_style_set_radius(&style_menu_btn, 8);
-    lv_style_set_layout(&style_menu_btn, LV_LAYOUT_FLEX);
-    lv_style_set_flex_flow(&style_menu_btn, LV_FLEX_FLOW_COLUMN);
-
-    // [调试] 焦点样式：鲜艳的红色背景，黄色文字
-    lv_style_init(&style_menu_btn_focused);
-    lv_style_set_bg_color(&style_menu_btn_focused, lv_palette_main(LV_PALETTE_RED)); // 红色背景
-    lv_style_set_bg_opa(&style_menu_btn_focused, LV_OPA_COVER);
-    lv_style_set_border_width(&style_menu_btn_focused, 4); 
-    lv_style_set_border_color(&style_menu_btn_focused, lv_palette_main(LV_PALETTE_YELLOW)); // 黄色边框
-    lv_style_set_text_color(&style_menu_btn_focused, lv_palette_main(LV_PALETTE_YELLOW));   // 黄色文字
-}
-
 /**
  * @brief [Epic 4.4] 后台采集线程函数
  * 负责死循环读取摄像头、人脸识别和缩放，不阻塞 UI
@@ -552,9 +521,9 @@ static lv_obj_t* create_sys_grid_btn(lv_obj_t *parent, int row,
     lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, row, 1);
 
     // 应用按钮样式
-    lv_obj_add_style(btn, &style_menu_btn, 0);
-    lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUS_KEY);
+    lv_obj_add_style(btn, &style_btn_default, 0);
+    lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUSED);
+    lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUS_KEY);
 
     // 布局: 横向排列 (Row)
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
@@ -569,6 +538,7 @@ static lv_obj_t* create_sys_grid_btn(lv_obj_t *parent, int row,
     // 1. 图标
     lv_obj_t *lbl_icon = lv_label_create(btn);
     lv_label_set_text(lbl_icon, icon);
+    lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_16, 0);
 
     // 2. 文字 (合并为一个 Label，格式为 "英文  中文")
     lv_obj_t *lbl_text = lv_label_create(btn);
@@ -604,7 +574,7 @@ static void create_main_screen(void) {
     lv_obj_align(label_time, LV_ALIGN_CENTER, 0, 0);
     // 强制设置字体颜色为纯亮白 (#FFFFFF)
     // 确保在深灰背景上对比度最大
-    lv_obj_set_style_text_color(label_time, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(label_time, THEME_COLOR_TEXT_MAIN, 0);
 
     // ---------------- [Epic 4.3 新增代码 START] ----------------
     // 2. 磁盘满警告图标 (右上角，默认隐藏)
@@ -612,7 +582,8 @@ static void create_main_screen(void) {
     label_disk_warn = lv_label_create(top);
     
     // 设置文本为 图标+文字 (使用 LVGL 内置符号)
-    lv_label_set_text(label_disk_warn, LV_SYMBOL_SD_CARD " Full"); 
+    
+    lv_obj_set_style_text_font(label_disk_warn, &lv_font_montserrat_16, 0); 
     
     // 设置颜色为红色，起到警示作用
     lv_obj_set_style_text_color(label_disk_warn, lv_palette_main(LV_PALETTE_RED), 0);
@@ -648,7 +619,7 @@ static void create_main_screen(void) {
     lv_obj_t *bottom = lv_obj_create(screen_main);
     lv_obj_set_size(bottom, SCREEN_W, 110);
     lv_obj_align(bottom, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(bottom, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_bg_color(bottom, THEME_COLOR_PANEL, 0);
     
     lv_obj_t *tip = lv_label_create(bottom);
     lv_label_set_text(tip, "Enter: Menu\nESC: Exit"); 
@@ -677,18 +648,20 @@ static void create_menu_screen(void) {
     lv_obj_add_style(title, &style_text_cn, 0); 
 
     // 4. 定义九宫格布局
-    static int32_t col_dsc[] = {100, 100, LV_GRID_TEMPLATE_LAST}; 
-    static int32_t row_dsc[] = {90, 90, 90, LV_GRID_TEMPLATE_LAST}; 
+    static int32_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST}; 
+    static int32_t row_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST}; 
 
     obj_grid = lv_obj_create(screen_menu); 
-    lv_obj_set_size(obj_grid, 230, 300); // 高度增加
-    lv_obj_align(obj_grid, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_size(obj_grid, LV_PCT(90), LV_PCT(80));
+    lv_obj_align(obj_grid, LV_ALIGN_BOTTOM_MID, 0, -10); // 靠下居中
     lv_obj_set_layout(obj_grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(obj_grid, col_dsc, row_dsc);
+    
+    lv_obj_add_style(obj_grid, &style_panel_transp, 0);// 使用透明样式
     lv_obj_set_style_bg_opa(obj_grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(obj_grid, 0, 0);
-    lv_obj_set_style_pad_column(obj_grid, 10, 0);
-    lv_obj_set_style_pad_row(obj_grid, 10, 0);
+    lv_obj_set_style_pad_column(obj_grid, THEME_GUTTER, 0);
+    lv_obj_set_style_pad_row(obj_grid, THEME_GUTTER, 0);
 
     // 5. 菜单内容定义
     struct MenuEntry {
@@ -716,9 +689,9 @@ static void create_menu_screen(void) {
         lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, col, 1,
                                   LV_GRID_ALIGN_STRETCH, row, 1);
         
-        lv_obj_add_style(btn, &style_menu_btn, 0);
-        lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUSED);
-        lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUS_KEY);
+        lv_obj_add_style(btn, &style_btn_default, 0); 
+        lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUSED);
+        lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUS_KEY);
 
         lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -730,6 +703,7 @@ static void create_menu_screen(void) {
         // 6.1 图标
         lv_obj_t *icon = lv_label_create(btn);
         lv_label_set_text(icon, menu_items[i].icon);
+        lv_obj_set_style_text_font(icon, &lv_font_montserrat_16, 0);
 
         // 6.2 文字 (英文 + 中文)
         lv_obj_t *lbl = lv_label_create(btn);
@@ -888,9 +862,9 @@ static void create_user_mgmt_screen(void) {
         lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, i, 1);
         
         // 应用你的红底黄框样式
-        lv_obj_add_style(btn, &style_menu_btn, 0);
-        lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUSED);
-        lv_obj_add_style(btn, &style_menu_btn_focused, LV_STATE_FOCUS_KEY); // 键盘聚焦也应用此样式
+        lv_obj_add_style(btn, &style_btn_default, 0);
+        lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUSED);
+        lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUS_KEY); // 键盘聚焦也应用此样式
         lv_obj_add_event_cb(btn, user_mgmt_btn_event_cb, LV_EVENT_ALL, const_cast<char*>(items[i].tag));
 
         // 布局改为横向 (图标 + 文字)
@@ -900,6 +874,7 @@ static void create_user_mgmt_screen(void) {
 
         lv_obj_t *icon = lv_label_create(btn);
         lv_label_set_text(icon, items[i].icon);
+        lv_obj_set_style_text_font(icon, &lv_font_montserrat_16, 0);
         
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text_fmt(lbl, "%s  %s", items[i].en, items[i].cn); 
@@ -1047,8 +1022,8 @@ static void create_record_query_screen(void) {
     lv_obj_set_style_bg_color(btn_query_back, lv_color_hex(0x444444), 0);
     
     // 按钮焦点样式 (红底黄框)
-    lv_obj_add_style(btn_query_back, &style_menu_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_style(btn_query_back, &style_menu_btn_focused, LV_STATE_FOCUS_KEY);
+    lv_obj_add_style(btn_query_back, &style_btn_focused, LV_STATE_FOCUSED);
+    lv_obj_add_style(btn_query_back, &style_btn_focused, LV_STATE_FOCUS_KEY);
 
     // 按钮文字
     lv_obj_t *lbl_back = lv_label_create(btn_query_back);
@@ -1126,7 +1101,7 @@ static void list_btn_event_cb(lv_event_t *e) {
 // 创建列表屏幕 UI
 static void create_user_list_screen(void) {
     screen_list = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(screen_list, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(screen_list, THEME_COLOR_BG, 0);
     
     // 标题
     lv_obj_t *title = lv_label_create(screen_list);
@@ -1413,7 +1388,7 @@ static void create_storage_info_screen() {
         lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
     };
 
-    add_item("员工注册数", s.total_users, lv_palette_main(LV_PALETTE_BLUE));
+    add_item("员工注册数", s.total_users, THEME_COLOR_PRIMARY);
     add_item("管理员数",   s.admin_count, lv_palette_main(LV_PALETTE_ORANGE));
     add_item("密码注册数", s.pwd_users,   lv_palette_main(LV_PALETTE_PURPLE));
     add_item("总记录数",   s.record_count,lv_palette_main(LV_PALETTE_GREEN));
@@ -1865,7 +1840,7 @@ void load_register_form_screen() {
 
     lv_obj_t * btn_next = lv_button_create(btn_area);
     lv_obj_set_width(btn_next, 80);
-    lv_obj_set_style_bg_color(btn_next, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_bg_color(btn_next, THEME_COLOR_PRIMARY, 0);
     lv_label_set_text(lv_label_create(btn_next), "Next >");
     lv_obj_set_user_data(ta_name, dd_dept);
     lv_obj_add_event_cb(btn_next, register_btn_next_event_handler, LV_EVENT_CLICKED, ta_name);
@@ -1977,7 +1952,7 @@ void ui_init(void) {
 
     if (kbd) lv_indev_set_group(kbd, g_keypad_group);
 
-    init_styles();
+    ui_theme_init();
     create_main_screen();
     
     // [Epic 4.4 新增] 启动后台采集线程
@@ -2066,8 +2041,8 @@ static void create_record_result_screen(void) {
     lv_obj_set_style_bg_color(btn_result_back, lv_color_hex(0x444444), 0);
     
     // 焦点样式 (红底黄框)
-    lv_obj_add_style(btn_result_back, &style_menu_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_style(btn_result_back, &style_menu_btn_focused, LV_STATE_FOCUS_KEY);
+    lv_obj_add_style(btn_result_back, &style_btn_focused, LV_STATE_FOCUSED);
+    lv_obj_add_style(btn_result_back, &style_btn_focused, LV_STATE_FOCUS_KEY);
 
     // 按钮文字
     lv_obj_t *lbl = lv_label_create(btn_result_back);
@@ -2092,7 +2067,7 @@ static void load_record_result_screen(int user_id) {
     // 3. 构建员工信息卡片
     lv_obj_t *header = lv_obj_create(obj_result_container);
     lv_obj_set_size(header, 210, 125); 
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_color(header, THEME_COLOR_BAR, 0);
     lv_obj_set_style_radius(header, 8, 0);
     lv_obj_set_style_pad_all(header, 10, 0);
     

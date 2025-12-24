@@ -86,7 +86,8 @@ file(GLOB_RECURSE SRC_FILES
     
     # UI 层
     "src/ui/ui_app.cpp"
-    "src/ui/ui_controller.cpp"      
+    "src/ui/ui_controller.cpp"
+    src/ui/ui_theme.cpp      
     "src/ui/*.c"               
     "src/ui/*.cpp"              
 
