@@ -59,7 +59,8 @@ public:
     bool updateUserPassword(int userId, const std::string& newPassword);
     // 更新用户角色 (0:普通, 1:管理员)
     bool updateUserRole(int userId, int newRole);
-
+    // 删除用户
+    bool deleteUser(int userId);
 private:
     UiController() = default; // 私有构造
     ~UiController() = default;

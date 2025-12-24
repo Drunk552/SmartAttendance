@@ -168,6 +168,13 @@ bool UiController::updateUserRole(int userId, int newRole) {
     return db_update_user_basic(userId, user.name, user.dept_id, newRole, user.card_id);
 }
 
+// 删除用户实现
+bool UiController::deleteUser(int userId) {
+    // 调用底层数据库接口
+    // 注意：db_delete_user 会级联删除该用户的考勤记录和图片，非常干净
+    return db_delete_user(userId);
+}
+
 void UiController::clearAllRecords() {
     db_clear_attendance();
 }

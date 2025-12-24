@@ -85,6 +85,7 @@ static lv_obj_t *btn_result_back = nullptr; //  结果页返回按钮
 // 强视觉反馈样式 (红底黄框)
 static lv_style_t style_focus_red;
 static bool style_focus_red_inited = false;
+static lv_obj_t *screen_del = nullptr;// 待删除屏幕指针 (异步销毁用)
 
 // 这些变量用于在注册流程中临时存储数据
 int g_reg_user_id = 0;      // 全局变量：注册时的工号
@@ -118,6 +119,7 @@ static void list_btn_event_cb(lv_event_t *e);
 static void create_register_screen(void);
 static void load_register_step(void); // 采集人脸
 static void load_user_mgmt_screen(void); // 新增：声明加载员工管理页函数
+static void load_user_del_screen(void);// 删除用户确认页
 static void load_record_query_screen(void);
 static void load_record_result_screen(int user_id);
 // System Settings 前向声明
@@ -128,6 +130,7 @@ static void load_storage_info_screen(void);
 static void load_user_info_screen(int user_id);// 详情页
 static void load_password_change_screen(int user_id);// 改密页
 static void load_role_change_auth_screen(int user_id, int current_role);// 权限变更页
+static void load_user_del_screen();// 删除用户确认页
 
 // 前向声明：确保编译器知道这个函数存在 // 或者你原来返回上一级菜单的函数名
 void load_register_form_screen();
@@ -258,7 +261,8 @@ static void async_screen_cleanup_cb(lv_timer_t * t) {
         &screen_storage_info,
         &screen_user_info,      // Level 2
         &screen_pwd_change,     // Level 3-A
-        &screen_role_auth       // Level 3-B
+        &screen_role_auth,       // Level 3-B
+        &screen_del             // 待删除屏幕
     };
 
     // 3. 遍历销毁所有“非当前显示”的屏幕
@@ -807,13 +811,8 @@ static void user_mgmt_btn_event_cb(lv_event_t *e) {
                 }
             }
             else if(std::strcmp(tag, "DeleteUser") == 0) {
-                // [占位] 删除功能提示
-                lv_obj_t * mbox = lv_msgbox_create(NULL);
-                lv_msgbox_add_title(mbox, "Info");
-                lv_msgbox_add_text(mbox, "Delete Feature\nComing Soon...");
-                lv_obj_t * btn = lv_msgbox_add_footer_button(mbox, "OK");
-                lv_obj_add_event_cb(btn, mbox_close_event_cb, LV_EVENT_CLICKED, mbox);
-                lv_obj_center(mbox);
+                // 跳转到删除员工界面
+                load_user_del_screen();
             }
         }
     }
@@ -1088,6 +1087,129 @@ static void load_user_info_screen(int user_id) {
     
     // 默认聚焦姓名
     lv_group_focus_obj(ta_name);
+}
+
+// ================= 删除员工界面 =================
+
+static void load_user_del_screen(void) {
+    // 1. 创建屏幕 & 设置商务蓝背景
+    if (screen_del) lv_obj_delete(screen_del);
+    screen_del = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_del, lv_color_hex(0x0F1C2E), 0); // 商务蓝
+
+    // 2. 标题
+    lv_obj_t *title = lv_label_create(screen_del);
+    lv_label_set_text(title, "删除员工 / Delete User");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_add_style(title, &style_text_cn, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+
+    // 3. 居中容器
+    lv_obj_t *cont = lv_obj_create(screen_del);
+    lv_obj_set_size(cont, 240, 180);
+    lv_obj_center(cont);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(0x172A45), 0); // 蓝灰容器
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // 4. 输入框 (工号)
+    lv_obj_t *ta_id = lv_textarea_create(cont);
+    lv_textarea_set_one_line(ta_id, true);
+    lv_textarea_set_placeholder_text(ta_id, "输入工号 (ID)");
+    lv_textarea_set_accepted_chars(ta_id, "0123456789"); // 只允许数字
+    lv_textarea_set_max_length(ta_id, 8);
+    lv_obj_set_width(ta_id, LV_PCT(90));
+    // 应用你的高亮样式
+    lv_obj_add_style(ta_id, &style_focus_red, LV_STATE_FOCUSED);
+
+    // 5. 删除按钮
+    lv_obj_t *btn_del = lv_button_create(cont);
+    lv_obj_set_width(btn_del, LV_PCT(60));
+    lv_obj_add_style(btn_del, &style_focus_red, LV_STATE_FOCUSED);
+    
+    lv_obj_t *lbl_btn = lv_label_create(btn_del);
+    lv_label_set_text(lbl_btn, "确认删除");
+    lv_obj_add_style(lbl_btn, &style_text_cn, 0);
+    lv_obj_center(lbl_btn);
+
+    // 6. 提示标签 (初始隐藏)
+    lv_obj_t *lbl_msg = lv_label_create(screen_del); // 放在屏幕上而不是容器里，方便定位
+    lv_label_set_text(lbl_msg, "");
+    lv_obj_set_style_text_color(lbl_msg, lv_color_hex(0x00FF00), 0); // 绿色文字
+    lv_obj_add_style(lbl_msg, &style_text_cn, 0);
+    lv_obj_align(lbl_msg, LV_ALIGN_BOTTOM_MID, 0, -40);
+
+    // 清空旧的输入组，重新绑定
+    lv_group_remove_all_objs(g_keypad_group);
+    lv_group_add_obj(g_keypad_group, ta_id);
+    lv_group_add_obj(g_keypad_group, btn_del);
+    lv_group_focus_obj(ta_id); // 默认聚焦输入框
+
+    // --- 事件处理 ---
+    
+    // 结构体传递上下文
+    struct DelCtx { lv_obj_t *ta; lv_obj_t *lbl; };
+    DelCtx *ctx = new DelCtx{ta_id, lbl_msg};
+
+    // 按钮点击事件
+    auto del_cb = [](lv_event_t *e) {
+        lv_event_code_t code = lv_event_get_code(e);
+        bool is_enter = (code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ENTER);// 判断是否为 Enter 键
+        if (code == LV_EVENT_CLICKED || is_enter) {
+            DelCtx *c = (DelCtx *)lv_event_get_user_data(e);
+            const char *txt = lv_textarea_get_text(c->ta);
+            
+            if (strlen(txt) == 0) return; // 空输入不处理
+
+            int uid = atoi(txt);
+            
+            // 核心调用：执行删除
+            bool success = UiController::getInstance()->deleteUser(uid);
+
+            if (success) {
+                // 显示成功信息
+                lv_label_set_text(c->lbl, "删除成功! 正在返回...");
+                lv_obj_set_style_text_color(c->lbl, lv_palette_main(LV_PALETTE_GREEN), 0);
+                
+                // 延时 1.5秒 后自动返回员工管理界面
+                lv_timer_t *t = lv_timer_create([](lv_timer_t *t){
+                    load_user_mgmt_screen(); // 返回上一级
+                }, 1500, nullptr);
+                lv_timer_set_repeat_count(t, 1);
+            } else {
+                // 删除失败 (可能是ID不存在)
+                lv_label_set_text(c->lbl, "删除失败: ID不存在");
+                lv_obj_set_style_text_color(c->lbl, lv_palette_main(LV_PALETTE_RED), 0);
+                lv_textarea_set_text(c->ta, ""); // 清空重输
+            }
+        }
+    };
+
+    // 绑定事件到按钮
+    lv_obj_add_event_cb(btn_del, del_cb, LV_EVENT_ALL, ctx);
+    // 绑定内存清理
+    lv_obj_add_event_cb(btn_del, [](lv_event_t* e){
+        delete (DelCtx*)lv_event_get_user_data(e);
+    }, LV_EVENT_DELETE, nullptr);
+    // 允许在输入框按 Enter 直接触发
+    lv_obj_add_event_cb(ta_id, [](lv_event_t* e){
+        if(lv_event_get_key(e) == LV_KEY_ENTER) {
+             lv_group_focus_next(g_keypad_group); // 简单的跳到按钮
+        }
+    }, LV_EVENT_KEY, nullptr);
+
+
+    // ESC 返回事件
+    auto back_cb = [](lv_event_t *e) {
+        if (lv_event_get_key(e) == LV_KEY_ESC) load_user_mgmt_screen();
+    };
+    lv_obj_add_event_cb(ta_id, back_cb, LV_EVENT_KEY, nullptr);
+    lv_obj_add_event_cb(btn_del, back_cb, LV_EVENT_KEY, nullptr);
+
+    // 加载屏幕
+    lv_screen_load(screen_del);
+    destroy_all_screens_except(screen_del);
 }
 
 // ================= Level 3-A: 修改密码 =================
