@@ -110,7 +110,10 @@ bool UiController::exportReportToUsb() {
     std::strftime(end_date, sizeof(end_date), "%Y-%m-%d", now);
 
     ReportGenerator generator;
-    generator.exportReport(ReportType::SUMMARY, start_date, end_date, "output/usb_sim/attendance_report.xlsx");
+
+    return generator.exportReport(ReportType::SUMMARY, 
+                                  start_date, end_date, 
+                                  "output/usb_sim/attendance_report.xlsx");
 }
 
 bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
@@ -121,4 +124,22 @@ bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
 void UiController::clearAllRecords() {
     db_clear_attendance();
 }
-// ... 其他 clear 函数同理
+
+// 恢复出厂设置实现
+void UiController::factoryReset() {
+    // 调用底层数据层的重置接口
+    db_factory_reset();
+}
+
+// 清除所有员工实现 (防止下一个报错是它)
+void UiController::clearAllEmployees() {
+    db_clear_users();
+}
+
+// 清除所有数据实现
+void UiController::clearAllData() {
+    // 假设底层有这个函数，或者手动调用清除员工+清除记录
+    db_clear_users();
+    db_clear_attendance();
+    // 可能还需要删除特征文件等，视具体业务而定
+}

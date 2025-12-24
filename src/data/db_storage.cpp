@@ -1083,7 +1083,7 @@ long long data_getLastImageID() {
         return -1;
     }// 校验数据库连接
 
-    const char* sql = "SELECT id FROM processed_images ORDER BY id DESC LIMIT 1;";// 获取最后一条记录的ID
+    const char* sql = "SELECT id FROM attendance ORDER BY id DESC LIMIT 1;";// 获取最后一条记录的ID
     sqlite3_stmt* stmt;// 语句句柄
     
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);// 预编译 SQL
@@ -1123,6 +1123,31 @@ bool db_clear_attendance() {
         }
     }
     return ret;
+}
+
+bool db_clear_users() {
+    // 直接使用本文件顶部的静态全局变量 db
+    if (!db) return false; 
+    
+    const char* sql = "DELETE FROM users;";
+    char* errMsg = nullptr;
+    
+    //  使用 db 而不是 g_db
+    int rc = sqlite3_exec(db, sql, nullptr, nullptr, &errMsg);
+    
+    if (rc != SQLITE_OK) {
+        if (errMsg) {
+            std::cerr << "[Data] Clear Users Error: " << errMsg << std::endl;
+            sqlite3_free(errMsg);
+        }
+        return false;
+    }
+    
+    // 如果启用了级联删除，考勤记录会自动删除
+    // 如果没有，可能需要额外执行 DELETE FROM attendance;
+    
+    std::cout << "[Data] All users cleared." << std::endl;
+    return true;
 }
 
 bool db_factory_reset() {

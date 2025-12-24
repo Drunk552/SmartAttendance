@@ -452,18 +452,6 @@ bool data_saveAttendance(int user_id, const cv::Mat& image);
 inline std::vector<UserData> data_getAllUsers() {
     return db_get_all_users();
 }
-#ifdef __cplusplus
-/**
- * @brief 保存图像数据到数据库
- * * 将传入的 OpenCV 图像矩阵编码为 JPG 格式的二进制流 (BLOB)，
- * 并连同当前系统时间戳一起写入到数据库中。
- * * @param[in] image 待保存的图像帧 (cv::Mat)。建议传入裁剪后的人脸区域以节省空间。
- * * @return true  保存成功
- * * @return false 保存失败 (如数据库未初始化、图像为空或 SQL 执行错误)
- * * @note 这是一个 IO 密集型操作，建议避免在 UI 渲染线程中高频调用，以免造成界面卡顿。
- */
-bool data_saveImage(const cv::Mat& image);
-#endif
 
 long long data_getLastImageID();// 获取最后保存图像的ID
 
@@ -472,6 +460,12 @@ long long data_getLastImageID();// 获取最后保存图像的ID
  * @details 删除 attendance 表数据，清空 captured_images 目录
  */
 bool db_clear_attendance();
+
+/**
+ * @brief [Epic 4.3] 清空所有员工数据
+ * @details 删除 users 表数据及其关联的图片文件
+ */
+bool db_clear_users();
 
 /**
  * @brief [Epic 4.3] 恢复出厂设置

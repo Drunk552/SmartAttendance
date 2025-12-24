@@ -74,6 +74,8 @@ static lv_obj_t *obj_adv_grid = nullptr;        //  二级菜单的网格容器
 static lv_obj_t *screen_sys_info = nullptr;     // Level 1: 系统信息菜单
 static lv_obj_t *obj_info_grid = nullptr;       // 信息菜单容器
 static lv_obj_t *screen_storage_info = nullptr; // Level 2: 存储详情页
+static lv_obj_t *btn_query_back = nullptr; //  返回按钮指针
+static lv_obj_t *btn_result_back = nullptr; //  结果页返回按钮
 
 // 这些变量用于在注册流程中临时存储数据
 int g_reg_user_id = 0;      // 全局变量：注册时的工号
@@ -139,7 +141,114 @@ static void load_storage_info_screen(void);
 // 前向声明：确保编译器知道这个函数存在 // 或者你原来返回上一级菜单的函数名
 void load_register_form_screen();
 
+
 // ================= 辅助函数 =================
+
+// ================= [内存管理核心] =================
+
+/**
+ * @brief 安全销毁指定屏幕及其子控件，并置空所有相关全局指针
+ * 防止定时器访问悬空指针导致崩溃
+ */
+static void free_screen_resources(lv_obj_t** screen_ptr) {
+    if (screen_ptr == nullptr || *screen_ptr == nullptr) return;
+
+    // 1. 根据屏幕指针，置空该屏幕下的所有全局子控件指针
+    // 必须与 create_xxx_screen 中赋值的全局变量一一对应
+    if (screen_ptr == &screen_main) {
+        label_time = nullptr;
+        label_disk_warn = nullptr;
+        img_camera = nullptr;
+    }
+    else if (screen_ptr == &screen_menu) {
+        obj_grid = nullptr;
+    }
+    else if (screen_ptr == &screen_user_mgmt) {
+        obj_user_mgmt_grid = nullptr;
+    }
+    else if (screen_ptr == &screen_list) {
+        obj_list_view = nullptr;
+    }
+    else if (screen_ptr == &screen_register) {
+        ta_name = nullptr;
+        img_face_reg = nullptr;
+        // 注意：g_reg_xxx 是数据变量，不需要置空
+    }
+    else if (screen_ptr == &screen_rec_query) {
+        ta_query_id = nullptr;
+        btn_query_back = nullptr;
+    }
+    else if (screen_ptr == &screen_rec_result) {
+        obj_result_container = nullptr;
+        btn_result_back = nullptr;
+    }
+    else if (screen_ptr == &screen_sys_settings) {
+        obj_sys_grid = nullptr;
+    }
+    else if (screen_ptr == &screen_sys_adv) {
+        obj_adv_grid = nullptr;
+    }
+    else if (screen_ptr == &screen_sys_info) {
+        obj_info_grid = nullptr;
+    }
+    // screen_storage_info 没有全局子控件，无需特殊处理
+
+    // 2. 销毁 LVGL 对象 (这会递归销毁所有子对象)
+    lv_obj_delete(*screen_ptr);
+    
+    // 3. 将屏幕指针置空，标记为已销毁
+    *screen_ptr = nullptr;
+    
+    std::printf("[Memory] Screen Freed.\n");
+}
+
+/**
+ * @brief 真正的清理逻辑，由定时器回调执行
+ * 此时之前的事件处理已彻底完成，可以安全销毁旧对象
+ */
+static void async_screen_cleanup_cb(lv_timer_t * t) {
+    // 1. 获取当前系统真正正在显示的屏幕
+    lv_obj_t * act_scr = nullptr;
+#if LV_VERSION_CHECK(9,0,0)
+    act_scr = lv_screen_active();
+#else
+    act_scr = lv_scr_act();
+#endif
+
+    // 2. 维护所有屏幕指针的列表
+    lv_obj_t** all_screens[] = {
+        &screen_main, 
+        &screen_menu, 
+        &screen_user_mgmt, 
+        &screen_list, 
+        &screen_register,
+        &screen_rec_query, 
+        &screen_rec_result,
+        &screen_sys_settings, 
+        &screen_sys_adv, 
+        &screen_sys_info,
+        &screen_storage_info
+    };
+
+    // 3. 遍历销毁所有“非当前显示”的屏幕
+    for (auto ptr : all_screens) {
+        // 如果屏幕已创建(非空) 且 不是当前活跃屏幕，则销毁
+        if (*ptr != nullptr && *ptr != act_scr) {
+            free_screen_resources(ptr);
+        }
+    }
+}
+
+/**
+ * @brief 启动异步销毁任务
+ * 原来的参数 active_screen 被忽略，改用 lv_screen_active() 动态判断，防止竞态问题
+ */
+static void destroy_all_screens_except(lv_obj_t* /*unused*/) {
+    // 创建一个 10ms 的单次定时器
+    // 这样可以确保当前的按键事件回调完全执行完毕后，再执行销毁
+    lv_timer_t * t = lv_timer_create(async_screen_cleanup_cb, 10, nullptr);
+    lv_timer_set_repeat_count(t, 1); // 只运行一次，运行完自动删除定时器
+}
 
 static void request_exit(void) {
     std::printf("[UI] Requesting Exit...\n");
@@ -169,20 +278,18 @@ static void time_timer_cb(lv_timer_t * /*timer*/) {
     if (g_program_should_exit) return;
 
     // 1. 更新时间
-    if (label_time && lv_obj_is_valid(label_time)) {
+    if (label_time) { 
         std::string t = UiController::getInstance()->getCurrentTimeStr();
         lv_label_set_text(label_time, t.c_str());
     }
 
-    // 2. [Epic 4.3] 磁盘监控 (仅在主页显示)
-    if (lv_screen_active() == screen_main) {
+    // 2.  磁盘监控 (仅在主页显示)
+    if (label_disk_warn) {
         bool is_low = UiController::getInstance()->isDiskFull();
         g_disk_full = is_low;
-
-        if (label_disk_warn) {
-            if (is_low) lv_obj_remove_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
-            else lv_obj_add_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
-        }
+        
+        if (is_low) lv_obj_remove_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(label_disk_warn, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -648,6 +755,7 @@ static void load_main_screen(void) {
         lv_scr_load(screen_main);
     #endif
 
+    destroy_all_screens_except(screen_main);// 销毁其他屏幕，释放内存
     lv_group_add_obj(g_keypad_group, screen_main);
     lv_group_focus_obj(screen_main);
 }
@@ -664,6 +772,7 @@ static void load_menu_screen(void) {
         lv_scr_load(screen_menu);
     #endif
 
+    destroy_all_screens_except(screen_menu);// 销毁其他屏幕，释放内存
     // 加入按钮到组
     uint32_t cnt = lv_obj_get_child_cnt(obj_grid);
     for(uint32_t i = 0; i < cnt; i++) {
@@ -807,6 +916,7 @@ static void load_user_mgmt_screen(void) {
     
     lv_screen_load(screen_user_mgmt); // LVGL 9.x 写法
 
+    destroy_all_screens_except(screen_user_mgmt);// 销毁其他屏幕，释放内存
     // 将按钮加入输入组
     uint32_t cnt = lv_obj_get_child_cnt(obj_user_mgmt_grid);
     for(uint32_t i = 0; i < cnt; i++) {
@@ -853,8 +963,6 @@ static void register_btn_next_event_handler(lv_event_t * e) {
 }
 
 // ================= [Epic 5.2] 记录查询功能实现 =================
-
-static lv_obj_t *btn_query_back = nullptr; //  返回按钮指针
 
 // 查询界面通用事件回调 (处理导航和动作)
 static void query_screen_event_cb(lv_event_t *e) {
@@ -974,6 +1082,8 @@ static void load_record_query_screen(void) {
     
     // 默认聚焦输入框
     lv_group_focus_obj(ta_query_id);
+
+    destroy_all_screens_except(screen_rec_query);// 销毁其他屏幕，释放内存
 }
 
 // =================================================================
@@ -1044,7 +1154,7 @@ static void op_clear_confirm_cb(lv_event_t * e) {
     lv_obj_t * mbox = (lv_obj_t *)lv_event_get_user_data(e);
     
     // 1. 执行业务
-    db_clear_attendance();
+    UiController::getInstance()->clearAllRecords();
     
     // 2. 关闭确认框
     if(mbox) lv_msgbox_close(mbox);
@@ -1062,7 +1172,7 @@ static void op_clear_confirm_cb(lv_event_t * e) {
 static void op_reset_confirm_cb(lv_event_t * e) {
     lv_obj_t * mbox = (lv_obj_t *)lv_event_get_user_data(e);
     
-    db_factory_reset();
+    UiController::getInstance()->factoryReset();
     
     if(mbox) lv_msgbox_close(mbox);
     request_exit(); // 重置后退出程序
@@ -1162,6 +1272,7 @@ static void load_sys_adv_screen(void) {
     }
 
     lv_screen_load(screen_sys_adv);
+    destroy_all_screens_except(screen_sys_adv);// 销毁其他屏幕，释放内存
 }
 
 // --- Level 1: 系统设置 (一级菜单) ---
@@ -1241,7 +1352,7 @@ static StorageStats get_storage_statistics() {
         // 注意：这里假设 business_get_user_at 只返回 ID 和 Name
         // 为了统计 role 和 password，我们需要查 DB 详情
         if(UiController::getInstance()->getUserAt(i, &uid, name_buf, sizeof(name_buf))) {
-             UserData u = db_get_user_info(uid);
+             UserData u = UiController::getInstance()->getUserInfo(uid);
              if (u.role == 1) stats.admin_count++;
              if (!u.password.empty()) stats.pwd_users++;
         }
@@ -1250,7 +1361,7 @@ static StorageStats get_storage_statistics() {
     // B. 统计记录数 (获取大范围记录并计数)
     // 实际项目中建议在 DB 层增加 db_get_record_count() 接口
     std::time_t now = std::time(nullptr);
-    auto recs = db_get_records(0, now + 864000); // 获取所有
+    auto recs = UiController::getInstance()->getRecords(-1, 0, now + 864000); // 获取所有
     stats.record_count = (int)recs.size();
     
     return stats;
@@ -1323,6 +1434,7 @@ static void load_storage_info_screen() {
     lv_group_focus_obj(screen_storage_info);
     
     lv_screen_load(screen_storage_info);
+    destroy_all_screens_except(screen_storage_info);// 销毁其他屏幕，释放内存
 }
 
 // 3. Level 1: 系统信息菜单 (System Info Menu)
@@ -1396,6 +1508,7 @@ static void load_sys_info_screen(void) {
         if (cnt > 0) lv_group_focus_obj(lv_obj_get_child(obj_info_grid, 0));
     }
     lv_screen_load(screen_sys_info);
+    destroy_all_screens_except(screen_sys_info);// 销毁其他屏幕，释放内存
 }
 
 static void create_sys_settings_screen() {
@@ -1453,6 +1566,7 @@ static void load_sys_settings_screen(void) {
     }
 
     lv_screen_load(screen_sys_settings);
+    destroy_all_screens_except(screen_sys_settings);// 清理其他屏幕资源
 }
 
 //  加载数据并显示
@@ -1464,10 +1578,7 @@ static void load_user_list_screen(void) {
     // A. 清空输入组 (准备接管键盘)
     lv_group_remove_all_objs(g_keypad_group);
     
-    // B. 清空旧列表内容
-    lv_obj_clean(obj_list_view);
-    
-    // C. 从业务层获取用户数据
+    // B. 从业务层获取用户数据
     int count = UiController::getInstance()->getUserCount(); // 调用 face_demo.cpp 的接口
     std::printf("[UI] Fetching users: %d\n", count);
     
@@ -1507,7 +1618,7 @@ static void load_user_list_screen(void) {
     #else
         lv_scr_load(screen_list);
     #endif
-    
+    destroy_all_screens_except(screen_list);// 清理其他屏幕资源
     // E. 兜底：把背景也加入组，防止列表为空时按键失效
     lv_group_add_obj(g_keypad_group, screen_list);
 }
@@ -1653,7 +1764,15 @@ static void form_nav_event_cb(lv_event_t * e) {
 
 //---  创建整合后的注册表单界面 --- 
 void load_register_form_screen() {
-    lv_obj_t * screen = lv_obj_create(NULL);
+    // 1.  如果全局变量已存在，先销毁旧的，确保重新创建
+    if (screen_register) lv_obj_delete(screen_register);
+    
+    // 2. 创建新屏幕并赋值给全局变量
+    screen_register = lv_obj_create(NULL);
+    
+    // 3. 让局部指针 screen 指向全局变量
+    lv_obj_t * screen = screen_register; 
+
     lv_obj_set_style_bg_color(screen, lv_color_hex(0xF0F0F0), 0);
 
     lv_obj_t * title = lv_label_create(screen);
@@ -1769,7 +1888,11 @@ void load_register_form_screen() {
     lv_group_add_obj(g_keypad_group, btn_cancel);
 
     lv_group_focus_obj(ta_name);
-    lv_screen_load_anim(screen, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
+
+    //加载屏幕 (建议显式使用全局变量)
+    lv_screen_load_anim(screen_register, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
+    //销毁除了自己以外的所有屏幕
+    destroy_all_screens_except(screen_register);
 }
 
 // --- 加载 Step 2: 采集人脸 ---
@@ -1873,8 +1996,6 @@ void ui_init(void) {
 }
 
 // =================  查询结果页 (Result Screen) =================
-
-static lv_obj_t *btn_result_back = nullptr; //  结果页返回按钮
 
 // 结果页通用事件回调
 static void result_screen_event_cb(lv_event_t *e) {
@@ -2005,7 +2126,7 @@ static void load_record_result_screen(int user_id) {
 
     // 5. [数据层交互] 获取记录
     std::time_t now = std::time(nullptr);
-    auto records = db_get_records(now - 30*24*3600, now + 24*3600); 
+    auto records = UiController::getInstance()->getRecords(-1, now - 30*24*3600, now + 24*3600); 
     
     bool found_any = false;
     for (const auto& rec : records) {
@@ -2049,4 +2170,6 @@ static void load_record_result_screen(int user_id) {
     
     // 默认聚焦内容区，方便直接查看
     lv_group_focus_obj(obj_result_container);
+
+    destroy_all_screens_except(screen_rec_result);//  清理其他屏幕资源
 }

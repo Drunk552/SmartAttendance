@@ -44,6 +44,7 @@ public:
     void clearAllRecords();
     void clearAllEmployees();
     void factoryReset();
+    void clearAllData();
 
     // --- 5. 摄像头图像获取  ---
     bool getDisplayFrame(uint8_t* buffer, int width, int height);

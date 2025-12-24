@@ -83,10 +83,18 @@ endif()
 # 自动查找 src 下的源文件 (实际开发建议显式列出以避免遗漏)
 file(GLOB_RECURSE SRC_FILES 
     "src/main.cpp"
-    "src/ui/*.c" 
-    "src/ui/*.cpp"
+    
+    # UI 层
+    "src/ui/ui_app.cpp"
+    "src/ui/ui_controller.cpp"      
+    "src/ui/*.c"               
+    "src/ui/*.cpp"              
+
+    # 业务层
     "src/business/*.cpp"
-    "src/data/db_storage.cpp"     # <--- [12.2日新增] 确保这一行被包含
+
+    # 数据层
+    "src/data/db_storage.cpp"  
 )
 
 add_executable(attendance_app ${SRC_FILES})
