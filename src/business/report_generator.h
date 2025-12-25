@@ -31,6 +31,51 @@ enum AttendanceStatus {
 
 class ReportGenerator {
 public:
+// 内部辅助结构：每日考勤汇总
+struct DailySummary {
+    std::string date;
+    std::string name;
+    std::string dept;
+    std::string check_in;   // 最早打卡
+    std::string check_out;  // 最晚打卡
+    std::string status;     // 状态文本
+    bool is_abnormal;       // 是否异常（用于标红）
+    };
+
+//异常记录结构体
+struct ExceptionRecord {
+    int user_id;            // 工号
+    std::string user_name;  // 姓名
+    std::string dept_name;  // 部门
+    std::string date;       // 异常日期
+    std::string exception_type; // 异常类型
+    std::string exception_detail; // 异常详情
+};
+
+// 每日单元格数据
+struct DailyCellData {
+    std::string user_name;
+    std::string user_code;
+    std::string check_in;
+    std::string check_out;
+    int status;
+    int late_minutes;
+    int early_minutes;
+    };
+
+// 月度汇总数据
+ struct MonthlySummary {
+    std::string user_name;
+    std::string user_code;
+    std::string dept;
+    int normal_days;
+    int late_count;
+    int total_late_minutes;
+    int early_count;
+    int total_early_minutes;
+    int absent_days;
+    };
+
     ReportGenerator();
     ~ReportGenerator();
 
@@ -48,11 +93,11 @@ public:
                       const std::string& output_path);
 
     /**
-     * @brief 生成精细化月度报表
+     * @brief 导出精细化月度报表
      * @param month_str 月份字符串 "YYYY-MM"
      * @param output_path 输出文件路径
-     * @return 是否成功
-     */
+     * @return true 导出成功, false 失败
+     */ 
     bool exportDetailedReport(const std::string& month_str, 
                               const std::string& output_path);
 
@@ -78,40 +123,25 @@ public:
                                 const std::string& end_date, 
                                 const std::string& output_path);
 
-    // 内部辅助结构：每日考勤汇总
-    struct DailySummary {
-        std::string date;
-        std::string name;
-        std::string dept;
-        std::string check_in;   // 最早打卡
-        std::string check_out;  // 最晚打卡
-        std::string status;     // 状态文本
-        bool is_abnormal;       // 是否异常（用于标红）
-    };
-
-    // 每日单元格数据
-    struct DailyCellData {
-        std::string user_name;
-        std::string user_code;
-        std::string check_in;
-        std::string check_out;
-        int status;
-        int late_minutes;
-        int early_minutes;
-    };
-
-    // 月度汇总数据
-    struct MonthlySummary {
-        std::string user_name;
-        std::string user_code;
-        std::string dept;
-        int normal_days;
-        int late_count;
-        int total_late_minutes;
-        int early_count;
-        int total_early_minutes;
-        int absent_days;
-    };
+    //Excel工作表写入函数
+    /**
+     * @brief 写入排班信息表
+     */
+    void writeShiftSheet(lxw_workbook* workbook, const std::vector<UserData>& users, int year, int month);
+   
+    /**
+     * @brief 写入原始记录表
+     */
+    void writeRecordSheet(lxw_workbook* workbook, const std::vector<AttendanceRecord>& records);
+  
+    /**
+     * @brief 写入异常统计表
+     */
+    void writeExceptionSheet(lxw_workbook* workbook, 
+                             const std::vector<AttendanceRecord>& records,
+                             const std::map<int, MonthlySummary>& summaries,
+                             const std::map<int, std::map<int, DailyCellData>>& detail_data,
+                             int year, int month);
 
 private:
 
@@ -124,6 +154,10 @@ private:
     int extractDayFromTimestamp(long long timestamp);
     int extractMonthFromTimestamp(long long timestamp);
     int extractYearFromTimestamp(long long timestamp);
+
+    // 新增辅助函数
+    std::map<int, ShiftInfo> db_get_user_monthly_shifts(int user_id, int year, int month);
+    std::string formatDateString(int year, int month, int day);
 
     // 计算迟到/早退分钟数
     int calculateLateMinutes(long long timestamp, const ShiftInfo& shift);

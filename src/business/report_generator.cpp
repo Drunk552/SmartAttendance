@@ -254,23 +254,24 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
 
     auto db_records = ::db_get_records(start_ts, end_ts);
 
-    //班次缓存 map，避免同一个人同一天重复查询数据库
+    // 班次缓存 map，避免同一个人同一天重复查询数据库
     // Key: "UserID_YYYY-MM-DD", Value: ShiftInfo
     std::map<std::string, ShiftInfo> shift_cache;
+    
     for (const auto& record : db_records) {
-        AttendanceRecord rec;// 复制数据
-        rec.id = record.id;// 保留原ID
-        rec.user_id = record.user_id;// 保留原用户ID
-        rec.timestamp = record.timestamp;// 保留原时间戳
-        rec.status = record.status;// 保留原状态
-        rec.user_name = record.user_name;// 保留原用户名
-        rec.dept_name = record.dept_name;// 保留原部门名称
+        AttendanceRecord rec; // 复制数据
+        rec.id = record.id; // 保留原ID
+        rec.user_id = record.user_id; // 保留原用户ID
+        rec.timestamp = record.timestamp; // 保留原时间戳
+        rec.status = record.status; // 保留原状态
+        rec.user_name = record.user_name; // 保留原用户名
+        rec.dept_name = record.dept_name; // 保留原部门名称
         rec.image_path = record.image_path;
 
-        rec.minutes_late = 0;// 默认值为0
-        rec.minutes_early = 0;// 默认值为0
+        rec.minutes_late = 0; // 默认值为0
+        rec.minutes_early = 0; // 默认值为0
 
-        //动态获取班次信息
+        // 动态获取班次信息
         // 生成缓存 Key (用户ID + 日期)
         std::string date_str = formatDate(rec.timestamp);
         std::string cache_key = std::to_string(rec.user_id) + "_" + date_str;
@@ -279,27 +280,29 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
         // 检查缓存或查询数据库
         if (shift_cache.find(cache_key) != shift_cache.end()) {
             current_shift = shift_cache[cache_key];
-        } else {
-            // [调用数据层核心接口] 智能获取当天的排班 (个人排班 > 部门排班 > 默认班次)
-            // 注意：需确保已 include "data/db_storage.h"
-            current_shift = ::db_get_user_shift_smart(rec.user_id, rec.timestamp); //
+        } 
+        
+        else {
+            //智能获取当天的排班 (个人排班 > 部门排班 > 默认班次)
+            current_shift = ::db_get_user_shift_smart(rec.user_id, rec.timestamp);
             shift_cache[cache_key] = current_shift;
         } 
         
-        // 强制重新计算迟到/早退逻辑，修复历史数据可能不准的问题
-        // 1. 先计算具体的分钟数
+        //计算迟到/早退逻辑
         int late_min = calculateLateMinutes(rec.timestamp, current_shift);
         int early_min = calculateEarlyMinutes(rec.timestamp, current_shift);
 
-        // 2. 根据计算结果强制更新状态和分钟数
+        //根据计算结果强制更新状态和分钟数
         if (late_min > 0) {
             rec.status = STATUS_LATE;       // 强制标记为迟到
             rec.minutes_late = late_min;    // 记录迟到时长
         } 
+
         else if (early_min > 0) {
             rec.status = STATUS_EARLY;      // 强制标记为早退
             rec.minutes_early = early_min;  // 记录早退时长
         }
+
         else {
             // 如果既不迟到也不早退，但原状态显示异常，则修正为正常
             if (rec.status == STATUS_LATE || rec.status == STATUS_EARLY) {
@@ -308,9 +311,11 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
         }
         records.push_back(rec);
     }
+    
     std::cout << "[Report] 从数据库获取 " << records.size() 
               << " 条考勤记录 (" << formatDate(start_ts) 
               << " 到 " << formatDate(end_ts) << ")" << std::endl;
+              
     return records;
 }
 
@@ -722,6 +727,387 @@ void ReportGenerator::writeDetailSheet(lxw_workbook* workbook,
 }
 
 /**
+ * @brief 获取用户指定月份的排班信息（新增批量接口）
+ * @param user_id 用户ID
+ * @param year 年份
+ * @param month 月份
+ * @return 用户在该月每天的排班信息
+ */
+std::map<int,ShiftInfo> ReportGenerator::db_get_user_monthly_shifts(int user_id, int year, int month) {
+    std::map<int,ShiftInfo> monthly_shifts;
+
+    int days_in_month = getDaysInMonth(year, month); // 获取当月天数
+
+    // 循环获得每天的排班信息
+    for(int day = 1; day <= days_in_month; day++){
+        std::string date_str = formatDateString(year, month, day); // 构建日期字符串
+        long long timestamp = parseDateToTimestamp(date_str, false);
+
+        ShiftInfo shift = ::db_get_user_shift_smart(user_id, timestamp); // 调用现有的智能获取排班接口
+        
+        monthly_shifts[day] = shift;
+    }
+    
+    return monthly_shifts;
+}
+
+/**
+ * @brief 将时间格式化为字符串
+ * @param year 年份
+ * @param month 月份  
+ * @param day 日期
+ * @return 格式化字符串 "YYYY-MM-DD"
+ */
+std::string ReportGenerator::formatDateString(int year, int month, int day){
+    std::stringstream ss;
+    ss << year << "-"
+       <<std::setw(2) << std::setfill('0') << month << "-"
+       <<std::setw(2) << std::setfill('0') <<day;
+    return ss.str();
+}
+
+/**
+ * @brief 写入排班信息表
+ * @param workbook 工作簿对象
+ * @param users 用户信息列表
+ * @param year 年份
+ * @param month 月份
+ */
+void ReportGenerator::writeShiftSheet(lxw_workbook* workbook, const std::vector<UserData>& users, int year, int month)  {
+    lxw_worksheet* sheet = workbook_add_worksheet(workbook, "Shift Information");
+
+    // 创建样式
+    lxw_format* header_format = createHeaderFormat(workbook);
+    lxw_format* normal_format = createNormalFormat(workbook);
+    lxw_format* rest_format = workbook_add_format(workbook); // 休息日样式
+    format_set_font_color(rest_format, 0x808080); // 灰色
+    format_set_border(rest_format, LXW_BORDER_THIN);
+    format_set_align(rest_format, LXW_ALIGN_CENTER);
+
+    // 获取当月天数
+    int days_in_month = getDaysInMonth(year, month);
+
+    // 写入表头
+    worksheet_write_string(sheet, 0, 0, "员工/日期", header_format);
+
+    // 写入日期行(横轴：1-31日)
+    for(int day = 1; day <= days_in_month; day++){
+        worksheet_write_number(sheet, 0, day, day, header_format);
+    }
+
+    // 写入员工排班数据(纵轴：员工)
+    int row = 1;
+    for(const auto& user : users){
+        // 写入员工信息（姓名/工号）
+        std::string user_info = user.name + "/" + std::to_string(user.id);
+        worksheet_write_string(sheet, row, 0, user_info.c_str(), normal_format);
+
+        // 获取该员工当月排班信息
+        std::map<int, ShiftInfo> monthly_shifts = db_get_user_monthly_shifts(user.id, year, month);
+
+        // 写入每天排班的信息
+        for(int day = 1; day <= days_in_month; day++){
+            std::string shift_display = "休"; // 默认休息
+        
+            if(monthly_shifts.find(day) != monthly_shifts.end()){
+                const ShiftInfo& shift = monthly_shifts[day];
+
+                // 判断是否为休息日 - 根据 db_get_user_shift_smart 逻辑
+                // 如果没有排班或排班ID为0，视为休息
+                if(shift.id == 0) {
+                    shift_display = "休";
+                } else {
+                    // 根据 db_storage.h 中的字段名访问
+                    if (!shift.name.empty()) {
+                        // 如果有班次名称，显示班次名称
+                        shift_display = shift.name;
+                    } else if (!shift.s1_start.empty() && !shift.s1_end.empty()) {
+                        // 如果没有班次名称，显示时间段
+                        shift_display = shift.s1_start.substr(0, 5) + "-" + shift.s1_end.substr(0, 5);
+                        
+                        // 如果有多个班段，可以添加更多信息
+                        if (!shift.s2_start.empty() && !shift.s2_end.empty()) {
+                            shift_display += " " + shift.s2_start.substr(0, 5) + "-" + shift.s2_end.substr(0, 5);
+                        }
+                    } else {
+                        // 默认显示
+                        shift_display = "班";
+                    }
+                }
+                
+                // 写入单元格
+                lxw_format* cell_format = (shift_display == "休") ? rest_format : normal_format; 
+                worksheet_write_string(sheet, row, day, shift_display.c_str(), cell_format);
+            } else {
+                // 如果没有排班数据，默认显示休息
+                worksheet_write_string(sheet, row, day, "休", rest_format);
+            }
+        }
+
+        row++;
+    }
+
+    // 设置列宽
+    worksheet_set_column(sheet, 0, 0, 20, NULL); // 员工列
+    for(int day = 1; day <= days_in_month; day++){
+        worksheet_set_column(sheet, day, day, 12, NULL); // 日期列
+    }
+
+    // 冻结窗格
+    worksheet_freeze_panes(sheet, 1, 1);
+
+    std::cout << "[Report] 排班信息表创建完成 (" << row-1 << "名员工, " << days_in_month << "天)" << std::endl;
+}
+
+/**
+ * @brief 写入原始记录表
+ * @param workbook 工作簿对象
+ * @param records 考勤记录列表
+ */
+void ReportGenerator::writeRecordSheet(lxw_workbook* workbook, const std::vector<AttendanceRecord>& records) {
+    lxw_worksheet* sheet = workbook_add_worksheet(workbook, "Original Records");
+    
+    // 创建样式
+    lxw_format* header_format = createHeaderFormat(workbook);
+    lxw_format* normal_format = createNormalFormat(workbook);
+    lxw_format* time_format = workbook_add_format(workbook);
+    format_set_border(time_format, LXW_BORDER_THIN);
+    format_set_align(time_format, LXW_ALIGN_CENTER);
+    format_set_num_format(time_format, "yyyy-mm-dd hh:mm:ss");
+    
+    // 写入表头
+    const char* headers[] = {
+        "工号", "姓名", "部门", "打卡日期", "打卡时间", "设备ID", "验证方式"
+    };
+    
+    for (int i = 0; i < 7; i++) {
+        worksheet_write_string(sheet, 0, i, headers[i], header_format);
+    }
+    
+    // 写入数据
+    int row = 1;
+    for (const auto& record : records) {
+        // 工号
+        worksheet_write_number(sheet, row, 0, record.user_id, normal_format);
+        
+        // 姓名
+        worksheet_write_string(sheet, row, 1, record.user_name.c_str(), normal_format);
+        
+        // 部门
+        worksheet_write_string(sheet, row, 2, record.dept_name.c_str(), normal_format);
+        
+        // 打卡日期和时间
+        std::time_t t = (std::time_t)record.timestamp;
+        std::tm* tm = std::localtime(&t);
+        
+        if (tm) {
+            // 打卡日期
+            char date_buf[16];
+            std::strftime(date_buf, sizeof(date_buf), "%Y-%m-%d", tm);
+            worksheet_write_string(sheet, row, 3, date_buf, normal_format);
+            
+            // 打卡时间（精确到秒）
+            char time_buf[16];
+            std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm);
+            worksheet_write_string(sheet, row, 4, time_buf, normal_format);
+            
+            // 如果需要Excel日期时间格式
+            // double excel_time = ((double)record.timestamp / 86400.0) + 25569.0;
+            // worksheet_write_datetime(sheet, row, 4, &excel_time, time_format);
+        } else {
+            worksheet_write_string(sheet, row, 3, "N/A", normal_format);
+            worksheet_write_string(sheet, row, 4, "N/A", normal_format);
+        }
+        
+        // 设备ID（可选）
+        std::string device_id = "N/A"; // 假设没有设备ID字段
+        // 如果有设备ID字段：device_id = record.device_id;
+        worksheet_write_string(sheet, row, 5, device_id.c_str(), normal_format);
+        
+        // 验证方式
+        std::string verify_mode = "人脸"; // 默认为人脸识别
+        // 可以根据实际情况判断
+        // if (!record.card_id.empty()) verify_mode = "刷卡";
+        worksheet_write_string(sheet, row, 6, verify_mode.c_str(), normal_format);
+        
+        row++;
+    }
+    
+    // 设置列宽
+    worksheet_set_column(sheet, 0, 0, 10, NULL); // 工号
+    worksheet_set_column(sheet, 1, 1, 15, NULL); // 姓名
+    worksheet_set_column(sheet, 2, 2, 15, NULL); // 部门
+    worksheet_set_column(sheet, 3, 3, 12, NULL); // 日期
+    worksheet_set_column(sheet, 4, 4, 12, NULL); // 时间
+    worksheet_set_column(sheet, 5, 5, 15, NULL); // 设备ID
+    worksheet_set_column(sheet, 6, 6, 12, NULL); // 验证方式
+    
+    std::cout << "[Report] 原始记录表创建完成 (" << row-1 << " 条记录)" << std::endl;
+}
+
+/**
+ * @brief 写入异常统计表
+ * @param workbook 工作簿对象
+ * @param records 考勤记录列表
+ * @param summaries 月度汇总数据
+ * @param detail_data 每日明细数据（用于获取具体缺勤日期）
+ * @param year 年份
+ * @param month 月份
+ */
+void ReportGenerator::writeExceptionSheet(lxw_workbook* workbook, 
+                                         const std::vector<AttendanceRecord>& records,
+                                         const std::map<int, MonthlySummary>& summaries,
+                                         const std::map<int, std::map<int, DailyCellData>>& detail_data,
+                                         int year, int month) {
+    
+    lxw_worksheet* sheet = workbook_add_worksheet(workbook, "Exceptions");
+    
+    // 创建样式
+    lxw_format* header_format = createHeaderFormat(workbook);
+    lxw_format* normal_format = createNormalFormat(workbook);
+    lxw_format* late_format = workbook_add_format(workbook); // 迟到样式
+    format_set_font_color(late_format, 0xFF6600); // 橙色
+    format_set_border(late_format, LXW_BORDER_THIN);
+    format_set_align(late_format, LXW_ALIGN_CENTER);
+    
+    lxw_format* early_format = workbook_add_format(workbook); // 早退样式
+    format_set_font_color(early_format, 0x9933CC); // 紫色
+    format_set_border(early_format, LXW_BORDER_THIN);
+    format_set_align(early_format, LXW_ALIGN_CENTER);
+    
+    lxw_format* absent_format = createRedFormat(workbook); // 缺勤样式（红色）
+    
+    // 写入表头
+    const char* headers[] = {
+        "工号", "姓名", "部门", "异常日期", "异常类型", "异常详情"
+    };
+    
+    for (int i = 0; i < 6; i++) {
+        worksheet_write_string(sheet, 0, i, headers[i], header_format);
+    }
+    
+    // 收集异常记录
+    std::vector<ExceptionRecord> exception_records;
+    
+    // 从原始记录中提取迟到和早退
+    for (const auto& record : records) {
+
+        if (record.status != STATUS_NORMAL) {
+            ExceptionRecord exc;
+            exc.user_id = record.user_id;
+            exc.user_name = record.user_name;
+            exc.dept_name = record.dept_name;
+            exc.date = formatDate(record.timestamp);
+            
+            // 确定异常类型和详情
+            if (record.status == STATUS_LATE) {
+                exc.exception_type = "迟到";
+                exc.exception_detail = "迟到 " + std::to_string(record.minutes_late) + "分钟";
+            } 
+            
+            else if (record.status == STATUS_EARLY) {
+                exc.exception_type = "早退";
+                exc.exception_detail = "早退 " + std::to_string(record.minutes_early) + "分钟";
+            } 
+            
+            else if (record.status == STATUS_ABSENT) {
+                exc.exception_type = "缺勤";
+                exc.exception_detail = "全天缺勤";
+            }
+            
+            else {
+                exc.exception_type = "其他异常";
+                exc.exception_detail = "状态码: " + std::to_string(record.status);
+            }
+            
+            exception_records.push_back(exc);
+        }
+    }
+    
+    // 从detail_data中提取具体的缺勤日期
+    for (const auto& [user_id, daily_data] : detail_data) {
+        // 获取用户信息
+        std::string user_name, dept_name;
+
+        if (daily_data.size() > 0) {
+            user_name = daily_data.begin()->second.user_name;
+           
+            // 从汇总数据中获取部门信息
+            if (summaries.find(user_id) != summaries.end()) {
+                dept_name = summaries.at(user_id).dept;
+            }
+        }
+        
+        // 遍历每一天，找出缺勤日期
+        for (const auto& [day, cell_data] : daily_data) {
+
+            if (cell_data.status == STATUS_ABSENT) {
+                ExceptionRecord exc;
+                exc.user_id = user_id;
+                exc.user_name = user_name;
+                exc.dept_name = dept_name;
+                
+                // 构建具体日期
+                exc.date = std::to_string(year) + "-" + 
+                          std::to_string(month) + "-" + 
+                          std::to_string(day);
+                exc.exception_type = "缺勤";
+                exc.exception_detail = "全天未打卡";
+                
+                exception_records.push_back(exc);
+            }
+        }
+    }
+    
+    // 写入异常记录数据
+    int row = 1;
+    for (const auto& exc : exception_records) {
+        // 工号
+        worksheet_write_number(sheet, row, 0, exc.user_id, normal_format);
+        
+        // 姓名
+        worksheet_write_string(sheet, row, 1, exc.user_name.c_str(), normal_format);
+        
+        // 部门
+        worksheet_write_string(sheet, row, 2, exc.dept_name.c_str(), normal_format);
+        
+        // 异常日期
+        worksheet_write_string(sheet, row, 3, exc.date.c_str(), normal_format);
+        
+        // 异常类型（根据类型使用不同样式）
+        lxw_format* type_format = normal_format;
+        
+        if (exc.exception_type == "迟到") {
+            type_format = late_format;
+        } 
+        
+        else if (exc.exception_type == "早退") {
+            type_format = early_format;
+        } 
+        
+        else if (exc.exception_type == "缺勤") {
+            type_format = absent_format;
+        }
+        worksheet_write_string(sheet, row, 4, exc.exception_type.c_str(), type_format);
+        
+        // 异常详情
+        worksheet_write_string(sheet, row, 5, exc.exception_detail.c_str(), type_format);
+        
+        row++;
+    }
+    
+    // 设置列宽
+    worksheet_set_column(sheet, 0, 0, 10, NULL); // 工号
+    worksheet_set_column(sheet, 1, 1, 15, NULL); // 姓名
+    worksheet_set_column(sheet, 2, 2, 15, NULL); // 部门
+    worksheet_set_column(sheet, 3, 3, 12, NULL); // 异常日期
+    worksheet_set_column(sheet, 4, 4, 10, NULL); // 异常类型
+    worksheet_set_column(sheet, 5, 5, 20, NULL); // 异常详情
+    
+    std::cout << "[Report] 异常统计表创建完成 (" << row-1 << " 条异常记录)" << std::endl;
+}
+ 
+/**
  * @brief 生成精细化月度报表
  * @param month_str 月份字符串 "YYYY-MM"
  * @param output_path 输出文件路径
@@ -729,7 +1115,7 @@ void ReportGenerator::writeDetailSheet(lxw_workbook* workbook,
  */
 bool ReportGenerator::exportDetailedReport(const std::string& month_str, 
                                          const std::string& output_path) {
-    std::cout << "[ReportGenerator] 生成Epic5.3精细化月度报表: " << month_str << std::endl;
+    std::cout << "[ReportGenerator] 生成精细化月度报表: " << month_str << std::endl;
     
     // 解析月份
     std::tm tm = {};
@@ -761,36 +1147,47 @@ bool ReportGenerator::exportDetailedReport(const std::string& month_str,
     end_tm.tm_sec = 59;
     long long end_ts = std::mktime(&end_tm);
     
-    //获取数据
+    // 获取数据
     std::vector<AttendanceRecord> records = db_get_records(start_ts, end_ts);
     std::vector<UserData> users = db_get_all_users_info();
     
-    //处理数据
+    // 处理数据
     std::map<int, std::map<int, DailyCellData>> detail_data;
     std::map<int, MonthlySummary> summaries;
     
     processAttendanceData(records, users, start_ts, end_ts, detail_data, summaries);
     
-    //创建Excel工作簿（要求两个Sheet）
+    // 创建Excel工作簿（要求五个Sheet）
     lxw_workbook* workbook = workbook_new(output_path.c_str());
     if (!workbook) {
         std::cerr << "[Error] 无法创建工作簿: " << output_path << std::endl;
         return false;
     }
-    
-    //写入Summary表
+     
+    // Sheet 1: 汇总
     writeSummarySheet(workbook, summaries);
     
-    //写入Daily Detail表（横轴日期，纵轴员工）
+    // Sheet 2: 排班
+    writeShiftSheet(workbook, users, year, month);
+    
+    // Sheet 3: 原始记录
+    writeRecordSheet(workbook, records);
+    
+    // Sheet 4: 异常
+     writeExceptionSheet(workbook, records, summaries, detail_data, year, month);
+    
+    // Sheet 5: 明细
     writeDetailSheet(workbook, detail_data, days_in_month);
     
-    //保存文件
+    // 保存文件
     workbook_close(workbook);
     
-    std::cout << "[Success] Epic5.3精细化报表生成成功！" << std::endl;
+    std::cout << "[Success] 精细化报表生成成功！" << std::endl;
     std::cout << "  文件: " << output_path << std::endl;
-    std::cout << "  工作表: Summary, Daily Detail" << std::endl;
+    std::cout << "  工作表数: 5" << std::endl;
     std::cout << "  月份: " << month_str << " (" << days_in_month << "天)" << std::endl;
+    std::cout << "  员工数: " << users.size() << std::endl;
+    std::cout << "  记录数: " << records.size() << std::endl;
     
     return true;
 }
