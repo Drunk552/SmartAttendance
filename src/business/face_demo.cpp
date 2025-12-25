@@ -55,7 +55,7 @@ static cv::Mat apply_histogram_equalization(const cv::Mat& img, int method) {
         cv::equalizeHist(img, result);
     } 
     
-    else if (method == HIST_EQ_GLOBAL) {
+    else if (method == HIST_EQ_CLAHE) {
         cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();// 创建CLAHE对象
         clahe->setClipLimit(preprocess_config.clahe_clip_limit);// 设置对比度限制
         clahe->setTilesGridSize(preprocess_config.clahe_tile_grid_size);// 设置网格大小
@@ -116,7 +116,7 @@ cv::Mat preprocess_face_complete(const cv::Mat& input_face, const cv::Rect& face
 
     if (config.enable_resize_eq) {
         if (config.enablez_resize) {
-            resize(gray, gray, config.resize_size);// 尺寸归一化
+            cv::resize(gray, gray, config.resize_size, 0, 0, cv::INTER_LINEAR_EXACT);
         }
 
         gray = apply_histogram_equalization(gray, config.hist_eq_method);// 直方图均衡化
@@ -152,15 +152,37 @@ static std::string find_cascade() {
  * @return true-检测到人脸，false-未检测到人脸
  * @note 检测最大的人脸区域，适合单人脸场景
  */
-
+    //FPS优化
 static bool detect_face(const Mat& current_frame, Rect& face, CascadeClassifier& cas) {
-    std::vector<Rect> faces;// 存储所有检测到的人脸
-    Mat gray; cvtColor(current_frame, gray, COLOR_BGR2GRAY);// 转为灰度图（Haar检测需要灰度图）
-    equalizeHist(gray, gray);// 直方图均衡化，增强对比度
-    cas.detectMultiScale(gray, faces, 1.1, 3, 0, Size(80,80));// 检测人脸，参数：1.1-缩放因子，3-最小邻居数，0-标志，Size(80,80)-最小人脸尺寸
-    if (faces.empty()) return false;// 未检测到人脸
+    std::vector<Rect> faces;
+    Mat gray, small_frame;
+
+    // 核心优化：缩小图像到1/2尺寸（检测速度翻倍）
+    double scale = 0.5;  // 可调：0.3=缩小到1/3，速度提升3倍（精度略降）
+    resize(current_frame, small_frame, Size(), scale, scale);
+    
+    cvtColor(small_frame, gray, COLOR_BGR2GRAY);
+    equalizeHist(gray, gray);
+
+    // 调优检测参数：缩小最小人脸尺寸，减少检测计算量
+    cas.detectMultiScale(
+        gray, faces, 
+        1.2,    // 缩放因子从1.1→1.2（减少缩放次数）
+        4,      // 最小邻居数从3→4（减少误检，降低后续筛选耗时）
+        0,      
+        Size(40,40)  // 最小人脸尺寸同步缩小（原80x80→40x40，匹配缩小后的图像）
+    );
+
+    if (faces.empty()) return false;
+    
+    // 还原人脸位置到原图像尺寸（关键：缩小了多少倍，就还原多少倍）
     face = *std::max_element(faces.begin(), faces.end(),
-    [](const Rect& a, const Rect& b){return a.area()<b.area();}); // 选择面积最大的人脸（假设场景中只有一个人）
+    [](const Rect& a, const Rect& b){return a.area()<b.area();});
+    face.x /= scale;
+    face.y /= scale;
+    face.width /= scale;
+    face.height /= scale;
+
     return true;
 }
 
@@ -183,23 +205,18 @@ static Mat preprocess_face(const Mat& current_frame, const Rect& roi) {
  * @note 用于接收网络视频流，配置为低延迟模式
  */
 
+    // FPS优化
 static VideoCapture open_sdp_stream(const std::string& sdp_path) {
-    // GStreamer管道配置：
-    // filesrc: 从文件读取SDP描述
-    // sdpdemux: 解析SDP，提取媒体流
-    // rtpjitterbuffer: 抖动缓冲，latency=0表示最低延迟
-    // rtpvrawdepay: RTP载荷解析
-    // videoconvert: 格式转换
-    // appsink: 输出到OpenCV，配置为异步、丢弃旧帧、只保留最新一帧
     std::string pipe =
         "filesrc location=" + sdp_path + " ! sdpdemux "
-        "! rtpjitterbuffer latency=0 "
-        "! rtpvrawdepay ! videoconvert "
+        "! rtpjitterbuffer latency=100 drop-on-latency=true "
+        "! rtpjpegdepay "  
+        "! jpegdec threads=2 "
+        "! queue max-size-buffers=10 "
+        "! videoconvert "
         "! video/x-raw,format=BGR "
-        "! appsink sync=false drop=true max-buffers=1";
-
-    VideoCapture cap(pipe, cv::CAP_GSTREAMER);// 使用GStreamer后端
-    return cap;
+        "! appsink sync=false drop=true max-buffers=8";
+    return VideoCapture(pipe, cv::CAP_GSTREAMER);
 }
 
 /**
@@ -209,6 +226,9 @@ static VideoCapture open_sdp_stream(const std::string& sdp_path) {
  */
 
 bool business_init() {
+    // 拉满OpenCV多线程（使用所有CPU核心）
+    cv::setNumThreads(cv::getNumberOfCPUs());
+    cv::setUseOptimized(true);  // 启用OpenCV SIMD加速（CPU指令集优化）
     //加载人脸检测器（Haar级联分类器）
     std::string cascade_path = find_cascade();
     if (cascade_path.empty() || !face_cas.load(cascade_path)) {
@@ -217,7 +237,7 @@ bool business_init() {
     }
 
     //打开视频输入 (默认尝试打开 SDP)
-    std::string sdp = "/tmp/yuyv.sdp"; // 硬编码默认路径，或从配置读取
+    std::string sdp = "/mnt/c/tmp/yuyv.sdp"; // 硬编码默认路径，或从配置读取
     cap = open_sdp_stream(sdp);// 尝试打开GStreamer流
     
     if (!cap.isOpened()) {
@@ -227,13 +247,23 @@ bool business_init() {
         // 【新增代码】强制设置低分辨率和缓冲区大小
         if (cap.isOpened()) {
             // 设置为 320x240，匹配我们的屏幕尺寸，大幅提升处理速度
-            cap.set(cv::CAP_PROP_FRAME_WIDTH, 320);
-            cap.set(cv::CAP_PROP_FRAME_HEIGHT, 240);
-            
+            cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+            cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+
+        // 2. FPS优化：强制MJPEG（硬件编码，减少CPU解码耗时）
+        cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M','J','P','G'));
+        cap.set(cv::CAP_PROP_BUFFERSIZE, 2);  // 缓冲2帧，避免高动态画面丢帧
+        cap.set(cv::CAP_PROP_FPS, 30);        // 强制锁定接收帧率
+         //关闭自动参数：固定曝光/对焦，避免帧率波动
+        cap.set(cv::CAP_PROP_AUTO_EXPOSURE, 0); // 关闭自动曝光
+        cap.set(cv::CAP_PROP_EXPOSURE, 100);    // 固定曝光值（可根据实际画面调整）
+        cap.set(cv::CAP_PROP_AUTOFOCUS, 0);     // 关闭自动对焦
+        cap.set(cv::CAP_PROP_FOCUS, 50);        // 固定对焦值（正对人脸距离约50cm）
+
             // 尝试设置缓冲区为1 (部分驱动支持)，只取最新一帧
             cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
             
-            std::cout << "[Business] Camera set to 320x240 Low Latency Mode.\n";
+            std::cout << "[Business] Camera optimized: 640x480 MJPEG, auto-exposure/focus disabled.\n";
         }
     }
     
@@ -481,14 +511,13 @@ void business_toggle_recognition() {
  * @return cv::Mat 处理后的图像（带有人脸框和文字），用于 UI 显示
  * @note 移除了 imshow 和 waitKey，不再阻塞，不再直接处理键盘
  */
-cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_once 也可以保留但返回值要改
+cv::Mat business_get_frame() {
     if (!cap.isOpened()) return Mat();
 
     // [Epic 4.4 新增] 加锁，防止写入时被其他线程读取
     std::lock_guard<std::mutex> lock(g_data_mutex);
 
-    // 【可选优化】如果在 Linux/V4L2 下延迟依然存在，可以取消下面这行的注释
-    // 它的作用是每次读取前先抓取一次丢弃，确保拿到的是最新的
+    // 【可选优化】确保拿到最新帧
     cap.grab();
 
     // 1. 读取一帧
@@ -496,62 +525,77 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
         return Mat(); 
     }
 
-    // 2. 检测人脸
-    Rect face;
-    bool has = detect_face(current_frame, face, face_cas);
-    if (has) rectangle(current_frame, face, Scalar(0,255,0), 2);
+    // ======================== FPS优化：人脸检测频率控制 ========================
+    static int frame_counter = 0;          // 静态帧计数器（仅初始化一次）
+    static const int DETECT_INTERVAL = 5;  // 每2帧检测一次（可调）
+    static cv::Rect last_detected_face;    // 缓存上一次人脸位置（改变量名，避免和cv::face冲突）
+    static bool last_has_face = false;     // 缓存上一次是否检测到人脸
+
+    frame_counter = (frame_counter + 1) % 1000;  // 计数器循环，防止溢出
+
+    cv::Rect detected_face;  // 改变量名：face → detected_face，解决命名空间冲突
+    bool has = false;
+    if (frame_counter % DETECT_INTERVAL == 0) {
+        // 检测帧：执行完整人脸检测
+        has = detect_face(current_frame, detected_face, face_cas);
+        last_detected_face = detected_face;
+        last_has_face = has;
+    } else {
+        // 非检测帧：复用上次结果
+        has = last_has_face;
+        detected_face = last_detected_face;
+    }
+    // ======================== 检测频率控制结束 ========================
+
+    // 绘制人脸框（复用缓存结果）
+    if (has) {
+        cv::rectangle(current_frame, detected_face, cv::Scalar(0,255,0), 2);
+    }
 
     // 3. 识别逻辑 (如果开启)
     if (show_recognition && trained && has) {
-        Mat f = preprocess_face(current_frame, face);
-        int pred_label = -1; double conf = 0.0;
+        cv::Mat f = preprocess_face(current_frame, detected_face);
+        int pred_label = -1; 
+        double conf = 0.0;
         recog->predict(f, pred_label, conf);
 
         std::string text;
         if (pred_label >= 0 && pred_label < names.size()) {
-            // 识别成功 (置信度阈值可调，越低越匹配)
             if (conf <= 80.0) {
                 text = names[pred_label];
                 
-                // 核心打卡逻辑：识别成功 -> 保存考勤记录
+                // 核心打卡逻辑：防抖动
                 static long long last_save_time = 0;
                 long long now = std::time(nullptr);
-                
-                // 简单的防抖动：3秒内同一人不重复打卡
                 if (now - last_save_time > 3) {
-                    // 调用数据层接口：保存原图(彩色)到磁盘，路径存DB
-                    // 注意：这里传入的是 current_frame (当前帧)，不是裁剪后的人脸
                     bool logged = data_saveAttendance(pred_label, current_frame);
-                    
                     if (logged) {
                         std::cout << "[Business] >>> 打卡成功: " << text 
                                   << " (ID: " << pred_label << ")" << std::endl;
                         last_save_time = now;
-                        // 可选：在界面上显示“打卡成功”提示
                         text += " [Logged]";
                     }
                 }
             } else {
-                text = "unknown"; // 置信度不够
+                text = "unknown";
             }
             text += " " + cv::format("%.0f", conf);
         } else {
             text = "unknown";
         }
 
-        putText(current_frame, text, Point(face.x, std::max(0, face.y-10)),
-                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0,255,0), 2);
+        cv::putText(current_frame, text, 
+                    cv::Point(detected_face.x, std::max(0, detected_face.y-10)),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0,255,0), 2);
     }
 
-    // 4. 在图像上绘制状态信息 (OSD)
-    // 注意：在更高级的集成中，这些文字应该由 LVGL 绘制在 Label 控件上，而不是画在图里。
-    // 但为了 Epic 4 的过渡，我们先保留在图上绘制。
-    std::string status = "User: " + names[current_id];
+    // 4. 绘制状态信息 (OSD)
+    std::string status = "User: " + names[current_id];  // 修正：加std::string类型，删多余static
     status += trained ? " [Trained]" : " [No Model]";
     status += show_recognition ? " [Recog ON]" : "";
-    
-    putText(current_frame, status, Point(10, 30), FONT_HERSHEY_SIMPLEX, 
-            0.6, Scalar(0, 255, 255), 2);
+    cv::putText(current_frame, status, 
+                cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 
+                0.6, cv::Scalar(0, 255, 255), 2);
 
     // 5. 返回图像给 UI 层
     return current_frame;

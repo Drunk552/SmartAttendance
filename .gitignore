@@ -21,3 +21,5 @@ attendance.db
 
 # 忽略 ffmpeg 工具包（太大了）
 tools/ffmpeg/
+libxlswriter/
+master.zip
