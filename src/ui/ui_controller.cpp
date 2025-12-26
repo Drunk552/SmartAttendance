@@ -17,6 +17,8 @@
 #include <filesystem>
 #include <thread> // for sleep if needed
 
+namespace fs = std::filesystem;// C++17 引入的文件系统库
+
 static UiController* s_instance = nullptr;
 
 UiController* UiController::getInstance() {
@@ -177,19 +179,29 @@ bool UiController::deleteUser(int userId) {
 
 // 导出自定义报表实现
 bool UiController::exportCustomReport(const std::string& start, const std::string& end) {
-    std::string path = "output/usb_sim/Attendance_Report_" + start + "_to_" + end + ".xlsx";
+    std::string dir = "output/usb_sim";
     
-    ReportGenerator report_gen; // 局部实例
-    
+    // 强制创建目录，如果目录不存在
+    if (!fs::exists(dir)) {
+        fs::create_directories(dir); 
+    }
+
+    std::string path = dir + "/Attendance_Report_" + start + "_to_" + end + ".xlsx";
+    ReportGenerator report_gen; 
     return report_gen.exportCustomRangeDetailedReport(start, end, -1, path);
 }
 
 // 导出个人报表实现
 bool UiController::exportUserReport(int user_id, const std::string& start, const std::string& end) {
-    std::string path = "output/usb_sim/User_" + std::to_string(user_id) + "_Report.xlsx";
-    
-    ReportGenerator report_gen;// 局部实例
+    std::string dir = "output/usb_sim";
 
+    // 强制创建目录，如果目录不存在
+    if (!fs::exists(dir)) {
+        fs::create_directories(dir);
+    }
+
+    std::string path = dir + "/User_" + std::to_string(user_id) + "_Report.xlsx";
+    ReportGenerator report_gen;
     return report_gen.exportCustomRangeDetailedReport(start, end, user_id, path);
 }
 
