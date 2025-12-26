@@ -175,6 +175,24 @@ bool UiController::deleteUser(int userId) {
     return db_delete_user(userId);
 }
 
+// 导出自定义报表实现
+bool UiController::exportCustomReport(const std::string& start, const std::string& end) {
+    std::string path = "output/usb_sim/Attendance_Report_" + start + "_to_" + end + ".xlsx";
+    
+    ReportGenerator report_gen; // 局部实例
+    
+    return report_gen.exportCustomRangeDetailedReport(start, end, -1, path);
+}
+
+// 导出个人报表实现
+bool UiController::exportUserReport(int user_id, const std::string& start, const std::string& end) {
+    std::string path = "output/usb_sim/User_" + std::to_string(user_id) + "_Report.xlsx";
+    
+    ReportGenerator report_gen;// 局部实例
+
+    return report_gen.exportCustomRangeDetailedReport(start, end, user_id, path);
+}
+
 void UiController::clearAllRecords() {
     db_clear_attendance();
 }

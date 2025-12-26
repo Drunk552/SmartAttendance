@@ -143,6 +143,19 @@ struct DailyCellData {
                              const std::map<int, std::map<int, DailyCellData>>& detail_data,
                              int year, int month);
 
+
+    /**
+     * @brief导出自定义时间段的详细报表 (支持按工号筛选)
+     * @param start_date 开始日期 "YYYY-MM-DD"
+     * @param end_date 结束日期 "YYYY-MM-DD"
+     * @param user_id_filter 工号筛选 (-1 表示全员)
+     * @param output_path 输出路径
+     */
+    bool exportCustomRangeDetailedReport(const std::string& start_date, 
+                                         const std::string& end_date, 
+                                         int user_id_filter, 
+                                         const std::string& output_path);
+                                         
 private:
 
     // 辅助函数：时间处理

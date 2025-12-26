@@ -61,6 +61,13 @@ public:
     bool updateUserRole(int userId, int newRole);
     // 删除用户
     bool deleteUser(int userId);
+
+    // 导出自定义报表
+    bool exportCustomReport(const std::string& start, const std::string& end);
+    
+    // 导出个人报表
+    bool exportUserReport(int user_id, const std::string& start, const std::string& end);
+    
 private:
     UiController() = default; // 私有构造
     ~UiController() = default;

@@ -1106,7 +1106,165 @@ void ReportGenerator::writeExceptionSheet(lxw_workbook* workbook,
     
     std::cout << "[Report] 异常统计表创建完成 (" << row-1 << " 条异常记录)" << std::endl;
 }
- 
+
+/**
+ * @brief 导出自定义时间范围的详细报表
+ * @param start_date 起始日期字符串 (格式: "YYYY-MM-DD")
+ * @param end_date 结束日期字符串 (格式: "YYYY-MM-DD")
+ * @param user_id_filter 用户ID过滤 (-1表示所有用户)
+ * @param output_path 输出文件路径
+ * @return 成功返回true，失败返回false
+ */
+bool ReportGenerator::exportCustomRangeDetailedReport(const std::string& start_date, 
+                                                      const std::string& end_date, 
+                                                      int user_id_filter, 
+                                                      const std::string& output_path) {
+    std::cout << "[Report] 导出自定义报表: " << start_date << " ~ " << end_date 
+              << " (UserFilter: " << user_id_filter << ")" << std::endl;
+
+    // 1. 解析时间
+    long long start_ts = parseDateToTimestamp(start_date, false);
+    long long end_ts = parseDateToTimestamp(end_date, true);
+    
+    // 计算总天数 (用于生成明细表的列数)
+    int total_days = (end_ts - start_ts) / 86400 + 1;
+    if (total_days <= 0) total_days = 1;
+
+    // 2. 获取原始数据
+    std::vector<AttendanceRecord> records = db_get_records(start_ts, end_ts);
+    std::vector<UserData> all_users = db_get_all_users_info();
+    std::vector<UserData> target_users;
+
+    // 3. 筛选目标用户
+    if (user_id_filter != -1) {
+        bool found = false;
+        for (const auto& u : all_users) {
+            if (u.id == user_id_filter) {
+                target_users.push_back(u);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            std::cerr << "[Error] 未找到工号: " << user_id_filter << std::endl;
+            return false;
+        }
+    } else {
+        target_users = all_users;
+    }
+
+    // 4. 构建数据结构 (模仿 processAttendanceData 但适配自定义天数)
+    std::map<int, std::map<int, DailyCellData>> detail_data;
+    std::map<int, MonthlySummary> summaries;
+
+    // 初始化
+    for (const auto& user : target_users) {
+        detail_data[user.id] = std::map<int, DailyCellData>();
+        MonthlySummary summary;
+        summary.user_name = user.name;
+        summary.user_code = std::to_string(user.id);
+        summary.dept = user.dept_name;
+        summaries[user.id] = summary;
+    }
+
+    // 处理记录，将日期映射为索引 (第1天, 第2天...)
+    for (const auto& rec : records) {
+        if (user_id_filter != -1 && rec.user_id != user_id_filter) continue;
+
+        // 计算这是第几天 (1-based index)
+        long long rec_day_start = parseDateToTimestamp(formatDate(rec.timestamp), false);
+        int day_idx = (rec_day_start - start_ts) / 86400 + 1;
+        
+        if (day_idx < 1 || day_idx > total_days) continue;
+
+        DailyCellData& cell = detail_data[rec.user_id][day_idx]; // <--- 这里定义的变量名是 cell
+        
+        // 初始化单元格
+        if (cell.user_name.empty()) {
+            cell.user_name = rec.user_name;
+            cell.user_code = std::to_string(rec.user_id);
+            cell.check_in = "--:--";
+            cell.check_out = "--:--";
+            cell.status = STATUS_NORMAL;
+        }
+
+        std::string time_str = formatTime(rec.timestamp);
+        
+        // 简单的打卡逻辑复用
+        if (cell.check_in == "--:--") {
+            cell.check_in = time_str;
+            cell.status = rec.status;
+            cell.late_minutes = rec.minutes_late;
+        } 
+        else if (time_str > cell.check_in && cell.check_out == "--:--") {
+            cell.check_out = time_str;
+            if (rec.status == STATUS_EARLY) {
+                cell.status = STATUS_EARLY;
+                cell.early_minutes = rec.minutes_early;
+            }
+        }
+    }
+
+    // 补全缺勤并统计
+    for (auto& [user_id, user_data] : detail_data) {
+        MonthlySummary& summary = summaries[user_id];
+        for (int day = 1; day <= total_days; day++) {
+            if (user_data.find(day) == user_data.end()) {
+                DailyCellData absent;
+                absent.user_name = summary.user_name;
+                absent.user_code = summary.user_code;
+                absent.check_in = "--:--";
+                absent.check_out = "--:--";
+                absent.status = STATUS_ABSENT;
+                user_data[day] = absent;
+                summary.absent_days++;
+            } else {
+                DailyCellData& cell = user_data[day];
+                if (cell.status == STATUS_NORMAL) summary.normal_days++;
+                else if (cell.status == STATUS_LATE) {
+                    summary.late_count++;
+                    summary.total_late_minutes += cell.late_minutes;
+                } else if (cell.status == STATUS_EARLY) {
+                    summary.early_count++;
+                    summary.total_early_minutes += cell.early_minutes;
+                } else if (cell.status == STATUS_ABSENT) {
+                    summary.absent_days++;
+                }
+            }
+        }
+    }
+
+    // 5. 生成 Excel (调用已有的私有方法)
+    lxw_workbook* workbook = workbook_new(output_path.c_str());
+    if (!workbook) return false;
+
+    // 写入各 Sheet
+    writeSummarySheet(workbook, summaries);
+    
+    // 注意：writeShiftSheet 依赖年月，这里传入起始日期的年月作为近似
+    int year = extractYearFromTimestamp(start_ts);
+    int month = extractMonthFromTimestamp(start_ts);
+    writeShiftSheet(workbook, target_users, year, month);
+
+    // 写入原始记录 (需过滤)
+    std::vector<AttendanceRecord> filtered_records;
+    if (user_id_filter != -1) {
+        for(const auto& r : records) { if(r.user_id == user_id_filter) filtered_records.push_back(r); }
+        writeRecordSheet(workbook, filtered_records);
+        writeExceptionSheet(workbook, filtered_records, summaries, detail_data, year, month);
+    } else {
+        writeRecordSheet(workbook, records);
+        writeExceptionSheet(workbook, records, summaries, detail_data, year, month);
+    }
+
+    // 写入明细表 (复用逻辑，因为 keys 已经被处理成 1..total_days)
+    writeDetailSheet(workbook, detail_data, total_days);
+
+    workbook_close(workbook);
+    std::cout << "[Success] 报表生成: " << output_path << std::endl;
+    return true;
+}
+
 /**
  * @brief 生成精细化月度报表
  * @param month_str 月份字符串 "YYYY-MM"
