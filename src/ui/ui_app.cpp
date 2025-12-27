@@ -84,6 +84,9 @@ static lv_obj_t *btn_query_back = nullptr; //  返回按钮指针
 static lv_obj_t *btn_result_back = nullptr; //  结果页返回按钮
 static lv_obj_t *screen_att_stats = nullptr;// 考勤统计页
 static lv_obj_t *obj_att_grid = nullptr;// 考勤统计网格容器
+// [新增] 考勤设计页
+static lv_obj_t *screen_att_design = nullptr;   // 考勤设计页
+static lv_obj_t *obj_att_design_grid = nullptr; // 考勤设计网格容器
 // 强视觉反馈样式 (红底黄框)
 static lv_style_t style_focus_red;
 static bool style_focus_red_inited = false;
@@ -135,7 +138,17 @@ static void load_storage_info_screen(void);
 static void load_user_info_screen(int user_id);// 详情页
 static void load_password_change_screen(int user_id);// 改密页
 static void load_role_change_auth_screen(int user_id, int current_role);// 权限变更页
-static void load_user_del_screen();// 删除用户确认页
+// [新增] 考勤设计
+static void load_att_design_screen(void);
+static void create_att_design_screen(void);
+static void att_design_btn_event_cb(lv_event_t *e);
+// ================= [System Settings] 辅助封装 =================
+static lv_obj_t* create_sys_grid_btn(
+    lv_obj_t *parent, int row,
+    const char* icon, const char* text_en, const char* text_cn,
+    lv_event_cb_t event_cb, const char* user_data
+);
+
 
 // 前向声明：确保编译器知道这个函数存在 // 或者你原来返回上一级菜单的函数名
 void load_register_form_screen();
@@ -227,6 +240,13 @@ static void free_screen_resources(lv_obj_t** screen_ptr) {
     else if (screen_ptr == &screen_sys_info) {
         obj_info_grid = nullptr;
     }
+    else if (screen_ptr == &screen_att_stats) {
+        obj_att_grid = nullptr;
+}
+    else if (screen_ptr == &screen_att_design) {
+        obj_att_design_grid = nullptr;
+}
+
     // screen_storage_info 没有全局子控件，无需特殊处理
 
     // 如果是新屏幕，不需要特殊置空子对象（因为我们没用全局变量存子对象），直接通过
@@ -265,6 +285,7 @@ static void async_screen_cleanup_cb(lv_timer_t * t) {
         &screen_sys_info,
         &screen_storage_info,
         &screen_att_stats,// 考勤统计页
+        &screen_att_design,   // [新增] 考勤设计页
         &screen_user_info,      // Level 2
         &screen_pwd_change,     // Level 3-A
         &screen_role_auth,       // Level 3-B
@@ -443,6 +464,123 @@ lv_obj_t* cont = lv_obj_create(parent);
     }, LV_EVENT_CLICKED, NULL);
 }
 
+
+
+
+// ======================= 考勤设计模块 =======================
+
+// 考勤设计菜单按钮事件回调（上下导航 + ESC返回 + ENTER占位）
+static void att_design_btn_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
+    lv_obj_t *grid = lv_obj_get_parent(btn);
+    const char *tag = (const char*)lv_event_get_user_data(e);
+    if (!tag) tag = "UNKNOWN";
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+
+        // 上下导航（1列列表，循环）
+        uint32_t index = lv_obj_get_index(btn);
+        uint32_t total = lv_obj_get_child_cnt(grid);
+
+        if (key == LV_KEY_DOWN) {
+            lv_group_focus_obj(lv_obj_get_child(grid, (index + 1) % total));
+        }
+        else if (key == LV_KEY_UP) {
+            lv_group_focus_obj(lv_obj_get_child(grid, (index + total - 1) % total));
+        }
+        else if (key == LV_KEY_ESC) {
+            load_menu_screen(); // 返回主菜单
+            return;
+        }
+        else if (key == LV_KEY_ENTER) {
+            // 先做占位：后续你可以按 tag 进入更细的子页面
+            std::printf("[UI] AttDesign Select: %s\n", tag);
+
+            lv_obj_t *mbox = lv_msgbox_create(NULL);
+            lv_msgbox_add_title(mbox, "Info");
+            lv_msgbox_add_text(mbox, "Feature Coming Soon...");
+            lv_msgbox_add_close_button(mbox);
+            lv_obj_center(mbox);
+            return;
+        }
+    }
+}
+
+// 创建考勤设计页（黑底 + 标题 + 1列多行按钮，复用 create_sys_grid_btn）
+static void create_att_design_screen(void) {
+    if (screen_att_design) return;
+
+    screen_att_design = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen_att_design, lv_color_black(), 0);
+
+    // 标题
+    lv_obj_t *title = lv_label_create(screen_att_design);
+    lv_label_set_text(title, "Attendance Design / 考勤设计");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_add_style(title, &style_text_cn, 0);
+
+    // 1列 N行 Grid（列表式）
+    static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST};
+    static int32_t row_dsc[] = {45, 45, 45, 45, 45, 45, 45, LV_GRID_TEMPLATE_LAST};
+
+    obj_att_design_grid = lv_obj_create(screen_att_design);
+    lv_obj_set_size(obj_att_design_grid, 240, 300);
+    lv_obj_align(obj_att_design_grid, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_layout(obj_att_design_grid, LV_LAYOUT_GRID);
+    lv_obj_set_grid_dsc_array(obj_att_design_grid, col_dsc, row_dsc);
+    lv_obj_set_style_bg_opa(obj_att_design_grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(obj_att_design_grid, 0, 0);
+    lv_obj_set_style_pad_row(obj_att_design_grid, 5, 0);
+
+    // 按你的菜单树做一组合理入口（先占位）
+    // tag 后续用于分发进入更细子页面
+    create_sys_grid_btn(obj_att_design_grid, 0, LV_SYMBOL_SETTINGS,  "",   "公司设置", 
+        att_design_btn_event_cb, "COMPANY");
+    create_sys_grid_btn( obj_att_design_grid, 1, LV_SYMBOL_DIRECTORY,"",   "部门设置", 
+        att_design_btn_event_cb, "DEPT");
+    create_sys_grid_btn(obj_att_design_grid, 2, LV_SYMBOL_LIST, "",     "班次设置", 
+        att_design_btn_event_cb, "SHIFT");
+    create_sys_grid_btn(obj_att_design_grid, 3, LV_SYMBOL_EDIT,      "",     "考勤规则", 
+        att_design_btn_event_cb, "RULES");
+    create_sys_grid_btn(obj_att_design_grid, 4, LV_SYMBOL_REFRESH,     "",  "排班设置", 
+        att_design_btn_event_cb, "SCHEDULE");
+    create_sys_grid_btn(obj_att_design_grid, 5, LV_SYMBOL_BELL,      "",  "定时响铃", 
+        att_design_btn_event_cb, "BELL");
+    create_sys_grid_btn(obj_att_design_grid, 6, LV_SYMBOL_LEFT,      "",      "返回主菜单", 
+        att_design_btn_event_cb, "BACK");
+
+}
+
+// 加载考勤设计页（设置键盘组 + 默认聚焦）
+static void load_att_design_screen(void) {
+    if (!screen_att_design) create_att_design_screen();
+
+    std::printf("[UI] Enter: Attendance Design\n");
+
+    lv_group_remove_all_objs(g_keypad_group);
+
+    if (obj_att_design_grid) {
+        uint32_t cnt = lv_obj_get_child_cnt(obj_att_design_grid);
+        for (uint32_t i = 0; i < cnt; i++) {
+            lv_group_add_obj(g_keypad_group, lv_obj_get_child(obj_att_design_grid, i));
+        }
+        if (cnt > 0) lv_group_focus_obj(lv_obj_get_child(obj_att_design_grid, 0));
+    }
+
+    // 兜底背景对象
+    lv_group_add_obj(g_keypad_group, screen_att_design);
+
+    lv_screen_load(screen_att_design);
+    destroy_all_screens_except(screen_att_design);
+}
+
+// ======================= 考勤设计模块 END =======================
+
+
+
 // ================= 事件处理 =================
 
 static void main_screen_event_cb(lv_event_t *e) {
@@ -520,6 +658,9 @@ static void menu_btn_event_cb(lv_event_t *e) {
             }
             else if(std::strcmp(tag, "AttStats") == 0) {
                 load_att_stats_screen();// 考勤统计页面
+            }
+            else if(std::strcmp(tag, "AttDesign") == 0) {
+                load_att_design_screen(); // 进入考勤设计页
             }
             else if(std::strcmp(tag, "Settings") == 0) {
                 if (g_disk_full) {
@@ -745,11 +886,12 @@ static void create_menu_screen(void) {
     {LV_SYMBOL_EYE_OPEN, "Records",   "记录查询", "Records"},
     {LV_SYMBOL_DRIVE,    "Att. Stats","考勤统计", "AttStats"},
     {LV_SYMBOL_SETTINGS, "System",    "系统设置", "System"},// 原Settings和System合并或保留其一
-    {LV_SYMBOL_LIST,     "Info",      "系统信息", "SysInfo"}    
+    {LV_SYMBOL_LIST,     "Info",      "系统信息", "SysInfo"} ,
+    {LV_SYMBOL_EDIT,     "Design",    "考勤设计", "AttDesign"},
     };
     
     // 6. 循环创建按钮
-    for(int i = 0; i < 5; i++) {
+    for(int i = 0; i < 6; i++) {
         uint8_t col = i % 2;
         uint8_t row = i / 2;
 
