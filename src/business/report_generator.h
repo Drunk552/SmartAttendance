@@ -68,12 +68,12 @@ struct DailyCellData {
     std::string user_name;
     std::string user_code;
     std::string dept;
-    int normal_days;
-    int late_count;
-    int total_late_minutes;
-    int early_count;
-    int total_early_minutes;
-    int absent_days;
+    int normal_days = 0;
+    int late_count = 0;
+    int total_late_minutes = 0;
+    int early_count = 0;
+    int total_early_minutes = 0;
+    int absent_days = 0;
     };
 
     ReportGenerator();
