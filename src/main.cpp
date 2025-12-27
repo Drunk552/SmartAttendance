@@ -197,6 +197,9 @@ int main() {
     }
 
     std::cout << ">>> 系统安全退出 (Main Loop Ended)" << std::endl;
+    
+    business_quit();// 清理业务层资源
+
     data_close();
     return 0;
 }

@@ -17,6 +17,7 @@
 #include <functional> // 引入哈希支持
 #include <sstream>
 #include <iomanip>
+#include <mutex>// 用于线程安全
 
 namespace fs = std::filesystem;
 
@@ -25,8 +26,8 @@ const std::string IMAGE_DIR = "captured_images";
 // 配置：数据库文件名
 const std::string DB_NAME = "attendance.db";
 
-// 数据库连接句柄 (静态全局变量，仅本文件可见)
-static sqlite3* db = nullptr;
+static sqlite3* db = nullptr;// 数据库连接句柄 (静态全局变量，仅本文件可见)
+static std::recursive_mutex g_db_mutex;// 递归互斥锁，确保线程安全
 
 // ================= 辅助函数 (Helpers)将 Mat 序列化为 vector<uchar> (用于存 BLOB) =================
 
@@ -552,6 +553,9 @@ bool db_update_global_rules(const RuleConfig& config) {
 // ================= 3. 用户管理 DAO (升级版) =================
 
 int db_add_user(const UserData& info, const cv::Mat& face_img) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+    
     // 1. 转换人脸图片为 BLOB
     std::vector<uchar> blob = matToBytes(face_img);
     if (blob.empty()) {
@@ -593,6 +597,9 @@ int db_add_user(const UserData& info, const cv::Mat& face_img) {
 }
 
 UserData db_get_user_info(int user_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     UserData u;
     u.id = 0; // 0 表示无效/未找到
     
@@ -670,6 +677,9 @@ bool db_delete_user(int user_id) {
 }
 
 std::vector<UserData> db_get_all_users() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     std::vector<UserData> users;
     // 使用 LEFT JOIN 关联查询 departments 表，获取 dept_name
     // 假设你的部门表叫 departments，字段是 id 和 name
@@ -760,6 +770,9 @@ ShiftInfo db_get_user_shift(int user_id) {
 
 //  用户信息修改接口 (不含密码)
 bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int privilege, const std::string& card_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 加锁保护
+
     const char* sql = 
         "UPDATE users SET name=?, dept_id=?, privilege=?, card_id=? WHERE id=?;";
     
@@ -810,6 +823,9 @@ bool db_update_user_password(int user_id, const std::string& new_raw_password) {
 // ================= 4. 考勤记录 DAO =================
 
 bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int status) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 加锁保护
+
     long long now = std::time(nullptr);
     std::string path_str = "";
     
@@ -857,6 +873,9 @@ bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int stat
 
 // [Phase 05 新增] 实现获取最后打卡时间
 time_t db_getLastPunchTime(int user_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 加锁保护
+
     if (!db) return 0;
 
     sqlite3_stmt* stmt;
@@ -875,6 +894,9 @@ time_t db_getLastPunchTime(int user_id) {
 }
 
 std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_ts) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 加锁保护
+
     std::vector<AttendanceRecord> list;
     
     // 关联查询：attendance -> users -> departments
@@ -916,10 +938,16 @@ std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_t
 
 // ================= 5.数据库事务接口 =================
 bool db_begin_transaction() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+    
     return exec_sql("BEGIN TRANSACTION;", "Tx Begin");
 }
 
 bool db_commit_transaction() {
+
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     return exec_sql("COMMIT;", "Tx Commit");
 }
 
@@ -995,6 +1023,9 @@ bool db_set_user_special_schedule(int user_id, const std::string& date_str, int 
 
 // [核心] 智能排班查询
 ShiftInfo db_get_user_shift_smart(int user_id, long long timestamp) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     int final_shift_id = 0;
     
     std::string date_str = timestamp_to_date(timestamp);

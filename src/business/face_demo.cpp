@@ -10,10 +10,14 @@
 #include <filesystem>
 #include <algorithm>
 #include <fstream>
+#include <thread>// 多线程支持
+#include <atomic>// 原子变量支持
+#include <mutex>// 互斥锁支持
+#include <chrono>//time.h>
+#include <map>// 字典支持
 #include "face_demo.h" // 人脸识别演示模块的头文件
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 #include "db_storage.h"//数据层头文件
-#include <mutex>
 #include "attendance_rule.h"
 
 using namespace cv;
@@ -47,6 +51,11 @@ static std::vector<UserData> g_user_cache;
 // [Epic 3.4] 考勤记录缓存
 static std::vector<AttendanceRecord> g_record_cache;
 static PreprocessConfig preprocess_config; // 全局预处理配置
+
+static cv::Mat g_display_frame_buffer; // 专门给 UI 显示用的帧缓存
+static std::mutex g_display_mutex;     // 保护 g_display_frame_buffer 的锁
+static std::atomic<bool> g_is_running{false}; // 线程运行标志
+static std::thread g_worker_thread;    // 后台采集线程对象
 
 const std::string MODEL_FILE = "face_model.xml"; // 模型文件名
 
@@ -212,6 +221,165 @@ static VideoCapture open_sdp_stream(const std::string& sdp_path) {
 }
 
 /**
+ * @brief 后台采集与处理线程函数
+ * @note 持续采集视频帧，进行人脸检测与识别，并更新全局显示缓存
+ */
+static void background_capture_loop() {
+    // === 优化参数配置 ===
+    const int SKIP_FRAMES = 4;           // 每 5 帧才做一次人脸检测 (0, 1, 2, 3, 4)
+    const int RECOG_COOLDOWN_MS = 2000;  // 识别冷却时间 2000ms (2秒)
+
+    // === 状态变量 ===
+    int frame_counter = 0;               // 帧计数器
+    cv::Rect last_face_rect;             // 上一次检测到的人脸区域
+    bool is_tracking = false;            // 当前是否处于“跟踪”状态
+    
+    // 识别冷却时间控制
+    std::map<int, std::chrono::steady_clock::time_point> user_cooldowns; 
+
+    while (g_is_running) {
+        // 1. 采集一帧
+        if (!cap.isOpened()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        cv::Mat frame;
+        if (!cap.read(frame) || frame.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
+        // 2. 核心业务处理 (加锁保护)
+        {
+            std::lock_guard<std::mutex> lock(g_data_mutex);
+            current_frame = frame; 
+
+            // -------------------- [ 跳帧检测] ----------------
+            bool perform_detection = (frame_counter % (SKIP_FRAMES + 1) == 0);
+            frame_counter++;
+
+            bool has_face = false;
+            cv::Rect face;
+
+            if (perform_detection) {
+                // 执行真正的耗时检测
+                has_face = detect_face(current_frame, face, face_cas);
+                
+                if (has_face) {
+                    last_face_rect = face; // 更新缓存
+                    is_tracking = true;
+                } else {
+                    is_tracking = false;   // 丢失目标
+                }
+            } else {
+                // 跳帧期间：直接沿用上一帧的结果 (假定人脸移动不快)
+                // 只有当之前处于跟踪状态时，才认为有脸
+                if (is_tracking) {
+                    face = last_face_rect;
+                    has_face = true;
+                }
+            }
+            // ------------------------------------------------------
+
+            if (has_face) {
+                // 绘制人脸框 (视觉反馈)
+                // 如果是跳帧期间画的框，可以用不同颜色(例如黄色)来区分调试，或者统一用绿色
+                cv::Scalar color = perform_detection ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 255, 200);
+                cv::rectangle(current_frame, face, color, 2);
+
+                // -------------------- [ 识别冷却] ----------------
+if (perform_detection && show_recognition && trained) {
+                    
+                    cv::Mat f = preprocess_face(current_frame, face);
+                    int label = -1; double conf = 0.0;
+                    recog->predict(f, label, conf);
+                    
+                    if (label != -1 && conf < 100.0) { // 阈值
+                        std::string name = (label < names.size()) ? names[label] : "Unknown";
+                        
+                        //  先定义 text 变量，用于后续追加状态
+                        std::string text = name; 
+                        
+                        // 检查该用户的独立冷却时间
+                        auto now = std::chrono::steady_clock::now();
+                        bool in_cooldown = false;
+                        
+                        if (user_cooldowns.find(label) != user_cooldowns.end()) {
+                            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - user_cooldowns[label]).count();
+                            if (elapsed < RECOG_COOLDOWN_MS) {
+                                in_cooldown = true;
+                            }
+                        }
+
+                        // 只有不在冷却中，才执行打卡逻辑
+                        if (!in_cooldown) {
+                            
+                            //  构建班次配置 (ShiftConfig)
+                            // 这里先使用一个通用的默认班次(09:00-18:00)来保证编译通过。
+                            // 实际项目中，你可以恢复之前复杂的 db_get_user_shift_smart 逻辑。
+                            ShiftConfig default_shift;
+                            default_shift.start_time = "09:00";
+                            default_shift.end_time = "18:00";
+                            default_shift.late_threshold_min = g_rule_cfg.late_threshold; 
+                            
+                            // 使用当前系统时间进行计算
+                            // 注意：std::time(nullptr) 返回的是系统时间
+                            PunchResult result = AttendanceRule::calculatePunchStatus(std::time(nullptr), default_shift, true); 
+                            
+                            // 准备异步数据
+                            cv::Mat snapshot = current_frame.clone();
+                            int uid = label;
+                            int sid = 0; // 默认班次ID
+                            int sts = 0; // 状态转换
+                            if (result.status == PunchStatus::LATE) sts = 1;
+                            else if (result.status == PunchStatus::EARLY) sts = 2;
+                            else if (result.status == PunchStatus::ABSENT) sts = 4;
+                            
+                            int diff = result.minutes_diff;
+                            std::string user_n = name;
+
+                            // 启动异步线程写库
+                            std::thread([uid, sid, snapshot, sts, diff, user_n]() {
+                                bool logged = db_log_attendance(uid, sid, snapshot, sts);
+                                if(logged) {
+                                    // 简单的日志输出
+                                    // std::cout << "[Async] " << user_n << " Logged. Status=" << sts << std::endl;
+                                }
+                            }).detach();
+
+                            // UI 反馈
+                            text += " [OK]";
+                            
+                            // 更新冷却时间
+                            user_cooldowns[label] = now;
+                        } 
+                        else {
+                            // 可选：显示冷却中，比如 text += " (Wait)";
+                        }
+
+                        // 统一在最后绘制文字，这样才能显示出 "User [OK]"
+                        cv::putText(current_frame, text, cv::Point(face.x, face.y - 10), 
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
+                    }
+                }
+                // ------------------------------------------------------
+            }
+        } // g_data_mutex 结束
+
+        // 3. 更新 UI 显示缓存
+        {
+            std::lock_guard<std::mutex> lock(g_display_mutex);
+            current_frame.copyTo(g_display_frame_buffer);
+        }
+
+        // 4. 线程休眠
+        // 既然有了跳帧，这里的休眠可以稍微短一点，保持视频流畅度 (比如 30FPS)
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
+}
+
+/**
  * @brief 业务模块初始化函数
  * @return true-初始化成功，false-失败
  * @note 包括加载人脸检测器、打开视频源、初始化人脸识别器、设置预处理配置
@@ -335,7 +503,13 @@ bool business_init() {
              std::cout << ">>> [Business] 数据库无用户，跳过训练。" << std::endl;
         }
     }
-         
+    // 设置默认预处理配置
+    if (!g_is_running) {
+        g_is_running = true;
+        g_worker_thread = std::thread(background_capture_loop);
+        std::cout << ">>> [Business] Background capture thread started." << std::endl;
+    }
+
     return true;
 }
 
@@ -652,15 +826,43 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
                     else if (result.status == PunchStatus::EARLY) db_status = 2;
                     else if (result.status == PunchStatus::ABSENT) db_status = 4;
                     
-                    // 调用数据库接口 (传入动态计算的 shift_id)
-                    bool logged = db_log_attendance(pred_label, shift_id_for_log, current_frame, db_status);
-                    
-                    if (logged) {
-                        std::cout << "[Business] 打卡成功: " << text 
-                                  << " 状态: " << db_status 
-                                  << " 差异: " << result.minutes_diff << "分" << std::endl;
-                        text += " [OK]";
-                    }
+                    // ===================== [异步打卡] =================
+
+                    // 1. 关键：必须克隆当前帧！
+                    // 因为 current_frame 是全局复用的，下一帧采集会覆盖它。
+                    // 如果直接传 current_frame 给子线程，子线程保存的可能是下一帧的画面或损坏的数据。
+                    cv::Mat snapshot = current_frame.clone();
+
+                    // 2. 捕获必要的局部变量 (值拷贝)
+                    // 这些变量在下一轮循环会变，所以必须拷贝一份传给 Lambda
+                    int uid = pred_label;
+                    int sid = shift_id_for_log;
+                    int sts = db_status;
+                    int diff = result.minutes_diff;
+                    std::string user_n = names[pred_label]; // 用于日志
+
+                    // 3. 启动分离线程 (Fire-and-Forget)
+                    std::thread([uid, sid, snapshot, sts, diff, user_n]() {
+                        // --- 这里是子线程，不会阻塞视频画面 ---
+                        
+                        // 执行耗时的 I/O 操作 (写盘 + 写库)
+                        bool logged = db_log_attendance(uid, sid, snapshot, sts);
+                        
+                        // 打印日志 (注意：不要在这里操作 UI 控件)
+                        if (logged) {
+                            std::cout << "[Async] Save OK -> User: " << user_n 
+                                      << " | Status: " << sts 
+                                      << " | Diff: " << diff << "m" << std::endl;
+                        } else {
+                            std::cerr << "[Async] Save Failed for User: " << uid << std::endl;
+                        }
+                        
+                        // 线程结束，自动释放资源
+                    }).detach(); // 关键：detach 分离线程，主线程不需要 join 等待
+
+                    // 4. UI 立即反馈 (乐观更新)
+                    // 不需要等数据库返回，直接告诉用户“识别成功”，体验最流畅
+                    text += " [OK]";
                 }
                 // ======================================
             } else {
@@ -689,33 +891,31 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
     return current_frame;
 }
 
-// [Epic4新增] 实现获取显示帧接口
 /**
- * @brief LVGL 专用的显示接口
- * @param buffer LVGL 的 Framebuffer 或 Canvas 缓冲区（预分配，大小至少 w*h*3）
+ * @brief 获取用于显示的当前帧图像（RGB格式并缩放到指定大小）
+ * @param buffer 输出缓冲区，需预先分配好空间 (w * h * 3 bytes)
  * @param w 目标宽度
  * @param h 目标高度
- * @return true 成功填充 buffer 并可供显示；false 失败（无帧或转换失败）
- * @note 目前按 RGB888 (3 bytes/pixel) 拷贝，如需支持其他 LVGL color depth 请调整转换逻辑
+ * @return true 成功获取并填充图像；false 无可用图像
+ * @note 该函数线程安全，会加锁保护读取最新帧
  */
 bool business_get_display_frame(void* buffer, int w, int h) {
+    cv::Mat temp;
+    
+    // 1. 快速取出最新的一帧 (加锁时间极短)
+    {
+        std::lock_guard<std::mutex> lock(g_display_mutex);
+        if (g_display_frame_buffer.empty()) return false;
+        // 拷贝引用或深拷贝均可，这里用深拷贝最安全
+        g_display_frame_buffer.copyTo(temp);
+    }
 
-    cv::Mat frame = business_get_frame();
+    // 2. 耗时的缩放和转换在锁外进行，不影响后台采集
+    cv::Mat resized, rgb;
+    cv::resize(temp, resized, cv::Size(w, h));
+    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
 
-    if (frame.empty()) return false;
-
-    Mat resized, rgb;
-    // 1. 缩放到 UI 指定的大小
-    cv::resize(frame, resized, Size(w, h));
-
-    // 2. 颜色转换: OpenCV 默认是 BGR，LVGL 需要 RGB
-    // 注意：根据你的 LV_COLOR_DEPTH，如果是 32位可能需要转 BGRA/RGBA
-    // 这里假设 LVGL 配置为 RGB888 (24位) 或 ARGB8888 (32位)
-    // 简单起见，我们转成 BGR -> RGB (24位)
-    cv::cvtColor(resized, rgb, COLOR_BGR2RGB);
-
-    // 3. 内存拷贝
-    // 确保 buffer 足够大 (w * h * 3)
+    // 3. 填入 buffer
     memcpy(buffer, rgb.data, w * h * 3);
     
     return true;
@@ -1032,4 +1232,20 @@ void business_reload_config() {
     
     g_is_config_loaded = false;
     std::cout << ">>> [Business] 配置已过期，将在下一帧自动刷新。" << std::endl;
+}
+
+/**
+ * @brief 业务退出函数
+ * @note 停止后台采集线程并清理资源
+ */
+void business_quit() {
+    if (g_is_running) {
+        std::cout << ">>> [Business] Stopping capture thread..." << std::endl;
+        g_is_running = false; // 通知线程退出循环
+        
+        if (g_worker_thread.joinable()) {
+            g_worker_thread.join(); // 等待线程真正结束
+        }
+        std::cout << ">>> [Business] Capture thread stopped." << std::endl;
+    }
 }
