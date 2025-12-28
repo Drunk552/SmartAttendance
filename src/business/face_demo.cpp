@@ -15,10 +15,13 @@
 #include <mutex>// 互斥锁支持
 #include <chrono>//time.h>
 #include <map>// 字典支持
+#include <queue>// 队列支持
+#include <condition_variable>// 条件变量支持
 #include "face_demo.h" // 人脸识别演示模块的头文件
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 #include "db_storage.h"//数据层头文件
 #include "attendance_rule.h"
+#include "event_bus.h"// 事件总线头文件
 
 using namespace cv;
 using namespace cv::face;
@@ -36,7 +39,24 @@ static std::vector<int> labels;// 对应的标签ID（与face_samples一一对�
 static std::vector<std::string> names = {"user1","user2","user3","user4","user5"};// 用户名映射
 static int current_id = 0;// 当前选中的用户ID（用于采集样本）
 static bool trained = false;// 标识是否已完成训练
-static bool show_recognition = false;// 控制是否显示识别结果
+static bool show_recognition = true;// 控制是否显示识别结果
+static std::mutex g_names_mutex;// 保护 names 变量的互斥锁
+
+// 1. 定义打卡任务包
+struct PunchTask {
+    int user_id;
+    int shift_id;
+    cv::Mat snapshot; // 抓拍照片
+    int status;       // 考勤状态
+    std::string user_name; // 仅用于日志打印
+    int minutes_diff;      // 仅用于日志打印
+};
+// 2. 队列与同步原语
+static std::queue<PunchTask> g_punch_queue;      // 任务队列
+static std::mutex g_queue_mutex;                 // 保护队列的锁
+static std::condition_variable g_queue_cv;       // 信号量
+static std::atomic<bool> g_db_writer_running{false}; // 写库线程运行标志
+static std::thread g_db_writer_thread;           // 写库线程对象
 
 // ============== [新增：考勤配置全局缓存] ==============
 static RuleConfig g_rule_cfg;              // 全局规则配置
@@ -194,30 +214,75 @@ static Mat preprocess_face(const Mat& current_frame, const Rect& roi) {
     return preprocess_face_complete(current_frame, roi, preprocess_config);// 使用全局预处理配置
 }
 
+
 /**
- * @brief 通过GStreamer打开SDP推流
- * @param sdp_path SDP文件路径
- * @return 已打开的VideoCapture对象，如果失败则返回未打开的对象
- * @note 用于接收网络视频流，配置为低延迟模式
+ * @brief 使用硬编码参数打开 SDP 视频流
+ * @param unused 未使用的文件路径参数
+ * @return 打开的 VideoCapture 对象
+ * @note 忽略传入的路径，直接使用预设的 GStreamer 管道参数
  */
+static VideoCapture open_sdp_stream(const std::string& /*unused*/) {
+    // 我们忽略传入的文件路径，直接使用更稳定的硬编码参数
+    // 这串参数完全对应你生成的 sdp 文件内容
+    std::string pipe = 
+        "udpsrc port=5004 timeout=2000000000 ! "
+        "application/x-rtp, media=(string)video, clock-rate=(int)90000, "
+        "encoding-name=(string)RAW, sampling=(string)YCbCr-4:2:2, "
+        "depth=(string)8, width=(string)640, height=(string)480, "
+        "colorimetry=(string)BT601-5, payload=(int)96 ! "
+        "rtpjitterbuffer latency=0 ! "
+        "rtpvrawdepay ! videoconvert ! "
+        "video/x-raw,format=BGR ! "
+        "appsink sync=false drop=true max-buffers=1";
 
-static VideoCapture open_sdp_stream(const std::string& sdp_path) {
-    // GStreamer管道配置：
-    // filesrc: 从文件读取SDP描述
-    // sdpdemux: 解析SDP，提取媒体流
-    // rtpjitterbuffer: 抖动缓冲，latency=0表示最低延迟
-    // rtpvrawdepay: RTP载荷解析
-    // videoconvert: 格式转换
-    // appsink: 输出到OpenCV，配置为异步、丢弃旧帧、只保留最新一帧
-    std::string pipe =
-        "filesrc location=" + sdp_path + " ! sdpdemux "
-        "! rtpjitterbuffer latency=0 "
-        "! rtpvrawdepay ! videoconvert "
-        "! video/x-raw,format=BGR "
-        "! appsink sync=false drop=true max-buffers=1";
-
-    VideoCapture cap(pipe, cv::CAP_GSTREAMER);// 使用GStreamer后端
+    std::cout << "[Stream] 使用硬编码管道连接..." << std::endl;
+    VideoCapture cap(pipe, cv::CAP_GSTREAMER);
     return cap;
+}
+
+/**
+ * @brief 数据库写入专用线程 (消费者)
+ * @note 从队列取任务并串行写入，彻底解决 SQLite 多线程竞争问题
+ */
+static void attendance_writer_thread() {
+    while (g_db_writer_running) {
+        std::unique_lock<std::mutex> lock(g_queue_mutex);
+        
+        // 等待条件：队列不为空 OR 收到停止信号
+        g_queue_cv.wait(lock, []{ 
+            return !g_punch_queue.empty() || !g_db_writer_running; 
+        });
+
+        // 如果停止了且队列处理完了，就退出
+        if (!g_db_writer_running && g_punch_queue.empty()) break;
+
+        // 取出一个任务
+        if (!g_punch_queue.empty()) {
+            PunchTask task = g_punch_queue.front();
+            g_punch_queue.pop();
+            
+            // 关键：取完数据立刻解锁，让生产者(识别线程)能继续塞数据，不用等我写完库
+            lock.unlock(); 
+
+            // 添加 try-catch 防止因单次写入失败导致整个程序崩溃退出
+            try {
+                bool logged = db_log_attendance(task.user_id, task.shift_id, task.snapshot, task.status);
+                if(logged) {
+                    std::cout << "[Async] Save OK -> User: " << task.user_name 
+                               << " | Status: " << task.status 
+                               << " | Diff: " << task.minutes_diff << "m" << std::endl;
+                }else {
+                    std::cerr << "[Async] Save Failed -> User: " << task.user_name << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "[Error] DB Write Exception: " << e.what() << std::endl;
+                // 捕获错误，不要让线程退出！
+            } catch (...) {
+                std::cerr << "[Error] DB Write Unknown Error!" << std::endl;
+            }
+
+        }
+    }
 }
 
 /**
@@ -237,145 +302,241 @@ static void background_capture_loop() {
     // 识别冷却时间控制
     std::map<int, std::chrono::steady_clock::time_point> user_cooldowns; 
 
+    // 业务防抖缓存 (防止重复写入数据库)
+    // Key: UserID, Value: 上次打卡的时间戳 (秒)
+    std::map<int, time_t> last_punch_cache;
+
+    auto last_ui_update_time = std::chrono::steady_clock::now();// 上次UI更新的时间点
+    
+    int fail_consecutive_count = 0;// 连续失败计数器
+
     while (g_is_running) {
-        // 1. 采集一帧
-        if (!cap.isOpened()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-
-        cv::Mat frame;
-        if (!cap.read(frame) || frame.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-
-        // 2. 核心业务处理 (加锁保护)
-        {
-            std::lock_guard<std::mutex> lock(g_data_mutex);
-            current_frame = frame; 
-
-            // -------------------- [ 跳帧检测] ----------------
-            bool perform_detection = (frame_counter % (SKIP_FRAMES + 1) == 0);
-            frame_counter++;
-
-            bool has_face = false;
-            cv::Rect face;
-
-            if (perform_detection) {
-                // 执行真正的耗时检测
-                has_face = detect_face(current_frame, face, face_cas);
-                
-                if (has_face) {
-                    last_face_rect = face; // 更新缓存
-                    is_tracking = true;
-                } else {
-                    is_tracking = false;   // 丢失目标
+        try {
+            // 1. 检查连接状态 (SDP 重连逻辑)
+            if (!cap.isOpened()) {
+                static int retry_cnt = 0;
+                if (++retry_cnt % 10 == 0) { // 每2秒重试
+                    std::cout << "[Stream] 尝试重连 SDP..." << std::endl;
+                    cap.release();
+                    cap = open_sdp_stream("/tmp/yuyv.sdp");
+                    if (cap.isOpened()) fail_consecutive_count = 0; // 重置计数
                 }
-            } else {
-                // 跳帧期间：直接沿用上一帧的结果 (假定人脸移动不快)
-                // 只有当之前处于跟踪状态时，才认为有脸
-                if (is_tracking) {
-                    face = last_face_rect;
-                    has_face = true;
-                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
             }
-            // ------------------------------------------------------
 
-            if (has_face) {
-                // 绘制人脸框 (视觉反馈)
-                // 如果是跳帧期间画的框，可以用不同颜色(例如黄色)来区分调试，或者统一用绿色
-                cv::Scalar color = perform_detection ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 255, 200);
-                cv::rectangle(current_frame, face, color, 2);
+            cv::Mat frame;
+            //  尝试读取 (非阻塞尝试)
+            bool success = cap.read(frame);
+            
+            if (!success || frame.empty()) {
+                fail_consecutive_count++;
+                
+                // 如果连续 60 帧 (约2秒) 都读不到数据，说明流断了
+                // 必须强制释放 cap，否则它可能会一直卡死
+                if (fail_consecutive_count > 60) {
+                    std::cerr << "[Stream] 严重错误：流已中断，强制重启连接！" << std::endl;
+                    cap.release(); // 强制关闭，触发上面的 !isOpened 重连逻辑
+                    fail_consecutive_count = 0;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
 
-                // -------------------- [ 识别冷却] ----------------
-if (perform_detection && show_recognition && trained) {
+            // 2. 核心业务处理 (加锁保护)
+            {
+                std::lock_guard<std::mutex> lock(g_data_mutex);
+                frame.copyTo(current_frame);// 更新共享的当前帧 
+
+                // -------------------- [ 跳帧检测] ----------------
+                bool perform_detection = (frame_counter % (SKIP_FRAMES + 1) == 0);
+                frame_counter++;
+
+                bool has_face = false;
+                cv::Rect face;
+
+                if (perform_detection) {
+                    // 执行真正的耗时检测
+                    has_face = detect_face(current_frame, face, face_cas);
                     
-                    cv::Mat f = preprocess_face(current_frame, face);
-                    int label = -1; double conf = 0.0;
-                    recog->predict(f, label, conf);
-                    
-                    if (label != -1 && conf < 100.0) { // 阈值
-                        std::string name = (label < names.size()) ? names[label] : "Unknown";
-                        
-                        //  先定义 text 变量，用于后续追加状态
-                        std::string text = name; 
-                        
-                        // 检查该用户的独立冷却时间
-                        auto now = std::chrono::steady_clock::now();
-                        bool in_cooldown = false;
-                        
-                        if (user_cooldowns.find(label) != user_cooldowns.end()) {
-                            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - user_cooldowns[label]).count();
-                            if (elapsed < RECOG_COOLDOWN_MS) {
-                                in_cooldown = true;
-                            }
-                        }
-
-                        // 只有不在冷却中，才执行打卡逻辑
-                        if (!in_cooldown) {
-                            
-                            //  构建班次配置 (ShiftConfig)
-                            // 这里先使用一个通用的默认班次(09:00-18:00)来保证编译通过。
-                            // 实际项目中，你可以恢复之前复杂的 db_get_user_shift_smart 逻辑。
-                            ShiftConfig default_shift;
-                            default_shift.start_time = "09:00";
-                            default_shift.end_time = "18:00";
-                            default_shift.late_threshold_min = g_rule_cfg.late_threshold; 
-                            
-                            // 使用当前系统时间进行计算
-                            // 注意：std::time(nullptr) 返回的是系统时间
-                            PunchResult result = AttendanceRule::calculatePunchStatus(std::time(nullptr), default_shift, true); 
-                            
-                            // 准备异步数据
-                            cv::Mat snapshot = current_frame.clone();
-                            int uid = label;
-                            int sid = 0; // 默认班次ID
-                            int sts = 0; // 状态转换
-                            if (result.status == PunchStatus::LATE) sts = 1;
-                            else if (result.status == PunchStatus::EARLY) sts = 2;
-                            else if (result.status == PunchStatus::ABSENT) sts = 4;
-                            
-                            int diff = result.minutes_diff;
-                            std::string user_n = name;
-
-                            // 启动异步线程写库
-                            std::thread([uid, sid, snapshot, sts, diff, user_n]() {
-                                bool logged = db_log_attendance(uid, sid, snapshot, sts);
-                                if(logged) {
-                                    // 简单的日志输出
-                                    // std::cout << "[Async] " << user_n << " Logged. Status=" << sts << std::endl;
-                                }
-                            }).detach();
-
-                            // UI 反馈
-                            text += " [OK]";
-                            
-                            // 更新冷却时间
-                            user_cooldowns[label] = now;
-                        } 
-                        else {
-                            // 可选：显示冷却中，比如 text += " (Wait)";
-                        }
-
-                        // 统一在最后绘制文字，这样才能显示出 "User [OK]"
-                        cv::putText(current_frame, text, cv::Point(face.x, face.y - 10), 
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
+                    if (has_face) {
+                        last_face_rect = face; // 更新缓存
+                        is_tracking = true;
+                    } else {
+                        is_tracking = false;   // 丢失目标
+                    }
+                } else {
+                    // 跳帧期间：直接沿用上一帧的结果 (假定人脸移动不快)
+                    // 只有当之前处于跟踪状态时，才认为有脸
+                    if (is_tracking) {
+                        face = last_face_rect;
+                        has_face = true;
                     }
                 }
                 // ------------------------------------------------------
+
+                if (has_face) {
+                    // 绘制人脸框 (视觉反馈)
+                    // 如果是跳帧期间画的框，可以用不同颜色(例如黄色)来区分调试，或者统一用绿色
+                    cv::Scalar color = perform_detection ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 255, 200);
+                    cv::rectangle(current_frame, face, color, 2);
+
+                    // -------------------- [ 识别冷却] ----------------
+                    if (perform_detection && show_recognition && trained) {
+                        
+                        cv::Mat f = preprocess_face(current_frame, face);
+                        int label = -1; double conf = 0.0;
+                        recog->predict(f, label, conf);
+                        
+                        if (label != -1 && conf < 100.0) { // 阈值
+                            
+                            std::string name;
+                            {
+                            // 加锁读取，防止崩坏
+                            std::lock_guard<std::mutex> lock(g_names_mutex);
+                            name = (label < names.size()) ? names[label] : "Unknown";
+                            }
+                            
+                            //  先定义 text 变量，用于后续追加状态
+                            std::string text = name; 
+                            
+                            // 检查该用户的独立冷却时间
+                            auto now = std::chrono::steady_clock::now();
+                            bool in_cooldown = false;
+                            
+                            if (user_cooldowns.find(label) != user_cooldowns.end()) {
+                                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - user_cooldowns[label]).count();
+                                if (elapsed < RECOG_COOLDOWN_MS) {
+                                    in_cooldown = true;
+                                }
+                            }
+
+                            // 只有不在冷却中，才执行打卡逻辑
+                            if (!in_cooldown) {
+                                
+                                // =====================  1. 业务防抖检查 =================
+                                // 获取当前系统时间 (秒)
+                                time_t now_sec = std::time(nullptr);
+                                time_t last_p = 0;
+
+                                // 先查内存缓存 (最快)
+                                if (last_punch_cache.find(label) != last_punch_cache.end()) {
+                                    last_p = last_punch_cache[label];
+                                } 
+                                // 内存没有查数据库 (兜底)
+                                else {
+                                    // 确保 db_storage.h 中声明了此函数，如果没有请添加
+                                    last_p = db_getLastPunchTime(label);
+                                    last_punch_cache[label] = last_p;
+                                }
+
+                                // 判断时间间隔 (例如 60秒 内禁止重复打卡)
+                                if (now_sec - last_p < 60) {
+                                    // --- 情况 A: 重复打卡 ---
+                                    // 仅在界面显示提示，不执行任何写库操作
+                                    text += " [Repeat]"; 
+                                }
+                                else {
+                                    // --- 情况 B: 有效打卡  ---
+                                    
+                                    // ===== 考勤规则计算 =====
+                                    
+                                    // 1. 构建班次配置
+                                    ShiftConfig default_shift;
+                                    default_shift.start_time = "09:00";
+                                    default_shift.end_time = "18:00";
+                                    default_shift.late_threshold_min = g_rule_cfg.late_threshold; 
+                                    
+                                    // 2. 计算状态
+                                    PunchResult result = AttendanceRule::calculatePunchStatus(now_sec, default_shift, true); 
+                                    
+                                    // 3. 准备数据
+                                    cv::Mat snapshot = current_frame.clone();
+                                    int uid = label;
+                                    int sid = 0; 
+                                    int sts = 0; 
+                                    if (result.status == PunchStatus::LATE) sts = 1;
+                                    else if (result.status == PunchStatus::EARLY) sts = 2;
+                                    else if (result.status == PunchStatus::ABSENT) sts = 4;
+                                    
+                                    int diff = result.minutes_diff;
+                                    std::string user_n = name;
+
+                                    // 4. 异步队列推送
+                                    {
+                                        std::lock_guard<std::mutex> lock(g_queue_mutex);
+                                        // 控制队列长度，防止内存占用过高
+                                        if (g_punch_queue.size() > 10) { 
+                                            std::cerr << "[Warn] DB Queue Full! Drop." << std::endl;
+                                        } else {
+                                            g_punch_queue.push({uid, sid, snapshot, sts, user_n, diff});
+                                            g_queue_cv.notify_one(); 
+                                        }
+                                    }
+
+                                    // 5. UI 反馈
+                                    text += " [OK]";
+
+                                    //  打卡成功后，立即更新内存缓存
+                                    last_punch_cache[label] = now_sec;
+                                }
+
+                                // 更新视觉冷却时间 (保证提示语显示 2秒)
+                                user_cooldowns[label] = now;
+                            }
+                            else {
+                                // 可选：显示冷却中，比如 text += " (Wait)";
+                            }
+
+                            // 统一在最后绘制文字，这样才能显示出 "User [OK]"
+                            cv::putText(current_frame, text, cv::Point(face.x, face.y - 10), 
+                                        cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
+                        }
+                    }
+                    // ------------------------------------------------------
+                }
+            } // g_data_mutex 结束
+
+            // 3. 更新 UI 显示缓存(带限流保护)
+            auto now = std::chrono::steady_clock::now();
+            // 计算时间差 (毫秒)
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_ui_update_time).count();
+
+            //  只有距离上次刷新超过 40ms (约 25 FPS) 才通知 UI
+            // 这样既保证了识别是 60 FPS (高精度)，又防止了 UI 队列爆炸
+            if (elapsed_ms >= 40) {
+                {
+                    std::lock_guard<std::mutex> lock(g_display_mutex);
+                    current_frame.copyTo(g_display_frame_buffer);
+                }
+
+                // 发送刷新信号
+                EventBus::getInstance().publish(EventType::CAMERA_FRAME_READY, nullptr);
+                
+                // 更新最后刷新时间
+                last_ui_update_time = now;
             }
-        } // g_data_mutex 结束
 
-        // 3. 更新 UI 显示缓存
-        {
-            std::lock_guard<std::mutex> lock(g_display_mutex);
-            current_frame.copyTo(g_display_frame_buffer);
+            // 4. 线程休眠与内存清理
+            frame.release();// 释放当前帧内存
+            // [优化] 为了达到 60FPS，理论间隔应为 16ms。
+            // 但考虑到 cap.read() 本身可能是阻塞的（等待硬件数据），这里只休眠极短时间释放 CPU 即可。
+            // 如果你的 CPU 占用率过高，可以改为 10ms-15ms；如果追求极致流畅，改为 1ms。
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-
-        // 4. 线程休眠
-        // 既然有了跳帧，这里的休眠可以稍微短一点，保持视频流畅度 (比如 30FPS)
-        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+        //   捕获所有异常，防止程序崩溃
+        catch (const cv::Exception& e) {
+            std::cerr << "[Error] OpenCV Exception in capture loop: " << e.what() << std::endl;
+            // 遇到 OpenCV 错误，暂停一下，避免刷屏
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        } 
+        catch (const std::exception& e) {
+            std::cerr << "[Error] Std Exception in capture loop: " << e.what() << std::endl;
+        } 
+        catch (...) {
+            std::cerr << "[Error] Unknown crash in capture loop!" << std::endl;
+        }
     }
 }
 
@@ -393,31 +554,27 @@ bool business_init() {
         return false;
     }
 
+    /*
     //打开视频输入 (默认尝试打开 SDP)
-    std::string sdp = "/tmp/yuyv.sdp"; // 硬编码默认路径，或从配置读取
-    cap = open_sdp_stream(sdp);// 尝试打开GStreamer流
+    std::string sdp = "/tmp/yuyv.sdp"; 
     
-    if (!cap.isOpened()) {
-        std::cerr << "[WARN] 打不开 SDP 推流，回退到摄像头 0。\n";
-        cap.open(0);
-        
-        // 【新增代码】强制设置低分辨率和缓冲区大小
-        if (cap.isOpened()) {
-            // 设置为 320x240，匹配我们的屏幕尺寸，大幅提升处理速度
-            cap.set(cv::CAP_PROP_FRAME_WIDTH, 320);
-            cap.set(cv::CAP_PROP_FRAME_HEIGHT, 240);
-            
-            // 尝试设置缓冲区为1 (部分驱动支持)，只取最新一帧
-            cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
-            
-            std::cout << "[Business] Camera set to 320x240 Low Latency Mode.\n";
-        }
+    // 先检查文件是否存在，防止 GStreamer 内部错误
+    if (std::filesystem::exists(sdp)) {
+        std::cout << "[Business] 正在尝试连接 SDP 推流: " << sdp << " ...\n";
+        cap = open_sdp_stream(sdp);
+    } else {
+        std::cerr << "[WARN] 找不到 " << sdp << " 文件 (脚本可能未运行)\n";
     }
-    
-    if (!cap.isOpened()) {
-        std::cerr << "[ERR] 无法打开任何视频源。\n";
-        return false;
+
+    if (cap.isOpened()) {
+        std::cout << "[Business] SDP 流初始化成功！\n";
+    } else {
+        //失败了也不要 open(0)，只是打印警告
+        std::cerr << "[WARN] SDP 流暂未就绪，将在后台线程自动重试。\n";
     }
+    */
+
+    std::cout << ">>> [Business] 摄像头初始化已移交至后台线程，主界面立即启动。" << std::endl;// 摄像头初始化移至后台线程
 
     //初始化LBPH人脸识别器
     recog = LBPHFaceRecognizer::create(1,8,8,8, 500.0);// 参数：半径=1, 邻域=8, 网格X=8, 网格Y=8, 阈值=500.0
@@ -446,7 +603,7 @@ bool business_init() {
             
             // 虽然不用读图片，但必须从数据库加载 ID->姓名的映射关系
             // 使用 lightweight 接口 (不读 BLOB，速度快)
-            std::vector<UserData> users_info = db_get_all_users();
+            std::vector<UserData> users_info = db_get_all_users_light();
             
             for (const auto& u : users_info) {
                 // 确保 names 向量够长
@@ -504,6 +661,20 @@ bool business_init() {
         }
     }
     // 设置默认预处理配置
+    if (!g_is_running) {
+        g_is_running = true;
+        g_worker_thread = std::thread(background_capture_loop);
+        std::cout << ">>> [Business] Background capture thread started." << std::endl;
+    }
+
+    // 启动数据库写入线程
+    if (!g_db_writer_running) {
+        g_db_writer_running = true;
+        g_db_writer_thread = std::thread(attendance_writer_thread);
+        std::cout << ">>> [Business] DB Writer thread started." << std::endl;
+    }
+
+    // 启动采集线程 (原有逻辑)
     if (!g_is_running) {
         g_is_running = true;
         g_worker_thread = std::thread(background_capture_loop);
@@ -594,6 +765,15 @@ bool business_processAndSaveImage(const cv::Mat& inputImage) {
 
     // C. 判断结果并更新内存状态
     if (new_uid != -1) {
+        
+        {// 加锁更新 names 映射表
+        std::lock_guard<std::mutex> lock(g_names_mutex);
+        if (names.size() <= new_uid) {
+            names.resize(new_uid + 1, "Unknown");
+        }
+        names[new_uid] = reg_name;
+        }
+
         // 1. 更新内存中的训练集 (这样不需要重启程序就能训练)
         face_samples.push_back(preprocessed_face);
         labels.push_back(new_uid);
@@ -675,14 +855,11 @@ void business_toggle_recognition() {
  * @note 移除了 imshow 和 waitKey，不再阻塞，不再直接处理键盘
  */
 cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_once 也可以保留但返回值要改
-    if (!cap.isOpened()) return Mat();
 
-    // [Epic 4.4 新增] 加锁，防止写入时被其他线程读取
+    //  加锁，防止写入时被其他线程读取
     std::lock_guard<std::mutex> lock(g_data_mutex);
-
-    // 【可选优化】如果在 Linux/V4L2 下延迟依然存在，可以取消下面这行的注释
-    // 它的作用是每次读取前先抓取一次丢弃，确保拿到的是最新的
-    cap.grab();
+    if (current_frame.empty()) return cv::Mat();
+    return current_frame.clone();
 
     // 1. 读取一帧
     if (!cap.read(current_frame) || current_frame.empty()) {
@@ -841,24 +1018,23 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
                     int diff = result.minutes_diff;
                     std::string user_n = names[pred_label]; // 用于日志
 
-                    // 3. 启动分离线程 (Fire-and-Forget)
-                    std::thread([uid, sid, snapshot, sts, diff, user_n]() {
-                        // --- 这里是子线程，不会阻塞视频画面 ---
+                    // 3. 推送任务到队列，而不是启动新线程
+                    {
+                        std::lock_guard<std::mutex> lock(g_queue_mutex);
                         
-                        // 执行耗时的 I/O 操作 (写盘 + 写库)
-                        bool logged = db_log_attendance(uid, sid, snapshot, sts);
-                        
-                        // 打印日志 (注意：不要在这里操作 UI 控件)
-                        if (logged) {
-                            std::cout << "[Async] Save OK -> User: " << user_n 
-                                      << " | Status: " << sts 
-                                      << " | Diff: " << diff << "m" << std::endl;
-                        } else {
-                            std::cerr << "[Async] Save Failed for User: " << uid << std::endl;
+                        // [Epic 4.4 优化] 防护：如果积压超过 50 条，说明写入速度严重滞后
+                        // 此时选择丢弃当前最新的打卡任务，优先保命（防止内存耗尽崩溃）
+                        if (g_punch_queue.size() > 50) {
+                            std::cerr << "[Warn] DB Writer Queue FULL (>50)! Dropping record for: " << user_n << std::endl;
+                            
+                            // 可选：你也可以在这里加一行代码，让界面显示一个红色的 "Busy" 图标提醒用户
+                        } 
+                        else {
+                            // 队列未满，正常入队
+                            g_punch_queue.push({uid, sid, snapshot, sts, user_n, diff});
+                            g_queue_cv.notify_one(); // 唤醒后台写库线程
                         }
-                        
-                        // 线程结束，自动释放资源
-                    }).detach(); // 关键：detach 分离线程，主线程不需要 join 等待
+                    }
 
                     // 4. UI 立即反馈 (乐观更新)
                     // 不需要等数据库返回，直接告诉用户“识别成功”，体验最流畅
@@ -1001,6 +1177,7 @@ bool business_register_user(const char* name, int dept_id) {
 
         // B. 更新内存中的 ID->姓名 映射表
         // 确保 names 向量容量足够，避免越界
+        std::lock_guard<std::mutex> lock(g_names_mutex);// 加锁保护 names
         if ((int)names.size() <= new_id) {
             names.resize(new_id + 1, "Unknown");
         }
@@ -1236,16 +1413,28 @@ void business_reload_config() {
 
 /**
  * @brief 业务退出函数
- * @note 停止后台采集线程并清理资源
+ * @note 停止采集线程和数据库写入线程
  */
 void business_quit() {
+    // 1. 停止采集线程
     if (g_is_running) {
-        std::cout << ">>> [Business] Stopping capture thread..." << std::endl;
-        g_is_running = false; // 通知线程退出循环
-        
+        std::cout << ">>> [Business] Stopping capture thread..." << std::endl;// 停止采集线程
+        g_is_running = false;
         if (g_worker_thread.joinable()) {
-            g_worker_thread.join(); // 等待线程真正结束
+            g_worker_thread.join();
         }
-        std::cout << ">>> [Business] Capture thread stopped." << std::endl;
+        std::cout << ">>> [Business] Capture thread stopped." << std::endl;// 停止完成
+    }
+
+    // 2. 停止数据库写入线程
+    if (g_db_writer_running) {
+        std::cout << ">>> [Business] Stopping DB Writer thread..." << std::endl;// 停止DB写入线程
+        g_db_writer_running = false;
+        g_queue_cv.notify_all(); // 唤醒沉睡的线程让它退出
+        
+        if (g_db_writer_thread.joinable()) {
+            g_db_writer_thread.join();
+        }
+        std::cout << ">>> [Business] DB Writer thread stopped." << std::endl;// 停止完成
     }
 }

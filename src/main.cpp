@@ -12,6 +12,7 @@
 #include <vector>
 #include <cstdio>
 #include <signal.h>
+#include <cstdlib>// 确保包含 system 和 setenv
 
 // 1. 引入第三方库头文件
 #include "lvgl.h"
@@ -145,12 +146,46 @@ void test_epic2_dao_and_seeding() {
 }
 
 // ==========================================
+//  强制禁用系统休眠函数
+// ==========================================
+void disable_system_screensaver() {
+    std::cout << ">>> [System] 正在强制禁用屏幕保护和自动休眠..." << std::endl;
+
+    // 1. 设置 SDL 环境变量：明确告诉 SDL 不要调用屏保
+    // 0 = Disable screensaver
+    setenv("SDL_VIDEO_ALLOW_SCREENSAVER", "0", 1);
+
+    // 2. Linux 控制台命令：禁止黑屏 (Console Blanking)
+    // 使用 system() 调用比外部脚本更可靠，因为它随程序启动执行
+    int ret = 0;
+    
+    // 方法 A: setterm (通用)
+    // -blank 0: 禁用黑屏
+    // -powerdown 0: 禁用电源关闭
+    ret = system("setterm -blank 0 -powerdown 0 -powersave off > /dev/null 2>&1");
+    
+    // 方法 B: 直接向终端发送转义序列 (强制唤醒)
+    // \033[9;0] 是 Linux 控制台的“设置休眠时间为0”指令
+    ret = system("echo -e '\\033[9;0]' > /dev/tty0 2> /dev/null");
+    
+    // 方法 C: Framebuffer 直接控制 (如果存在)
+    if (access("/sys/class/graphics/fb0/blank", F_OK) == 0) {
+        ret = system("echo 0 > /sys/class/graphics/fb0/blank");
+    }
+
+    (void)ret; // 忽略返回值警告
+}
+
+// ==========================================
 // 主程序入口
 // ==========================================
 int main() {
 
     // 注册信号处理 (Ctrl+C)
     signal(SIGINT, signal_handler);
+
+    //  程序启动第一件事：禁用休眠
+    disable_system_screensaver();
 
     std::cout << "==========================================" << std::endl;
     std::cout << "   智能考勤系统 v1.2 - Phase 02" << std::endl;
@@ -168,9 +203,14 @@ int main() {
     }
 
     // 3. 执行 Phase 2 核心测试 (DAO + Seeding)
-    test_epic2_dao_and_seeding();
+    //test_epic2_dao_and_seeding();
 
-    // 4. 初始化业务层
+    // 4. 先初始化 UI 层 (完成事件订阅、LVGL环境准备)
+    std::cout << ">>> 初始化 UI 层..." << std::endl;
+    ui_init(); 
+    std::cout << "[OK] UI 层初始化完成" << std::endl;
+
+    // 5. 后初始化业务层 (再启动线程，确保发出的第一个事件都能被收到)
     std::cout << ">>> 初始化业务层..." << std::endl;
     if (!business_init()) {
         std::cerr << "[Error] 业务层初始化失败。" << std::endl;
@@ -178,18 +218,13 @@ int main() {
         return -1;
     }
 
-    // 5. 初始化 UI 层
-    std::cout << ">>> 初始化 UI 层..." << std::endl;
-    ui_init(); 
-    std::cout << "[OK] UI 层初始化完成" << std::endl;
-
     // 6. 进入主循环
     std::cout << ">>> 系统主循环启动" << std::endl;
     
     while (!g_program_should_exit) {
         // 驱动 LVGL 心跳
         uint32_t time_till_next = lv_timer_handler();
-        if (time_till_next > 5) time_till_next = 5;
+        if (time_till_next < 5) time_till_next = 5;// 限制最小休眠，防止过快循环
         if (time_till_next > 30) time_till_next = 30; // 限制最大休眠，保证响应速度
 
         usleep(time_till_next * 1000); 

@@ -235,6 +235,9 @@ static std::string simple_hash_password(const std::string& raw_pwd) {
 // ================= Epic 2.3 数据播种 =================
 
 bool data_seed() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     std::cout << ">>> [Data] Checking for data seeding..." << std::endl;
 
     // 1. 播种默认部门 (如果为空)
@@ -306,6 +309,9 @@ bool data_seed() {
 }
 
 void data_close() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     if (db) { 
         sqlite3_close(db); 
         db = nullptr; 
@@ -316,6 +322,9 @@ void data_close() {
 // ================= 1. 部门管理 DAO =================
 
 bool db_add_department(const std::string& dept_name) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     sqlite3_stmt* stmt;
     const char* sql = "INSERT INTO departments (name) VALUES (?);";
     
@@ -329,6 +338,9 @@ bool db_add_department(const std::string& dept_name) {
 }
 
 std::vector<DeptInfo> db_get_departments() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     std::vector<DeptInfo> list;
     sqlite3_stmt* stmt;
     const char* sql = "SELECT id, name FROM departments;";
@@ -347,6 +359,9 @@ std::vector<DeptInfo> db_get_departments() {
 }
 
 bool db_delete_department(int dept_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     const char* sql = "DELETE FROM departments WHERE id=?;";
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
@@ -364,6 +379,9 @@ bool db_update_shift(int shift_id,
                      const std::string& s2_start, const std::string& s2_end,
                      const std::string& s3_start, const std::string& s3_end,
                      int cross_day) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+    
     const char* sql = 
         "UPDATE shifts SET s1_start=?, s1_end=?, s2_start=?, s2_end=?, s3_start=?, s3_end=?, cross_day=? "
         "WHERE id=?;";
@@ -386,6 +404,9 @@ bool db_update_shift(int shift_id,
 }
 
 std::vector<ShiftInfo> db_get_shifts() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     std::vector<ShiftInfo> list;
     sqlite3_stmt* stmt;
     
@@ -416,6 +437,9 @@ std::vector<ShiftInfo> db_get_shifts() {
 }
 
 RuleConfig db_get_global_rules() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     // 1. 设置默认值 (防止数据库字段为NULL或读取失败)
     RuleConfig config;
     config.company_name = "Smart Co.";
@@ -460,6 +484,9 @@ int db_add_shift(const std::string& name,
                  const std::string& s2_start, const std::string& s2_end,
                  const std::string& s3_start, const std::string& s3_end,
                  int cross_day) {
+                   
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     const char* sql = 
         "INSERT INTO shifts (name, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, cross_day) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
@@ -490,6 +517,9 @@ int db_add_shift(const std::string& name,
 }
 
 bool db_delete_shift(int shift_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     const char* sql = "DELETE FROM shifts WHERE id=?;";
     sqlite3_stmt* stmt;
 
@@ -515,6 +545,9 @@ bool db_delete_shift(int shift_id) {
 }
 
 bool db_update_global_rules(const RuleConfig& config) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     // 强制更新 id=1 的记录
     const char* sql = "UPDATE attendance_rules SET "
                       "company_name=?, late_threshold=?, early_leave_threshold=?, "
@@ -665,6 +698,9 @@ UserData db_get_user_info(int user_id) {
 }
 
 bool db_delete_user(int user_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     const char* sql = "DELETE FROM users WHERE id=?;";
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
@@ -724,6 +760,9 @@ std::vector<UserData> db_get_all_users() {
 }
 
 bool db_assign_user_shift(int user_id, int shift_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     const char* sql = "UPDATE users SET default_shift_id=? WHERE id=?;";
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
@@ -739,6 +778,9 @@ bool db_assign_user_shift(int user_id, int shift_id) {
 }
 
 ShiftInfo db_get_user_shift(int user_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     ShiftInfo s = {0, "", "", "", "", "", "", "", 0}; // 初始化空结构
     
     const char* sql = 
@@ -801,6 +843,9 @@ bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int
 
 // 用户密码更新接口
 bool db_update_user_password(int user_id, const std::string& new_raw_password) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 加锁保护
+
     const char* sql = "UPDATE users SET password=? WHERE id=?;";
     
     sqlite3_stmt* stmt;
@@ -818,6 +863,36 @@ bool db_update_user_password(int user_id, const std::string& new_raw_password) {
     
     if (ok) std::cout << "[Data] User " << user_id << " password updated." << std::endl;
     return ok;
+}
+
+// 轻量级用户列表加载 (仅 ID 和 Name)
+std::vector<UserData> db_get_all_users_light() {
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex); // 保持线程安全
+    std::vector<UserData> users;
+    
+    // SQL 仅查询 id 和 name，绝对不查 face_data (BLOB)
+    const char* sql = "SELECT id, name FROM users;"; 
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            UserData u;
+            u.id = sqlite3_column_int(stmt, 0);
+            
+            const char* txt = (const char*)sqlite3_column_text(stmt, 1);
+            u.name = txt ? txt : "Unknown";
+            
+            // 其他字段留空即可，因为只是为了映射名字
+            users.push_back(u);
+        }
+    } else {
+        std::cerr << "[Data] Light Load Failed: " << sqlite3_errmsg(db) << std::endl;
+    }
+    
+    sqlite3_finalize(stmt);
+    // 打印日志方便调试启动速度
+    std::cout << "[Data] Light-loaded " << users.size() << " users (ID/Name only)." << std::endl;
+    return users;
 }
 
 // ================= 4. 考勤记录 DAO =================
@@ -993,6 +1068,9 @@ static ShiftInfo get_shift_by_id(int shift_id) {
 }
 
 bool db_set_dept_schedule(int dept_id, int day_of_week, int shift_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     // 使用 INSERT OR REPLACE (UPSERT)
     const char* sql = "INSERT OR REPLACE INTO dept_schedule (dept_id, day_of_week, shift_id) VALUES (?, ?, ?);";
     sqlite3_stmt* stmt;
@@ -1008,6 +1086,9 @@ bool db_set_dept_schedule(int dept_id, int day_of_week, int shift_id) {
 }
 
 bool db_set_user_special_schedule(int user_id, const std::string& date_str, int shift_id) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     const char* sql = "INSERT OR REPLACE INTO user_schedule (user_id, date_str, shift_id) VALUES (?, ?, ?);";
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;
@@ -1113,6 +1194,9 @@ bool data_saveAttendance(int user_id, const cv::Mat& image) {
  * @return 最后保存图像的ID，失败返回 -1
  */
 long long data_getLastImageID() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     if (!db) {
         std::cerr << "[Data] Error: Database not initialized!" << std::endl;
         return -1;
@@ -1143,6 +1227,9 @@ long long data_getLastImageID() {
 // ================= Epic 4.3 系统维护接口 =================
 
 bool db_clear_attendance() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+    
     std::cout << "[Data] Clearing all attendance records..." << std::endl;
     // 清空表数据
     bool ret = exec_sql("DELETE FROM attendance;", "Clear Att") &&
@@ -1161,6 +1248,9 @@ bool db_clear_attendance() {
 }
 
 bool db_clear_users() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     // 直接使用本文件顶部的静态全局变量 db
     if (!db) return false; 
     
@@ -1186,6 +1276,9 @@ bool db_clear_users() {
 }
 
 bool db_factory_reset() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     std::cout << "[Data] !!! FACTORY RESET !!!" << std::endl;
     data_close(); // 先断开连接
     
@@ -1200,6 +1293,9 @@ bool db_factory_reset() {
 
 // =================  铃声管理接口 =================
 std::vector<BellSchedule> db_get_all_bells() {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     std::vector<BellSchedule> list;
     const char* sql = "SELECT id, time, duration, days_mask, enabled FROM bells ORDER BY id ASC;";
     
@@ -1221,6 +1317,9 @@ std::vector<BellSchedule> db_get_all_bells() {
 
 // 更新铃声设置
 bool db_update_bell(const BellSchedule& bell) {
+    
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 确保线程安全
+
     const char* sql = "UPDATE bells SET time=?, duration=?, days_mask=?, enabled=? WHERE id=?;";
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) return false;

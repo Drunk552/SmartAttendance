@@ -353,6 +353,13 @@ bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int
  */
 bool db_update_user_password(int user_id, const std::string& new_raw_password);
 
+/**
+ * @brief  获取所有用户的基础信息 (仅ID和姓名)
+ * @details 专门用于系统启动时快速构建 ID->Name 映射表，不加载图片数据，速度极快。
+ * @return std::vector<UserData> 用户列表 (仅填充 id 和 name 字段)
+ */
+std::vector<UserData> db_get_all_users_light();
+
 // ================= 4. 考勤记录接口 (Attendance DAO) =================
 
 /**

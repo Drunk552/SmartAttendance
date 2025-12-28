@@ -76,6 +76,22 @@ function run()
         return
     fi
     
+    echo ">>> Cleaning up resources..."
+    
+    # 1. 清理 UDP 端口占用 (解决黑屏的关键)
+    # 杀掉所有占用 5004 端口的进程
+    fuser -k 5004/udp > /dev/null 2>&1 || true
+
+    # 2. 尝试杀掉所有占用 /dev/video0 摄像头的进程 (防止黑屏核心逻辑)
+    # > /dev/null 2>&1 是为了不显示"找不到进程"的报错信息，让输出更清爽
+    fuser -k /dev/video0 > /dev/null 2>&1 || true
+    
+    # 3. 确保没有残留的 attendance_app 僵尸进程
+    killall -9 attendance_app > /dev/null 2>&1 || true
+    
+    # 稍微等待 0.5 秒让系统回收资源，更稳妥
+    sleep 0.5
+
     echo ">>> Starting Application..."
     "$EXE_PATH"
 }

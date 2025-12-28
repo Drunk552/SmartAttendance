@@ -21,6 +21,7 @@
 #include <vector>
 #include <ctime>
 #include <sstream>
+#include <atomic>// 用于原子变量
 #include "lv_conf.h"
 #include <unistd.h> // for sleep (模拟耗时)
 #include <filesystem> // C++17 标准文件系统库
@@ -338,6 +339,34 @@ static void ta_event_cb(lv_event_t* e) {
     }
 }
 
+// ====================== 异步导出相关 =================
+
+// 1. 定义上下文结构体
+struct AsyncExportCtx {
+    lv_obj_t* spinner; // 加载圈指针
+    bool success;      // 导出结果
+};
+
+// 2. UI线程回调函数 (由 lv_async_call 触发)
+static void ui_on_export_complete(void* data) {
+    AsyncExportCtx* ctx = (AsyncExportCtx*)data;
+    
+    // 移除加载圈 (注意：如果用户在导出期间强制切换了屏幕，这里可能需要额外判断，但通常Spinner阻断了操作)
+    if (ctx->spinner) {
+        lv_obj_delete(ctx->spinner);
+    }
+    
+    // 显示结果弹窗
+    if (ctx->success) {
+        show_popup("Success", "Report Downloaded to USB!");
+    } else {
+        show_popup("Failed", "Check USB or Dates.");
+    }
+    
+    // 释放堆内存
+    delete ctx;
+}
+
 // --- 界面 A: 下载考勤报表 (全员) ---
 static void create_download_all_screen(lv_obj_t* parent) {
     lv_obj_t* cont = lv_obj_create(parent);
@@ -373,28 +402,38 @@ static void create_download_all_screen(lv_obj_t* parent) {
     
     lv_obj_add_event_cb(btn, [](lv_event_t* e) {
         lv_obj_t* cont = lv_obj_get_parent((lv_obj_t*)lv_event_get_target(e));
-        // 按添加顺序获取子对象: 0:Label, 1:StartTA, 2:EndTA, 3:Btn
+        // 获取输入框对象
         lv_obj_t* t_s = lv_obj_get_child(cont, 1);
         lv_obj_t* t_e = lv_obj_get_child(cont, 2);
         
-        const char* s_txt = lv_textarea_get_text(t_s);
-        const char* e_txt = lv_textarea_get_text(t_e);
+        // 获取文本（需要拷贝一份 std::string 传给线程，因为 Textarea 指针在线程中可能失效）
+        std::string s_txt = lv_textarea_get_text(t_s);
+        std::string e_txt = lv_textarea_get_text(t_e);
 
-        if (strlen(s_txt) == 0 || strlen(e_txt) == 0) {
+        // 1. 基础校验
+        if (s_txt.empty() || e_txt.empty()) {
             show_popup("Error", "Please enter valid dates!");
             return;
         }
         
+        // 2. 创建加载圈 (Spinner) 并居中，阻断用户误操作
         lv_obj_t* spin = lv_spinner_create(lv_screen_active());
         lv_obj_center(spin);
-        lv_timer_handler(); 
+        
+        // 3.  启动分离线程执行耗时操作
+        std::thread([s_txt, e_txt, spin](){
+            // --- 在后台线程执行耗时 IO 操作 ---
+            bool ret = UiController::getInstance()->exportCustomReport(s_txt.c_str(), e_txt.c_str());
+            
+            // --- 准备数据通知 UI 线程 ---
+            AsyncExportCtx* ctx = new AsyncExportCtx{spin, ret};
+            
+            // 使用 LVGL 提供的异步调用机制回到主线程更新 UI
+            // 注意：千万不要在子线程直接操作 lv_obj_delete(spin) 或 show_popup
+            lv_async_call(ui_on_export_complete, ctx);
+            
+        }).detach();
 
-        // 调用静态接口
-        bool ret = UiController::getInstance()->exportCustomReport(s_txt, e_txt);
-        lv_obj_delete(spin);
-
-        if (ret) show_popup("Success", "Report Downloaded to USB!");
-        else show_popup("Failed", "Check USB or Dates.");
     }, LV_EVENT_CLICKED, NULL);
 }
 
@@ -449,17 +488,30 @@ lv_obj_t* cont = lv_obj_create(parent);
         const char* id_txt = lv_textarea_get_text(t_id);
         if (strlen(id_txt) == 0) { show_popup("Error", "Enter User ID"); return; }
         
+        // 简单校验 ID 存在性 (这个操作很快，可以放在 UI 线程)
         int uid = atoi(id_txt);
-        // 调用静态接口校验
         UserData u = UiController::getInstance()->getUserInfo(uid);
         if (u.id == 0) {
             show_popup("Error", "User ID not found!");
             return;
         }
 
-        bool ret = UiController::getInstance()->exportUserReport(uid, lv_textarea_get_text(t_s), lv_textarea_get_text(t_e));
-        if (ret) show_popup("Success", "Personal Report Downloaded!");
-        else show_popup("Failed", "Check USB or Dates.");
+        // 拷贝字符串供线程使用
+        std::string s_txt = lv_textarea_get_text(t_s);
+        std::string e_txt = lv_textarea_get_text(t_e);
+
+        // 创建 Spinner
+        lv_obj_t* spin = lv_spinner_create(lv_screen_active());
+        lv_obj_center(spin);
+
+        // 启动线程
+        std::thread([uid, s_txt, e_txt, spin](){
+            bool ret = UiController::getInstance()->exportUserReport(uid, s_txt.c_str(), e_txt.c_str());
+            
+            AsyncExportCtx* ctx = new AsyncExportCtx{spin, ret};
+            lv_async_call(ui_on_export_complete, ctx);
+
+        }).detach();
 
     }, LV_EVENT_CLICKED, NULL);
 }
@@ -587,7 +639,13 @@ static void main_screen_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
-        if (key == LV_KEY_ENTER) load_menu_screen();
+        if (key == LV_KEY_ENTER) {
+            //  告诉输入设备：等待按键释放。
+            // 这样“释放”动作就不会被下一个界面的按钮当成“点击”处理了。
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            load_menu_screen();
+        }
         if (key == LV_KEY_ESC) request_exit();
     }
 }
@@ -688,10 +746,16 @@ static void menu_btn_event_cb(lv_event_t *e) {
     // 保留点击支持
     if (code == LV_EVENT_CLICKED) {
          std::printf("[UI] Click: %s\n", tag);
+         //  点击 System 应该进入设置，而不是退出程序
          if(std::strcmp(tag, "System") == 0) {
-            extern volatile bool g_program_should_exit;
-            g_program_should_exit = true; 
-        }  
+            load_sys_ops_screen(); 
+        }
+        // 处理其他点击...
+        else if(std::strcmp(tag, "UserMgmt") == 0) load_user_mgmt_screen();
+        else if(std::strcmp(tag, "Records") == 0) load_record_query_screen();
+        else if(std::strcmp(tag, "AttStats") == 0) load_att_stats_screen();
+        else if(std::strcmp(tag, "AttDesign") == 0) load_att_design_screen();
+        else if(std::strcmp(tag, "SysInfo") == 0) load_sys_info_screen();
     }
 }
 
@@ -948,6 +1012,8 @@ static void ui_update_disk_async(void* data) {
     }
 }
 
+static std::atomic<bool> s_ui_frame_pending{false};
+
 // 摄像头刷新回调
 static void ui_update_camera_async(void* /*data*/) {
     // 从 Controller 获取最新帧并拷贝到 cam_buf_display
@@ -964,6 +1030,7 @@ static void ui_update_camera_async(void* /*data*/) {
          UiController::getInstance()->getDisplayFrame(cam_buf_display.data(), CAM_W, CAM_H);
          lv_obj_invalidate(img_face_reg);
     }
+    s_ui_frame_pending.store(false);// 标记本次刷新完成
 }
 
 // ================= 事件订阅初始化 =================
@@ -988,7 +1055,13 @@ static void init_event_subscriptions() {
 
     // 3. 摄像头帧
     bus.subscribe(EventType::CAMERA_FRAME_READY, [](void*) {
-        lv_async_call(ui_update_camera_async, nullptr);
+        // [修复] 只有当 UI 线程空闲时才发送更新，防止消息队列爆炸 (OOM)
+        bool expected = false;
+        // 尝试将 false 修改为 true，只有成功了才发送事件
+        if (s_ui_frame_pending.compare_exchange_strong(expected, true)) {
+            lv_async_call(ui_update_camera_async, nullptr);
+        }
+        // 否则直接丢弃这一帧，不做任何操作
     });
 }
 
@@ -2821,6 +2894,7 @@ static void load_register_step(void) {
 // ================= 初始化 =================
 
 void ui_init(void) {
+    setenv("SDL_VIDEO_ALLOW_SCREENSAVER", "0", 1);// 防止屏幕保护打断 UI 显示
     lv_init();
     init_focus_style();
     lv_display_t *disp = lv_sdl_window_create(SCREEN_W, SCREEN_H);

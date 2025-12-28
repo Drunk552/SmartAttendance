@@ -170,9 +170,10 @@ int ReportGenerator::extractYearFromTimestamp(long long timestamp) {
 }
 
 /**
- * @brief 动态计算迟到分钟数 (修复 Hardcoded 问题)
+ * @brief 动态计算迟到分钟数
+ * @param user_id 用户ID
  * @param timestamp 打卡时间戳
- * @param shift 当天的班次信息
+ * @return 迟到分钟数
  */
 int ReportGenerator::calculateLateMinutes(long long timestamp, const ShiftInfo& shift) {
     // 1. 获取打卡时间的分钟数
@@ -180,32 +181,37 @@ int ReportGenerator::calculateLateMinutes(long long timestamp, const ShiftInfo& 
     std::tm* tm = std::localtime(&t);
     int punch_mins = tm->tm_hour * 60 + tm->tm_min;
 
-    // 2. 解析班次的所有上班时间点
-    int s1_start = timeStrToMinutes(shift.s1_start); // 如 08:00 -> 480
-    int s2_start = timeStrToMinutes(shift.s2_start); // 如 14:00 -> 840
-    int s3_start = timeStrToMinutes(shift.s3_start);
+    // 2. 解析班次时间点
+    int s1_start = timeStrToMinutes(shift.s1_start); 
+    int s1_end   = timeStrToMinutes(shift.s1_end);
+    int s2_start = timeStrToMinutes(shift.s2_start); 
 
-    // 3. 寻找最近的“上班时间点”进行对比
-    // 逻辑：如果打卡时间在 S1时间段附近，就跟S1比；如果在S2附近，就跟S2比。
-    // 这里使用简单的“就近原则”或“折中原则”
+    // 3. [Epic 4.4 优化] 动态计算分界点
+    // 默认为 12:00 (720)，防止没有下午班次时出错
+    int split_point = 720; 
     
+    // 如果上午班结束和下午班开始都存在，取两者的中间点作为分界线
+    // 例如：上午结束 12:00，下午开始 14:00 -> 分界点 13:00
+    if (s1_end > 0 && s2_start > 0 && s2_start > s1_end) {
+        split_point = s1_end + (s2_start - s1_end) / 2;
+    }
+
     int late_mins = 0;
 
-    // 假设：如果打卡时间在 12:00 之前，认为是上午班迟到
-    // 这里的 720 (12:00) 是一个简化的分界线，更严谨的做法是参考 attendance_rule.cpp 中的折中逻辑
-    if (s1_start != -1 && punch_mins < 720) { 
+    // 4. 判定逻辑
+    // 情况 A: 打卡时间在分界点之前 -> 归属上午班，跟 s1_start 比
+    if (s1_start != -1 && punch_mins <= split_point) { 
         if (punch_mins > s1_start) {
             late_mins = punch_mins - s1_start;
         }
     }
-    // 如果打卡时间在 12:00 之后，认为是下午班迟到
-    else if (s2_start != -1 && punch_mins >= 720) {
+    // 情况 B: 打卡时间在分界点之后 -> 归属下午班，跟 s2_start 比
+    else if (s2_start != -1 && punch_mins > split_point) {
         if (punch_mins > s2_start) {
             late_mins = punch_mins - s2_start;
         }
     }
     
-    // 允许迟到阈值 (可从 RuleConfig 获取，这里暂时忽略或默认0)
     return late_mins > 0 ? late_mins : 0;
 }
 
@@ -220,19 +226,28 @@ int ReportGenerator::calculateEarlyMinutes(long long timestamp, const ShiftInfo&
     std::tm* tm = std::localtime(&t);
     int punch_mins = tm->tm_hour * 60 + tm->tm_min;
 
-    int s1_end = timeStrToMinutes(shift.s1_end); // 如 12:00
-    int s2_end = timeStrToMinutes(shift.s2_end); // 如 18:00
+    int s1_end   = timeStrToMinutes(shift.s1_end); 
+    int s2_start = timeStrToMinutes(shift.s2_start);
+    int s2_end   = timeStrToMinutes(shift.s2_end); 
     
+    // [Epic 4.4 优化] 动态计算分界点 (逻辑同上)
+    int split_point = 720; // 默认 12:00
+    
+    if (s1_end > 0 && s2_start > 0 && s2_start > s1_end) {
+        split_point = s1_end + (s2_start - s1_end) / 2;
+    }
+
     int early_mins = 0;
 
-    // 判定逻辑：如果是上午下班
-    if (s1_end != -1 && punch_mins < 780) { // < 13:00
+    // 判定逻辑：
+    // 情况 A: 打卡时间在分界点之前 -> 视为上午下班，跟 s1_end 比
+    if (s1_end != -1 && punch_mins <= split_point) { 
         if (punch_mins < s1_end) {
             early_mins = s1_end - punch_mins;
         }
     }
-    // 判定逻辑：如果是下午下班
-    else if (s2_end != -1 && punch_mins >= 780) {
+    // 情况 B: 打卡时间在分界点之后 -> 视为下午下班，跟 s2_end 比
+    else if (s2_end != -1 && punch_mins > split_point) {
         if (punch_mins < s2_end) {
             early_mins = s2_end - punch_mins;
         }
