@@ -1,0 +1,109 @@
+#ifndef UI_MANAGER_H
+#define UI_MANAGER_H
+
+#include <lvgl.h>
+#include <array>
+#include <vector>
+#include <atomic>
+#include <functional>
+#include "../common/ui_style.h"
+
+// 定义屏幕类型枚举，用于管理
+enum class ScreenType {
+    MAIN,
+    MENU,
+    USER_MGMT,
+    USER_LIST,
+    REGISTER,
+    RECORD_QUERY,
+    RECORD_RESULT,
+    SYS_SETTINGS,
+    SYS_ADVANCED,
+    SYS_INFO,
+    STORAGE_INFO,
+    ATT_STATS,
+    ATT_DESIGN,
+    USER_INFO,     // Level 2
+    PWD_CHANGE,    // Level 3-A
+    ROLE_AUTH,     // Level 3-B
+    DELETE_USER,
+    // ... 其他屏幕
+    UNKNOWN
+};
+
+class UiManager {
+public:
+    static UiManager* getInstance();
+
+    // 初始化
+    void init();
+
+    // --- 输入设备管理 ---
+    lv_group_t* getKeypadGroup() { return g_keypad_group; }
+    void resetKeypadGroup(); // 清空并重置组
+    void addObjToGroup(lv_obj_t* obj);
+
+    // --- 摄像头缓冲区管理 (线程安全共享) ---
+    // 获取显示缓冲区指针 (供 lv_image_dsc_t 使用)
+    uint8_t* getCameraDisplayBuffer() { return cam_buf_display.data(); }
+    size_t getCameraDisplayBufferSize() { return cam_buf_display.size(); }
+    
+    // 标记有一帧待更新 (原子操作)
+    bool trySetFramePending() {
+        bool expected = false;
+        return s_ui_frame_pending.compare_exchange_strong(expected, true);
+    }
+    
+    // 清除帧待更新标记
+    void clearFramePending() { s_ui_frame_pending.store(false); }
+
+    // --- 屏幕管理与内存清理 (核心) ---
+    
+    /**
+     * @brief 注册一个屏幕对象到管理器
+     * 在 create_xxx_screen 时调用此函数，让 Manager 知道该屏幕的存在
+     */
+    void registerScreen(ScreenType type, lv_obj_t** screen_ptr_ref);
+
+    /**
+     * @brief 启动异步销毁任务 (防崩溃核心)
+     * 销毁除 keep_scr 以外的所有屏幕
+     */
+    void destroyAllScreensExcept(lv_obj_t* keep_scr);
+
+    /**
+     * @brief 清理特定屏幕的资源 (内部调用)
+     */
+    void freeScreenResources(lv_obj_t** screen_ptr);
+
+private:
+    UiManager();
+    ~UiManager() = default;
+
+    // 禁用拷贝
+    UiManager(const UiManager&) = delete;
+    UiManager& operator=(const UiManager&) = delete;
+
+    // 全局输入组
+    lv_group_t* g_keypad_group = nullptr;
+
+    // 摄像头显示缓冲区
+    std::array<uint8_t, CAM_W * CAM_H * 3> cam_buf_display;
+    
+    // 帧同步原子标志
+    std::atomic<bool> s_ui_frame_pending{false};
+
+    // 屏幕管理列表
+    // 存储指向 "全局屏幕指针变量" 的指针
+    // 例如: &screen_main, &screen_menu
+    struct ManagedScreen {
+        ScreenType type;
+        lv_obj_t** ptr_ref; // 指向 static lv_obj_t* screen_xxx 的指针
+    };
+    std::vector<ManagedScreen> managed_screens;
+
+    // 定时器回调
+    static void async_screen_cleanup_cb(lv_timer_t* t);
+};
+
+#endif // UI_MANAGER_H

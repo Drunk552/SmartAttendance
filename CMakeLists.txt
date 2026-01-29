@@ -85,9 +85,19 @@ file(GLOB_RECURSE SRC_FILES
     "src/main.cpp"
     
     # UI 层
+    "src/ui/common/*.cpp"
+    "src/ui/managers/*.cpp"
+    "src/ui/screens/home/*.cpp"
+    "src/ui/screens/menu/*.cpp"
+    "src/ui/screens/user_mgmt/*.cpp"
+    "src/ui/screens/record_query/*.cpp"
+    "src/ui/screens/att_stats/*.cpp"
+    "src/ui/screens/att_design/*.cpp"
+    "src/ui/screens/system/*.cpp"
+    "src/ui/screens/sys_info/*.cpp"
     "src/ui/ui_app.cpp"
     "src/ui/ui_controller.cpp"
-    src/ui/ui_theme.cpp      
+    "src/ui/ui_controller.cpp"     
     "src/ui/*.c"               
     "src/ui/*.cpp"              
 
@@ -109,7 +119,10 @@ target_include_directories(attendance_app PRIVATE
     ${CMAKE_SOURCE_DIR}/src/business
     ${CMAKE_SOURCE_DIR}/src/data
     ${CMAKE_SOURCE_DIR}/src/ui
-    # [新增这一行] 添加 lv_freetype.h 所在的目录
+    ${CMAKE_SOURCE_DIR}/src/ui/common
+    ${CMAKE_SOURCE_DIR}/src/ui/managers
+    ${CMAKE_SOURCE_DIR}/src/ui/screens
+    # 添加 lv_freetype.h 所在的目录
     ${CMAKE_SOURCE_DIR}/libs/lvgl/src/libs/freetype
 
      #添加db_storage.h

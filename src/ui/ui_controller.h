@@ -68,6 +68,9 @@ public:
     // 导出个人报表
     bool exportUserReport(int user_id, const std::string& start, const std::string& end);
     
+    // 更新摄像头 Buffer 的接口
+    void updateCameraFrame(const uint8_t* data, int w, int h);
+
 private:
     UiController() = default; // 私有构造
     ~UiController() = default;

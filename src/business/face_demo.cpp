@@ -22,6 +22,7 @@
 #include "db_storage.h"//数据层头文件
 #include "attendance_rule.h"
 #include "event_bus.h"// 事件总线头文件
+#include "../ui/ui_controller.h"
 
 using namespace cv;
 using namespace cv::face;

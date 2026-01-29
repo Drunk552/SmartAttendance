@@ -10,12 +10,16 @@
 #include "../business/face_demo.h"
 #include "../business/report_generator.h"
 #include "../business/event_bus.h"
+#include "managers/ui_manager.h"
 #include <sys/statvfs.h>
 #include <algorithm>
 #include <set>
 #include <cstdio>
 #include <filesystem>
 #include <thread> // for sleep if needed
+#include <cstring> // memcpy
+
+uint8_t g_direct_camera_buf[320 * 240 * 3] = {0};// 全局摄像头显示缓冲区
 
 namespace fs = std::filesystem;// C++17 引入的文件系统库
 
@@ -205,6 +209,20 @@ bool UiController::exportUserReport(int user_id, const std::string& start, const
     return report_gen.exportCustomRangeDetailedReport(start, end, user_id, path);
 }
 
+// 更新摄像头 Buffer 实现
+void UiController::updateCameraFrame(const uint8_t* data, int w, int h) {
+    // 1. 获取 UI 层的显示 Buffer
+    uint8_t* disp_buf = UiManager::getInstance()->getCameraDisplayBuffer();
+    
+    // 2. 只有当 Buffer 有效且尺寸匹配时才拷贝
+    // 假设 CAM_W 和 CAM_H 是 240x320
+    if (disp_buf && data) {
+        // 计算数据量: 宽 * 高 * 3字节(RGB)
+        size_t size = w * h * 3;
+        memcpy(disp_buf, data, size);
+    }
+}
+
 void UiController::clearAllRecords() {
     db_clear_attendance();
 }
@@ -263,32 +281,32 @@ void UiController::monitorThreadFunc() {
 
 // 摄像头采集线程
 void UiController::captureThreadFunc() {
-    // 临时读取缓冲 (避免长时间持有锁)
-    std::vector<uint8_t> temp_buf(240 * 180 * 3); 
+
+    const int W = 320;
+    const int H = 240;
+
+    printf("[Controller] 采集线程启动: 直连模式 (请求 320x240)\n");
 
     while (m_running) {
-        // 1. [耗时操作] 从底层业务/摄像头获取数据
-        // 注意：这是唯一调用 business_get_display_frame 的地方！
-        bool ret = business_get_display_frame(temp_buf.data(), 240, 180);
+        // 直接把数据拉取到全局数组
+        // business_get_display_frame 内部会自动把 640x480 缩放成 320x240
+        bool ret = business_get_display_frame(g_direct_camera_buf, W, H);
         
         if (ret) {
-            // 2. [快速操作] 加锁，将数据更新到 cached_frame
-            {
-                std::lock_guard<std::mutex> lock(m_frame_mutex);
-                // 如果缓存区大小不对，调整大小
-                if (m_cached_frame.size() != temp_buf.size()) {
-                    m_cached_frame.resize(temp_buf.size());
-                }
-                // 内存拷贝
-                std::memcpy(m_cached_frame.data(), temp_buf.data(), temp_buf.size());
-            } // 锁在这里自动释放
-
-            // 3. 通知 UI 线程“数据准备好了”
-            EventBus::getInstance().publish(EventType::CAMERA_FRAME_READY, nullptr);
-            std::this_thread::sleep_for(std::chrono::milliseconds(33));// 大约30FPS
+            // 成功获取数据 (已是 320x240)
+            
+            // 调试打印 (仅一次)
+            static bool once = false;
+            if(!once) { 
+                printf("[Controller] >>> 画面数据获取成功 (320x240) <<<\n"); 
+                once = true; 
+            }
+            
+            // 30FPS
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));
         } else {
-            // 获取失败 (比如摄像头没插好)，休眠长一点避免空转
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // 没数据
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
     }
 }
