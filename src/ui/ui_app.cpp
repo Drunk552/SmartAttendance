@@ -89,5 +89,6 @@ void ui_init(void) {
     // 直接调用模块加载函数
     ui::home::load_screen();
 
+    UiController::getInstance()->startBackgroundServices();
     printf("[UI] Initialization Completed.\n");
 }

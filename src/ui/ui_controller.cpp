@@ -19,8 +19,6 @@
 #include <thread> // for sleep if needed
 #include <cstring> // memcpy
 
-uint8_t g_direct_camera_buf[320 * 240 * 3] = {0};// 全局摄像头显示缓冲区
-
 namespace fs = std::filesystem;// C++17 引入的文件系统库
 
 static UiController* s_instance = nullptr;
@@ -281,32 +279,24 @@ void UiController::monitorThreadFunc() {
 
 // 摄像头采集线程
 void UiController::captureThreadFunc() {
+    const int W = 240; 
+    const int H = 180; 
 
-    const int W = 320;
-    const int H = 240;
+    printf("[Controller] 采集线程启动: 目标尺寸 %dx%d\n", W, H);
 
-    printf("[Controller] 采集线程启动: 直连模式 (请求 320x240)\n");
+    // 局部临时缓冲区，用于从业务层接收数据
+    std::vector<uint8_t> temp_buf(W * H * 3);
 
     while (m_running) {
-        // 直接把数据拉取到全局数组
-        // business_get_display_frame 内部会自动把 640x480 缩放成 320x240
-        bool ret = business_get_display_frame(g_direct_camera_buf, W, H);
+        // 1. 从业务层获取数据 (存入局部 temp_buf)
+        bool ret = business_get_display_frame(temp_buf.data(), W, H);
         
         if (ret) {
-            // 成功获取数据 (已是 320x240)
-            
-            // 调试打印 (仅一次)
-            static bool once = false;
-            if(!once) { 
-                printf("[Controller] >>> 画面数据获取成功 (320x240) <<<\n"); 
-                once = true; 
-            }
-            
-            // 30FPS
-            std::this_thread::sleep_for(std::chrono::milliseconds(33));
-        } else {
-            // 没数据
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            // 2. 将数据推送到 UiManager
+            UiManager::getInstance()->updateCameraFrame(temp_buf.data(), temp_buf.size());
         }
+
+        // 简单的帧率控制
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
 }

@@ -1,6 +1,7 @@
 #include "ui_manager.h"
 #include <cstdio>
 #include <algorithm>
+#include <cstring>
 
 UiManager* UiManager::getInstance() {
     static UiManager instance;
@@ -40,6 +41,16 @@ void UiManager::resetKeypadGroup() {
 void UiManager::addObjToGroup(lv_obj_t* obj) {
     if (g_keypad_group && obj) {
         lv_group_add_obj(g_keypad_group, obj);
+    }
+}
+
+// --- 摄像头缓冲区管理实现 ---
+void UiManager::updateCameraFrame(const uint8_t* data, size_t size) {
+    std::lock_guard<std::mutex> lock(m_frame_mutex);
+    
+    // 确保不会溢出
+    if (size <= cam_buf_display.size()) {
+        std::memcpy(cam_buf_display.data(), data, size);
     }
 }
 

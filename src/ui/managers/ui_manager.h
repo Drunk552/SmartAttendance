@@ -6,6 +6,7 @@
 #include <vector>
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include "../common/ui_style.h"
 
 // 定义屏幕类型枚举，用于管理
@@ -54,6 +55,13 @@ public:
         return s_ui_frame_pending.compare_exchange_strong(expected, true);
     }
     
+    /**
+     * @brief 更新摄像头帧数据到显示缓冲区
+     * @param data 指向新帧数据的指针
+     * @param size 数据大小（字节）
+     */
+    void updateCameraFrame(const uint8_t* data, size_t size);
+
     // 清除帧待更新标记
     void clearFramePending() { s_ui_frame_pending.store(false); }
 
@@ -92,6 +100,9 @@ private:
     
     // 帧同步原子标志
     std::atomic<bool> s_ui_frame_pending{false};
+
+    // 互斥锁，保护画面数据
+    std::mutex m_frame_mutex;
 
     // 屏幕管理列表
     // 存储指向 "全局屏幕指针变量" 的指针
