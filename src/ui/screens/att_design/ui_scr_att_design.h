@@ -9,7 +9,7 @@ namespace att_design {
 /**
  * @brief 加载考勤设计菜单 (部门、班次、规则)
  */
-void load_menu();
+void load_att_design_menu_screen();
 
 } // namespace att_design
 } // namespace ui

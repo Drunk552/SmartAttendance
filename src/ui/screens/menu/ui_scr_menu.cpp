@@ -10,12 +10,15 @@
 #include "../sys_info/ui_scr_sys_info.h"
 #include "../att_stats/ui_scr_att_stats.h" 
 #include "../att_design/ui_scr_att_design.h"
+#include "../record_query/ui_scr_record_query.h"
+#include "../system/ui_sys_settings.h"
 
 namespace ui {
 namespace menu {
 
 static lv_obj_t *screen_menu = nullptr;
 static lv_obj_t *obj_grid = nullptr;
+static bool g_disk_full = false;            // 磁盘满标志
 
 // 菜单项结构体 (保持与您原代码一致)
 struct MenuEntry {
@@ -56,28 +59,96 @@ static void handle_manual_navigation(lv_event_t *e) {
 
 // 菜单按钮事件回调
 static void menu_btn_event_cb(lv_event_t *e) {
-    const char* tag = (const char*)lv_event_get_user_data(e);
     lv_event_code_t code = lv_event_get_code(e);
+    // 使用 C 风格强转：
+    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
+    const char* tag = static_cast<const char*>(lv_event_get_user_data(e));
 
+    // 仅处理按键事件
     if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
+        
+        // 获取当前按钮在 Grid 中的索引 (0, 1, 2, 3)
+        // 0:左上, 1:右上, 2:左下, 3:右下
+        lv_obj_t *grid = lv_obj_get_parent(btn);
+        uint32_t index = lv_obj_get_index(btn); 
+        uint32_t total = lv_obj_get_child_cnt(grid);
+        int next_index = -1; // 目标索引
 
-        // 导航处理
-        if (key == LV_KEY_UP || key == LV_KEY_DOWN || key == LV_KEY_LEFT || key == LV_KEY_RIGHT) {
-            handle_manual_navigation(e);
+        // --- 核心导航逻辑 ---
+        if (key == LV_KEY_RIGHT) {
+            // 向右：+1，循环
+            next_index = (index + 1) % total;
+            std::printf("[UI] Nav: RIGHT (%d -> %d)\n", index, next_index);
         }
-        else if (key == LV_KEY_ESC) {
+        else if (key == LV_KEY_LEFT) {
+            // 向左：-1，循环 (加 total 防止负数)
+            next_index = (index + total - 1) % total;
+            std::printf("[UI] Nav: LEFT (%d -> %d)\n", index, next_index);
+        }
+        else if (key == LV_KEY_DOWN) {
+            // 向下：+2 (因为是2列布局)，循环
+            next_index = (index + 2) % total;
+            std::printf("[UI] Nav: DOWN (%d -> %d)\n", index, next_index);
+        }
+        else if (key == LV_KEY_UP) {
+            // 向上：-2，循环
+            next_index = (index + total - 2) % total;
+            std::printf("[UI] Nav: UP (%d -> %d)\n", index, next_index);
+        }
+
+        // --- 执行跳转 ---
+        if (next_index >= 0) {
+            // 找到目标按钮
+            lv_obj_t *target_btn = lv_obj_get_child(grid, next_index);
+            // 强制聚焦
+            lv_group_focus_obj(target_btn);
+            return; // 完成跳转，直接返回
+        }
+
+        // --- 处理功能键 ---
+        if (key == LV_KEY_ESC) {
+            std::printf("[UI] ESC -> Back\n");
             ui::home::load_screen(); // 返回主页
         }
         else if (key == LV_KEY_ENTER) {
-            // 路由逻辑 
-            if (strcmp(tag, "UserMgmt") == 0) ui::user_mgmt::load_menu_screen();
-            else if (strcmp(tag, "SysInfo") == 0) ui::sys_info::load_screen();
-            else if (strcmp(tag, "Records") == 0) show_popup("Hint", "Records Dev...");
-            else if (strcmp(tag, "AttStats") == 0) show_popup("Hint", "Stats Dev...");
-            else if (strcmp(tag, "System") == 0) show_popup("Hint", "System Dev...");
-            else if (strcmp(tag, "AttDesign") == 0) show_popup("Hint", "Design Dev...");
+            std::printf("[UI] Action: %s\n", tag);
+
+            if(std::strcmp(tag, "UserMgmt") == 0) {
+                ui::user_mgmt::load_user_menu_screen();// 1.进入员工管理页面
+            }
+            else if(std::strcmp(tag, "Records") == 0) {
+                ui::record_query::load_record_query_menu_screen(); // 2.进入记录查询页面
+            }
+            else if(std::strcmp(tag, "STATS") == 0) {
+                ui::att_stats::load_att_stats_menu_screen(); // 3.进入考勤统计页面
+            }
+            else if(std::strcmp(tag, "AttDesign") == 0) {
+                ui::att_design::load_att_design_menu_screen(); // 4.进入考勤设计页面
+            }
+            else if(std::strcmp(tag, "System") == 0) {
+                ui::system::load_sys_settings_menu_screen();  //5.进入系统设置页面
+            }
+            else if(std::strcmp(tag, "SysInfo") == 0) {
+                ui::sys_info::load_sys_info_menu_screen(); // 6.进入系统信息页面
+            }
         }
+    }
+    
+    // 保留点击支持
+    if (code == LV_EVENT_CLICKED) {
+         std::printf("[UI] Click: %s\n", tag);
+         //  点击 System 应该进入设置，而不是退出程序
+         if(std::strcmp(tag, "System") == 0) {
+            ui::system::load_sys_settings_menu_screen(); // 进入系统设置页面
+        }
+        // 处理其他点击...
+        else if(std::strcmp(tag, "UserMgmt") == 0) ui::user_mgmt::load_user_menu_screen();// 1.进入员工管理页面
+        else if(std::strcmp(tag, "Records") == 0) ui::record_query::load_record_query_menu_screen();// 2.进入记录查询页面
+        else if(std::strcmp(tag, "STATS") == 0) ui::att_stats::load_att_stats_menu_screen();// 3.进入考勤统计页面
+        else if(std::strcmp(tag, "AttDesign") == 0) ui::att_design::load_att_design_menu_screen();// 4.进入考勤设计页
+        else if(std::strcmp(tag, "System") == 0) ui::system::load_sys_settings_menu_screen();  //5.进入系统设置页面
+        else if(std::strcmp(tag, "SysInfo") == 0) ui::sys_info::load_sys_info_menu_screen();// 6.进入系统信息页面
     }
 }
 
@@ -115,12 +186,12 @@ void load_screen() {
 
     // 5. 菜单内容定义 
     static MenuEntry menu_items[] = {
-        {LV_SYMBOL_DIRECTORY, "User Mgmt", "员工管理", "UserMgmt"}, // 您指定的图标
+        {LV_SYMBOL_DIRECTORY, "User Mgmt", "员工管理", "UserMgmt"}, 
         {LV_SYMBOL_EYE_OPEN,  "Records",   "记录查询", "Records"},
-        {LV_SYMBOL_DRIVE,     "Att. Stats","考勤统计", "AttStats"},
+        {LV_SYMBOL_DRIVE,     "Att. Stats","考勤统计", "STATS"},
         {LV_SYMBOL_SETTINGS,  "System",    "系统设置", "System"},
-        {LV_SYMBOL_LIST,      "Info",      "系统信息", "SysInfo"},
-        {LV_SYMBOL_EDIT,      "Design",    "考勤设计", "AttDesign"},
+        {LV_SYMBOL_LIST,      "Sys Info",      "系统信息", "SysInfo"},
+        {LV_SYMBOL_EDIT,      "Att. Design",    "考勤设计", "AttDesign"},
     };
     
     // 6. 循环创建按钮

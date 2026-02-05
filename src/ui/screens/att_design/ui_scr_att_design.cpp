@@ -20,7 +20,7 @@ static void design_event_cb(lv_event_t *e) {
 }
 
 // 加载考勤设计菜单实现
-void load_menu() {
+void load_att_design_menu_screen() {
     if (scr_design) lv_obj_delete(scr_design);
     scr_design = lv_obj_create(nullptr);
     lv_obj_add_style(scr_design, &style_base, 0); // [Constraint] 黑底

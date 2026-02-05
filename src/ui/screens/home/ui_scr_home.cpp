@@ -34,6 +34,7 @@ static lv_obj_t * img_camera = nullptr;
 static lv_obj_t * lbl_time = nullptr;
 static lv_obj_t * lbl_disk_warn = nullptr;
 static lv_obj_t * lbl_hint = nullptr;
+static lv_timer_t * timer_cam = nullptr;// 摄像头刷新定时器
 
 // 摄像头图像描述符 (v9 格式)
 static lv_image_dsc_t img_dsc = {
@@ -50,6 +51,29 @@ static lv_image_dsc_t img_dsc = {
     .data = nullptr, // 稍后在 create 函数中绑定 UiManager 的 Buffer
     .reserved = 0
 };
+
+/**
+ * @brief 屏幕销毁时的清理回调
+ * @details 必须手动将所有静态指针置空，否则后台异步事件会访问野指针导致崩溃
+ */
+static void screen_cleanup_cb(lv_event_t * e) {
+    // 1. 删除摄像头刷新定时器
+    if (timer_cam) {
+        lv_timer_del(timer_cam);
+        timer_cam = nullptr;
+    }
+
+    // 2. 将所有子控件指针置空
+    lbl_time = nullptr;
+    lbl_disk_warn = nullptr;
+    img_camera = nullptr;
+    lbl_hint = nullptr;
+    
+    // screen 指针由 UiManager 管理，但在这里置空也无妨
+    screen = nullptr;
+
+    printf("[Home] Resources cleaned up safely.\n");
+}
 
 /**
  * @brief 页面主事件回调
@@ -87,6 +111,7 @@ static void timer_cam_cb(lv_timer_t * t) {
     }
 }
 
+// 创建屏幕
 void create_screen(void) {
     if (screen) return;
 
@@ -95,6 +120,7 @@ void create_screen(void) {
     lv_obj_add_style(screen, &style_base, 0); 
     lv_obj_set_scrollbar_mode(screen, LV_SCROLLBAR_MODE_OFF);
     lv_obj_add_event_cb(screen, screen_event_cb, LV_EVENT_ALL, nullptr);
+    lv_obj_add_event_cb(screen, screen_cleanup_cb, LV_EVENT_DELETE, nullptr);
 
     // 2. Top Bar (30px, 深灰背景) 
     lv_obj_t * top = lv_obj_create(screen);
@@ -144,6 +170,7 @@ void create_screen(void) {
     UiManager::getInstance()->registerScreen(ScreenType::MAIN, &screen);
 }
 
+// 加载屏幕
 void load_screen(void) {
     if (!screen) create_screen();
 
@@ -167,7 +194,9 @@ void load_screen(void) {
     });
 
     // 启动定时器刷新摄像头
-    lv_timer_create(timer_cam_cb, 33, nullptr);
+    if (!timer_cam) {
+        timer_cam = lv_timer_create(timer_cam_cb, 33, nullptr);
+    }
 
     lv_screen_load(screen);
     UiManager::getInstance()->destroyAllScreensExcept(screen);

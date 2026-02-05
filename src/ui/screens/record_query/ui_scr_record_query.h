@@ -9,13 +9,13 @@ namespace record_query {
 /**
  * @brief 加载查询输入页面 (输入工号)
  */
-void load_screen();
+void load_record_query_menu_screen();
 
 /**
  * @brief 加载查询结果页面 (显示打卡记录列表)
  * @param user_id 要查询的员工ID
  */
-void load_result_screen(int user_id);
+void load_record_result_screen(int user_id);
 
 } // namespace record_query
 } // namespace ui

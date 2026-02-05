@@ -43,7 +43,7 @@ static void back_to_main_menu() {
     ui::menu::load_screen(); 
 }
 
-void init() {
+void user_init() {
     g_reg_user_id = 0;
     g_reg_name = "";
 }
@@ -64,14 +64,14 @@ static void menu_btn_event_cb(lv_event_t *e) {
         else if (key == LV_KEY_ESC) back_to_main_menu();
         
         else if (key == LV_KEY_ENTER) {
-            if (strcmp(tag, "LIST") == 0) load_list_screen();
-            else if (strcmp(tag, "REG") == 0) load_register_form();
-            else if (strcmp(tag, "DEL") == 0) load_delete_user_screen();
+            if (strcmp(tag, "LIST") == 0) load_user_list_screen();
+            else if (strcmp(tag, "REG") == 0) load_user_register_form();
+            else if (strcmp(tag, "DEL") == 0) load_user_delete_screen();
         }
     }
 }
 
-void load_menu_screen() {
+void load_user_menu_screen() {
     if (!scr_menu) {
         scr_menu = lv_obj_create(nullptr);
         lv_obj_add_style(scr_menu, &style_base, 0);
@@ -121,7 +121,7 @@ static void list_item_event_cb(lv_event_t *e) {
             int uid = (int)(intptr_t)lv_obj_get_user_data((lv_obj_t*)lv_event_get_target(e));
             load_user_info_screen(uid);
         } else if (key == LV_KEY_ESC) {
-            load_menu_screen();
+            load_user_menu_screen();
         } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
         } else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
@@ -130,7 +130,7 @@ static void list_item_event_cb(lv_event_t *e) {
     }
 }
 
-void load_list_screen() {
+void load_user_list_screen() {
     if (!scr_list) {
         scr_list = lv_obj_create(nullptr);
         lv_obj_add_style(scr_list, &style_base, 0);
@@ -182,7 +182,7 @@ void load_list_screen() {
     }
     
     lv_obj_add_event_cb(scr_list, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) load_menu_screen();
+        if(lv_event_get_key(e) == LV_KEY_ESC) load_user_menu_screen();
     }, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(scr_list);
 
@@ -256,7 +256,7 @@ static void form_nav_event_cb(lv_event_t * e) {
 }
 
 // 注册 Step 1: 加载表单
-void load_register_form() {
+void load_user_register_form() {
     if (scr_register) lv_obj_delete(scr_register);
     scr_register = lv_obj_create(NULL);
     
@@ -336,7 +336,7 @@ void load_register_form() {
     lv_obj_set_width(btn_cancel, 80);
     lv_obj_set_style_bg_color(btn_cancel, lv_palette_main(LV_PALETTE_RED), 0);
     lv_label_set_text(lv_label_create(btn_cancel), "Cancel");
-    lv_obj_add_event_cb(btn_cancel, [](lv_event_t * e){ load_menu_screen(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(btn_cancel, [](lv_event_t * e){ load_user_menu_screen(); }, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(btn_cancel, form_nav_event_cb, LV_EVENT_ALL, NULL);
 
     lv_obj_t * btn_next = lv_button_create(btn_area);
@@ -389,11 +389,11 @@ static void register_btn_next_event_handler(lv_event_t * e) {
     }
     g_reg_name = std::string(name_txt);
 
-    load_register_camera_step();
+    load_user_register_camera_step();
 }
 
 // 注册 Step 2: 加载拍照界面
-void load_register_camera_step() {
+void load_user_register_camera_step() {
     if (!scr_register) return; 
     
     lv_obj_clean(scr_register);
@@ -441,13 +441,13 @@ static void reg_step2_event_cb(lv_event_t *e) {
     if (lv_event_get_key(e) == LV_KEY_ENTER) {
         if (UiController::getInstance()->registerNewUser(g_reg_name.c_str(), g_reg_dept_id)) {
             show_popup("Success", "User Registered!");
-            lv_timer_t *t = lv_timer_create([](lv_timer_t*){ load_menu_screen(); }, 1500, nullptr);
+            lv_timer_t *t = lv_timer_create([](lv_timer_t*){ load_user_menu_screen(); }, 1500, nullptr);
             lv_timer_set_repeat_count(t, 1);
         } else {
             show_popup("Error", "Registration Failed!\n(Check DB/Dept ID)");
         }
     } else if (lv_event_get_key(e) == LV_KEY_ESC) {
-        load_register_form(); 
+        load_user_register_form(); 
     }
 }
 
@@ -455,7 +455,7 @@ static void reg_step2_event_cb(lv_event_t *e) {
 // 4. 删除用户 (Delete Screen)
 // =========================================================
 
-void load_delete_user_screen() {
+void load_user_delete_screen() {
     if(scr_del) lv_obj_delete(scr_del);
     scr_del = lv_obj_create(nullptr);
     lv_obj_add_style(scr_del, &style_base, 0);
@@ -500,7 +500,7 @@ void load_delete_user_screen() {
                 if (UiController::getInstance()->deleteUser(uid)) {
                     show_popup("Success", "User Deleted");
                     // 延时返回菜单
-                    lv_timer_t *t = lv_timer_create([](lv_timer_t*){ load_menu_screen(); }, 1500, nullptr);
+                    lv_timer_t *t = lv_timer_create([](lv_timer_t*){ load_user_menu_screen(); }, 1500, nullptr);
                     lv_timer_set_repeat_count(t, 1);
                 } else {
                     show_popup("Error", "ID Not Found");
@@ -512,7 +512,7 @@ void load_delete_user_screen() {
 
     // ESC 返回
     lv_obj_add_event_cb(ta_id, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) load_menu_screen();
+        if(lv_event_get_key(e) == LV_KEY_ESC) load_user_menu_screen();
     }, LV_EVENT_KEY, nullptr);
 
     UiManager::getInstance()->resetKeypadGroup();
@@ -566,7 +566,7 @@ void load_user_info_screen(int user_id) {
                 UiManager::getInstance()->addObjToGroup(content);
                 // ESC 返回列表
                 lv_obj_add_event_cb(content, [](lv_event_t* e){
-                    if (lv_event_get_key(e) == LV_KEY_ESC) load_list_screen();
+                    if (lv_event_get_key(e) == LV_KEY_ESC) load_user_list_screen();
                 }, LV_EVENT_KEY, nullptr);
             }
         }
@@ -607,7 +607,7 @@ void load_user_info_screen(int user_id) {
             g_reg_user_id = uid; 
             // 获取最新名字以显示在拍照页
             g_reg_name = UiController::getInstance()->getUserInfo(uid).name;
-            load_register_camera_step(); // 跳转去拍照
+            load_user_register_camera_step(); // 跳转去拍照
         }
     }, LV_EVENT_KEY, nullptr);
     create_row(2, "人脸", btn_face);
@@ -636,7 +636,7 @@ void load_user_info_screen(int user_id) {
     lv_obj_set_user_data(btn_pwd, (void*)(intptr_t)u.id);
     lv_obj_add_event_cb(btn_pwd, [](lv_event_t* e){
         if (lv_event_get_key(e) == LV_KEY_ENTER) {
-            load_password_change_screen((int)(intptr_t)lv_event_get_user_data(e));
+            load_user_password_change_screen((int)(intptr_t)lv_event_get_user_data(e));
         }
     }, LV_EVENT_KEY, nullptr);
     create_row(5, "密码", btn_pwd);
@@ -659,7 +659,7 @@ void load_user_info_screen(int user_id) {
             int uid = (int)(intptr_t)lv_event_get_user_data(e);
             // 重新查询确保数据最新
             int r = UiController::getInstance()->getUserInfo(uid).role;
-            load_role_change_screen(uid, r);
+            load_user_role_change_screen(uid, r);
         }
     }, LV_EVENT_KEY, nullptr);
     create_row(7, "权限", btn_role);
@@ -675,7 +675,7 @@ void load_user_info_screen(int user_id) {
 // 6. 修改密码页 (Password Change) - 完整双重校验逻辑
 // =========================================================
 
-void load_password_change_screen(int user_id) {
+void load_user_password_change_screen(int user_id) {
     if(scr_pwd) lv_obj_delete(scr_pwd);
     scr_pwd = lv_obj_create(nullptr);
     lv_obj_add_style(scr_pwd, &style_base, 0);
@@ -788,7 +788,7 @@ void load_password_change_screen(int user_id) {
 // 7. 权限变更页 (Role Change)
 // =========================================================
 
-void load_role_change_screen(int user_id, int current_role) {
+void load_user_role_change_screen(int user_id, int current_role) {
     if(scr_role) lv_obj_delete(scr_role);
     scr_role = lv_obj_create(nullptr);
     lv_obj_add_style(scr_role, &style_base, 0);

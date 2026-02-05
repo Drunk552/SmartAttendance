@@ -9,7 +9,7 @@ namespace sys_info {
 /**
  * @brief 加载系统信息屏幕
  */
-void load_screen();
+void load_sys_info_menu_screen();
 
 /**
  * @brief 加载存储信息屏幕

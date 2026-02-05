@@ -39,7 +39,7 @@ static void query_screen_event_cb(lv_event_t *e) {
                 // 执行查询
                 const char* txt = lv_textarea_get_text(ta_query_id);
                 if (strlen(txt) > 0) {
-                    load_result_screen(atoi(txt));
+                    load_record_result_screen(atoi(txt));
                 }
             }
             else if (key == LV_KEY_ESC) {
@@ -60,7 +60,7 @@ static void query_screen_event_cb(lv_event_t *e) {
 }
 
 // 主屏幕实现
-void load_screen() {
+void load_record_query_menu_screen() {
     if (scr_query) lv_obj_delete(scr_query);
     scr_query = lv_obj_create(nullptr);
     lv_obj_add_style(scr_query, &style_base, 0);
@@ -113,7 +113,7 @@ void load_screen() {
 // ================= [Result Screen] =================
 
 // 主屏幕实现
-void load_result_screen(int user_id) {
+void load_record_result_screen(int user_id) {
     if (scr_result) lv_obj_delete(scr_result);
     scr_result = lv_obj_create(nullptr);
     lv_obj_add_style(scr_result, &style_base, 0);
@@ -193,11 +193,11 @@ void load_result_screen(int user_id) {
     
     // 事件：ESC或点击返回
     lv_obj_add_event_cb(btn_back, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ENTER) load_screen();
+        if(lv_event_get_key(e) == LV_KEY_ENTER) load_record_query_menu_screen();
     }, LV_EVENT_KEY, nullptr);
     
     lv_obj_add_event_cb(scr_result, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) load_screen();
+        if(lv_event_get_key(e) == LV_KEY_ESC) load_record_query_menu_screen();
     }, LV_EVENT_KEY, nullptr);
 
     UiManager::getInstance()->addObjToGroup(btn_back);

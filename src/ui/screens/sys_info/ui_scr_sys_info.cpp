@@ -46,7 +46,7 @@ static void sys_menu_event_cb(lv_event_t *e) {
 }
 
 // 主屏幕实现
-void load_screen() {
+void load_sys_info_menu_screen() {
     if (scr_sys) lv_obj_delete(scr_sys);
     scr_sys = lv_obj_create(nullptr);
     lv_obj_add_style(scr_sys, &style_base, 0);
@@ -144,7 +144,7 @@ void load_storage_info_screen() {
 
     // ESC 返回上一级
     lv_obj_add_event_cb(scr_sys, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) load_screen(); // 返回 SysInfo 菜单
+        if(lv_event_get_key(e) == LV_KEY_ESC) load_sys_info_menu_screen(); // 返回 SysInfo 菜单
     }, LV_EVENT_KEY, nullptr);
 
     UiManager::getInstance()->resetKeypadGroup();

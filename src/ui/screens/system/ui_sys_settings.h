@@ -9,12 +9,12 @@ namespace system {
 /**
  * @brief 加载系统设置主屏幕
  */
-void load_screen();
+void load_sys_settings_menu_screen();
 
 /**
  * @brief 加载高级设置屏幕
  */
-void load_param_screen();
+void load_system_param_screen();
 
 } // namespace system
 } // namespace ui

@@ -226,68 +226,137 @@ static void create_download_personal_screen(lv_obj_t* parent) {
 
 // ===================== 主入口逻辑 =================
 
-// 菜单点击回调
 static void stats_menu_btn_cb(lv_event_t *e) {
-    const char* tag = (const char*)lv_event_get_user_data(e);
-    if(sub_screen_cont) {
-        UiManager::getInstance()->resetKeypadGroup();
-        if(strcmp(tag, "ALL") == 0) create_download_all_screen(sub_screen_cont);
-        else if(strcmp(tag, "USER") == 0) create_download_personal_screen(sub_screen_cont);
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
+    intptr_t index = (intptr_t)lv_event_get_user_data(e);
+    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();// 获取全局按键组
+
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // 处理 ESC 返回主菜单
+        if (key == LV_KEY_ESC) {
+            ui::menu::load_screen();
+            return;
+        }
+
+        // 处理上下键导航 (在 Grid 中循环切换)
+        if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(group);
+        }
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(group);
+        }
+        // 处理确认键
+        else if (key == LV_KEY_ENTER) {
+            // 创建新屏幕进入具体功能
+            lv_obj_t* new_scr = lv_obj_create(NULL);
+            
+            // 为子屏幕绑定 ESC 返回逻辑 (简单的返回上一级)
+            // 注意：这里我们简单地重新加载当前菜单来实现“返回”
+            lv_obj_add_event_cb(new_scr, [](lv_event_t* e){
+                if(lv_event_get_key(e) == LV_KEY_ESC) {
+                    // 为避免前向声明问题，我们暂时直接调用 load_menu_screen，或者你需要前向声明 load_att_stats_screen
+                    // 这里为了代码编译通过，先返回主菜单，或者你可以自己实现返回上一级
+                    ui::menu::load_screen(); 
+                }
+            }, LV_EVENT_KEY, NULL);
+            
+            // 将新屏幕加入组，以便接收按键
+            UiManager::getInstance()->resetKeypadGroup();
+            UiManager::getInstance()->addObjToGroup(new_scr);
+
+            if (index == 0) create_download_all_screen(new_scr);
+            else if (index == 1) create_download_personal_screen(new_scr);
+            else {
+                lv_obj_delete(new_scr); // 不需要新屏幕了
+                ui::menu::load_screen();     // 恢复环境
+                show_popup("Info", "Coming Soon"); 
+                return;
+            }
+
+            lv_screen_load_anim(new_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, true);
+        }
     }
 }
 
-void load_screen() {
-    if (scr_stats) lv_obj_delete(scr_stats);
+// 创建界面(create)
+void create_att_stats_menu_screen() {
+    if (scr_stats) return;
+
+    // 1. 创建屏幕 - 统一使用黑色背景
     scr_stats = lv_obj_create(nullptr);
-    lv_obj_add_style(scr_stats, &style_base, 0);
+    lv_obj_set_style_bg_color(scr_stats, lv_color_black(), 0);
     UiManager::getInstance()->registerScreen(ScreenType::ATT_STATS, &scr_stats);
 
-    // 左侧：菜单栏
-    lv_obj_t *menu_col = lv_obj_create(scr_stats);
-    lv_obj_set_size(menu_col, 80, LV_PCT(100));
-    lv_obj_align(menu_col, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_set_flex_flow(menu_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_bg_color(menu_col, lv_color_hex(0x333333), 0);
-    lv_obj_set_style_border_width(menu_col, 0, 0);
-    lv_obj_set_style_pad_all(menu_col, 5, 0);
+    // 2. 标题 - 统一顶部标题样式
+    lv_obj_t *title = lv_label_create(scr_stats);
+    lv_label_set_text(title, "Attendance Stats / 考勤统计");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_add_style(title, &style_text_cn, 0); // 应用中文字体
 
-    // 右侧：内容区
+    // 3. Grid 布局 - 1列 5行 (列表式布局，清晰易读)
+    static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST}; 
+    static int32_t row_dsc[] = {45, 45, 45, 45, 45, LV_GRID_TEMPLATE_LAST}; 
+
     sub_screen_cont = lv_obj_create(scr_stats);
-    lv_obj_set_size(sub_screen_cont, 160, LV_PCT(100)); // 240 - 80 = 160
-    lv_obj_align(sub_screen_cont, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_size(sub_screen_cont, 230, 260); // 调整容器大小适配内容
+    lv_obj_align(sub_screen_cont, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_layout(sub_screen_cont, LV_LAYOUT_GRID);
+    lv_obj_set_grid_dsc_array(sub_screen_cont, col_dsc, row_dsc);
+    
+    // 样式改为透明
     lv_obj_set_style_bg_opa(sub_screen_cont, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(sub_screen_cont, 0, 0);
+    lv_obj_set_style_pad_row(sub_screen_cont, 5, 0); // 按钮间距
 
-    // 创建左侧菜单按钮
-    UiManager::getInstance()->resetKeypadGroup();
+    // 4. 创建按钮 
+    // 参数: 父对象, 行号, 图标, 英文标题, 中文标题, 回调, 索引(作为user_data)
+    
+    // 按钮 0: 下载考勤报表
+    create_sys_grid_btn(sub_screen_cont, 0, LV_SYMBOL_DOWNLOAD, "", "考勤报表", 
+                        stats_menu_btn_cb, (const char*)(intptr_t)0);
 
-    auto add_btn = [&](const char* txt, const char* tag) {
-        lv_obj_t* btn = lv_button_create(menu_col);
-        lv_obj_set_width(btn, LV_PCT(100));
-        lv_label_set_text(lv_label_create(btn), txt);
-        lv_obj_add_style(btn, &style_btn_default, 0);
-        lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUSED);
-        lv_obj_add_event_cb(btn, stats_menu_btn_cb, LV_EVENT_CLICKED, (void*)tag);
-        // 支持按 Enter 触发
-        lv_obj_add_event_cb(btn, [](lv_event_t* e){
-            if(lv_event_get_key(e) == LV_KEY_ENTER) {
-                lv_obj_send_event((lv_obj_t*)lv_event_get_target(e), LV_EVENT_CLICKED, NULL);
-            }
-        }, LV_EVENT_KEY, nullptr);
-        UiManager::getInstance()->addObjToGroup(btn);
-    };
+    // 按钮 1: 下载个人报表
+    create_sys_grid_btn(sub_screen_cont, 1, LV_SYMBOL_EDIT, "", "个人报表", 
+                        stats_menu_btn_cb, (const char*)(intptr_t)1);
 
-    add_btn("All\nReport", "ALL");
-    add_btn("User\nReport", "USER");
+    // 按钮 2: 下载设置 (占位)
+    create_sys_grid_btn(sub_screen_cont, 2, LV_SYMBOL_SETTINGS, "", "下载设置", 
+                        stats_menu_btn_cb, (const char*)(intptr_t)2);
 
-    // ESC 返回
-    lv_obj_add_event_cb(scr_stats, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) ui::menu::load_screen();
-    }, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(scr_stats); // 兜底
+    // 按钮 3: 上传设置 (占位)
+    create_sys_grid_btn(sub_screen_cont, 3, LV_SYMBOL_UPLOAD, "", "上传设置", 
+                        stats_menu_btn_cb, (const char*)(intptr_t)3);
+                        
+    // 按钮 4: 下载数据 (占位)
+    create_sys_grid_btn(sub_screen_cont, 4, LV_SYMBOL_SD_CARD, "", "下载数据", 
+                        stats_menu_btn_cb, (const char*)(intptr_t)4);
+}
 
-    // 默认显示第一个子界面
-    create_download_all_screen(sub_screen_cont);
+// 加载界面 (Load)
+void load_att_stats_menu_screen() {
+    if (!scr_stats) create_att_stats_menu_screen();
+
+    std::printf("[UI] Enter: Attendance Stats\n");
+
+    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+    // 关键修复：正确设置输入组
+    lv_group_remove_all_objs(group);
+    
+    if (sub_screen_cont) {
+        uint32_t cnt = lv_obj_get_child_cnt(sub_screen_cont);
+        for(uint32_t i=0; i<cnt; i++) {
+            lv_group_add_obj(group, lv_obj_get_child(sub_screen_cont, i));
+        }
+        // 默认聚焦第一个按钮
+        if(cnt > 0) lv_group_focus_obj(lv_obj_get_child(sub_screen_cont, 0));
+    }
+
+    // 还要把背景加入组，以防焦点丢失时按键失效
+    lv_group_add_obj(group, scr_stats);
 
     lv_screen_load(scr_stats);
     UiManager::getInstance()->destroyAllScreensExcept(scr_stats);
