@@ -11,23 +11,28 @@
 
 // 定义屏幕类型枚举，用于管理
 enum class ScreenType {
-    MAIN,
-    MENU,
-    USER_MGMT,
-    USER_LIST,
-    REGISTER,
-    RECORD_QUERY,
-    RECORD_RESULT,
-    SYS_SETTINGS,
-    SYS_ADVANCED,
-    SYS_INFO,
-    STORAGE_INFO,
-    ATT_STATS,
-    ATT_DESIGN,
-    USER_INFO,     // Level 2
-    PWD_CHANGE,    // Level 3-A
-    ROLE_AUTH,     // Level 3-B
-    DELETE_USER,
+    MAIN,//home屏幕
+    MENU,//主菜单
+    USER_MGMT,//员工管理主菜单
+    USER_LIST,//员工列表子屏幕
+    REGISTER,// 注册流程屏幕
+    REGISTER_CAMERA,// 注册流程拍照屏幕
+    RECORD_QUERY,// 记录查询菜单
+    RECORD_RESULT,// 记录查询结果
+    SYS_SETTINGS,// 系统设置
+    SYS_ADVANCED,// 系统高级设置
+    SYS_INFO,// 系统信息
+    STORAGE_INFO,// 存储信息
+    ATT_STATS,// 考勤统计
+    ALL_ATT_STATS,//全员考勤报表下载
+    PERSONAGE_ATT_STATS,//个人考勤报表下载
+    ATT_DESIGN,// 考勤设计
+    USER_INFO, // 员工详情
+    PWD_CHANGE,// 密码修改
+    ROLE_AUTH,// 权限变更
+    DELETE_USER,//删除用户
+     // ... 其他屏幕类型
+     // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑
     // ... 其他屏幕
     UNKNOWN
 };

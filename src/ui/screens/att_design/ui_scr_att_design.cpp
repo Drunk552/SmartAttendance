@@ -22,14 +22,12 @@ static void design_event_cb(lv_event_t *e) {
 // 加载考勤设计菜单实现
 void load_att_design_menu_screen() {
     if (scr_design) lv_obj_delete(scr_design);
-    scr_design = lv_obj_create(nullptr);
-    lv_obj_add_style(scr_design, &style_base, 0); // [Constraint] 黑底
-    UiManager::getInstance()->registerScreen(ScreenType::ATT_DESIGN, &scr_design);
 
-    lv_obj_t *title = lv_label_create(scr_design);
-    lv_label_set_text(title, "考勤设计 / Att Design");
-    lv_obj_add_style(title, &style_text_cn, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    BaseScreenParts parts = create_base_screen("att_design / 考勤设计");
+    scr_design = parts.screen;
+    lv_obj_add_style(scr_design, &style_base, 0); // [Constraint] 黑底
+
+    UiManager::getInstance()->registerScreen(ScreenType::ATT_DESIGN, &scr_design);
 
     // [Constraint] 1列 Grid 菜单
     static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};

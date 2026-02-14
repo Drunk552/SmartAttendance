@@ -40,14 +40,11 @@ static void sys_main_event_cb(lv_event_t *e) {
 // 主屏幕实现
 void load_sys_settings_menu_screen() {
     if (scr_sys) lv_obj_delete(scr_sys);
-    scr_sys = lv_obj_create(nullptr);
+
+    BaseScreenParts parts = create_base_screen("system / 系统设置");
+    scr_sys = parts.screen;
     lv_obj_add_style(scr_sys, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::SYS_SETTINGS, &scr_sys);
-
-    lv_obj_t *title = lv_label_create(scr_sys);
-    lv_label_set_text(title, "系统设置 / Settings");
-    lv_obj_add_style(title, &style_text_cn, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
     // Grid 布局
     static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};

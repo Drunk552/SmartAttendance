@@ -48,14 +48,11 @@ static void sys_menu_event_cb(lv_event_t *e) {
 // 主屏幕实现
 void load_sys_info_menu_screen() {
     if (scr_sys) lv_obj_delete(scr_sys);
-    scr_sys = lv_obj_create(nullptr);
+
+    BaseScreenParts parts = create_base_screen("sys_info / 系统信息");
+    scr_sys = parts.screen;
     lv_obj_add_style(scr_sys, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::SYS_INFO, &scr_sys);
-
-    lv_obj_t *title = lv_label_create(scr_sys);
-    lv_label_set_text(title, "系统信息 / Sys Info");
-    lv_obj_add_style(title, &style_text_cn, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
     // 简单列表菜单
     lv_obj_t *list = lv_obj_create(scr_sys);

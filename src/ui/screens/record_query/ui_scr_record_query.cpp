@@ -62,14 +62,11 @@ static void query_screen_event_cb(lv_event_t *e) {
 // 主屏幕实现
 void load_record_query_menu_screen() {
     if (scr_query) lv_obj_delete(scr_query);
-    scr_query = lv_obj_create(nullptr);
+
+    BaseScreenParts parts = create_base_screen("query / 记录查询");
+    scr_query = parts.screen;
     lv_obj_add_style(scr_query, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::RECORD_QUERY, &scr_query);
-
-    lv_obj_t *title = lv_label_create(scr_query);
-    lv_label_set_text(title, "记录查询 / Query");
-    lv_obj_add_style(title, &style_text_cn, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
     // 输入框
     ta_query_id = lv_textarea_create(scr_query);
@@ -79,7 +76,7 @@ void load_record_query_menu_screen() {
     lv_textarea_set_max_length(ta_query_id, 8);
     lv_obj_set_width(ta_query_id, 200);
     lv_obj_align(ta_query_id, LV_ALIGN_CENTER, 0, -30);
-    lv_obj_add_style(ta_query_id, &style_focus_red, LV_STATE_FOCUSED);
+    lv_obj_add_style(ta_query_id, &style_btn_focused, LV_STATE_FOCUSED);
     // 绑定事件用于处理 Enter 和手动导航
     lv_obj_add_event_cb(ta_query_id, query_screen_event_cb, LV_EVENT_KEY, nullptr);
 
@@ -93,7 +90,7 @@ void load_record_query_menu_screen() {
     btn_query_back = lv_button_create(scr_query);
     lv_obj_set_size(btn_query_back, 100, 40);
     lv_obj_align(btn_query_back, LV_ALIGN_BOTTOM_MID, 0, -20);
-    lv_obj_add_style(btn_query_back, &style_focus_red, LV_STATE_FOCUSED);
+    lv_obj_add_style(btn_query_back, &style_btn_focused, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_query_back, query_screen_event_cb, LV_EVENT_KEY, nullptr);
     
     lv_obj_t *lbl_back = lv_label_create(btn_query_back);
@@ -112,13 +109,12 @@ void load_record_query_menu_screen() {
 
 // ================= [Result Screen] =================
 
-// 主屏幕实现
+// 显示查询结果的屏幕
 void load_record_result_screen(int user_id) {
     if (scr_result) lv_obj_delete(scr_result);
     scr_result = lv_obj_create(nullptr);
     lv_obj_add_style(scr_result, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::RECORD_RESULT, &scr_result);
-
     lv_obj_t *title = lv_label_create(scr_result);
     lv_label_set_text_fmt(title, "User: %d Records", user_id);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 5);
@@ -179,7 +175,7 @@ void load_record_result_screen(int user_id) {
 
             // 让列表项可聚焦以便滚动
             lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_add_style(item, &style_focus_red, LV_STATE_FOCUSED);
+            lv_obj_add_style(item, &style_btn_focused, LV_STATE_FOCUSED);
             UiManager::getInstance()->addObjToGroup(item);
         }
     }
@@ -189,7 +185,7 @@ void load_record_result_screen(int user_id) {
     lv_obj_set_size(btn_back, LV_PCT(100), 30);
     lv_obj_align(btn_back, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_label_set_text(lv_label_create(btn_back), "Back to Query");
-    lv_obj_add_style(btn_back, &style_focus_red, LV_STATE_FOCUSED);
+    lv_obj_add_style(btn_back, &style_btn_focused, LV_STATE_FOCUSED);
     
     // 事件：ESC或点击返回
     lv_obj_add_event_cb(btn_back, [](lv_event_t* e){

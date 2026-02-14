@@ -7,10 +7,12 @@
 #include <lvgl.h>
 #include <cstdio>
 #include <string>
+#include <ctime>
 
 // 模块依赖
 #include "../../managers/ui_manager.h"
 #include "../../common/ui_style.h"
+#include "../../common/ui_widgets.h"
 #include "../../ui_controller.h"
 #include "../../../business/event_bus.h"
 #include "../menu/ui_scr_menu.h"
@@ -24,16 +26,17 @@ extern "C" {
 #define SCREEN_W 240
 #define SCREEN_H 320
 #define CAM_W 240
-#define CAM_H 180
+#define CAM_H 260
 
 namespace ui {
 namespace home {
 
 static lv_obj_t * screen = nullptr;
 static lv_obj_t * img_camera = nullptr;
-static lv_obj_t * lbl_time = nullptr;
-static lv_obj_t * lbl_disk_warn = nullptr;
-static lv_obj_t * lbl_hint = nullptr;
+static lv_obj_t * lbl_time = nullptr;// 时间显示标签
+static lv_obj_t * lbl_date = nullptr; //日期标签
+static lv_obj_t * lbl_disk_warn = nullptr;// 磁盘满警告标签
+static lv_obj_t * lbl_hint = nullptr;// 底部提示标签
 static lv_timer_t * timer_cam = nullptr;// 摄像头刷新定时器
 
 // 摄像头图像描述符 (v9 格式)
@@ -68,6 +71,7 @@ static void screen_cleanup_cb(lv_event_t * e) {
     lbl_disk_warn = nullptr;
     img_camera = nullptr;
     lbl_hint = nullptr;
+    lbl_date = nullptr;
     
     // screen 指针由 UiManager 管理，但在这里置空也无妨
     screen = nullptr;
@@ -111,63 +115,81 @@ static void timer_cam_cb(lv_timer_t * t) {
     }
 }
 
-// 创建屏幕
-void create_screen(void) {
+// 辅助函数：获取当前格式化日期 (YYYY-MM-DD)
+static std::string get_current_date() {
+    std::time_t now = std::time(nullptr);
+    char buf[20];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::localtime(&now));
+    return std::string(buf);
+}
+
+// 创建并配置屏幕
+static void create_screen() {
     if (screen) return;
 
-    // 1. 创建基础屏幕
-    screen = lv_obj_create(nullptr);
-    lv_obj_add_style(screen, &style_base, 0); 
-    lv_obj_set_scrollbar_mode(screen, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_add_event_cb(screen, screen_event_cb, LV_EVENT_ALL, nullptr);
-    lv_obj_add_event_cb(screen, screen_cleanup_cb, LV_EVENT_DELETE, nullptr);
+    // 1. 使用标准框架构建 (自动应用深蓝渐变背景 + 玻璃质感 Header/Footer)
+    BaseScreenParts parts = create_base_screen(""); 
+    screen = parts.screen; // 将创建好的标准屏幕赋值给全局变量
 
-    // 2. Top Bar (30px, 深灰背景) 
-    lv_obj_t * top = lv_obj_create(screen);
-    lv_obj_set_size(top, SCREEN_W, 30);
-    lv_obj_align(top, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(top, lv_color_hex(0x333333), 0); 
-    lv_obj_set_style_bg_opa(top, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(top, 0, 0);
-    lv_obj_set_style_radius(top, 0, 0);
 
-    // 时间标签 (居中)
-    lbl_time = lv_label_create(top);
-    lv_label_set_text(lbl_time, "00:00");
-    lv_obj_align(lbl_time, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_color(lbl_time, THEME_COLOR_TEXT_MAIN, 0);
+    // ============================================================
+    // 定制 Header 布局 (左:日期 | 中:Hello | 右:时间)
+    // ============================================================
 
-    // 磁盘警告 (右上角)
-    lbl_disk_warn = lv_label_create(top);
-    lv_label_set_text(lbl_disk_warn, LV_SYMBOL_WARNING);
-    lv_obj_set_style_text_color(lbl_disk_warn, lv_palette_main(LV_PALETTE_RED), 0);
-    lv_obj_align(lbl_disk_warn, LV_ALIGN_RIGHT_MID, -5, 0);
-    lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
+    // A. 清理 Header
+    // create_base_screen 默认会创建 Title 和 Time，我们不需要默认的，直接清空
+    lv_obj_clean(parts.header); 
 
-    // 3. Camera (240x180, Y=40) 
-    img_dsc.data = UiManager::getInstance()->getCameraDisplayBuffer();
-    img_camera = lv_image_create(screen);
-    lv_image_set_src(img_camera, &img_dsc);
-    lv_obj_set_size(img_camera, CAM_W, CAM_H);
-    lv_obj_align(img_camera, LV_ALIGN_TOP_MID, 0, 40);
-
-    // 4. Bottom Bar (110px, Panel Color) 
-    lv_obj_t * bottom = lv_obj_create(screen);
-    lv_obj_set_size(bottom, SCREEN_W, 110);
-    lv_obj_align(bottom, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(bottom, THEME_COLOR_PANEL, 0); // 确保 THEME_COLOR_PANEL 已定义
-    lv_obj_set_style_border_width(bottom, 0, 0);
-    lv_obj_set_style_radius(bottom, 0, 0);
-    
-    // 操作提示 (黄色文本)
-    lv_obj_t *lbl_hint = lv_label_create(bottom);
-    lv_label_set_text(lbl_hint, "Enter: Menu\nESC: Exit"); 
-    lv_obj_set_style_text_color(lbl_hint, lv_palette_main(LV_PALETTE_YELLOW), 0);
-    lv_obj_set_style_text_align(lbl_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(lbl_hint, LV_ALIGN_CENTER, 0, 0);
-
-    // 5. 注册到管理器
     UiManager::getInstance()->registerScreen(ScreenType::MAIN, &screen);
+
+    // B. 左侧：日期 (Year-Month-Day)
+    lv_obj_t* obj_date = lv_label_create(parts.header);
+    lv_label_set_text(obj_date, get_current_date().c_str()); 
+    lv_obj_set_style_text_color(obj_date, lv_color_white(), 0);
+    lv_obj_set_style_text_font(obj_date, &lv_font_montserrat_14, 0); // 稍微小一点的字体
+    lv_obj_align(obj_date, LV_ALIGN_LEFT_MID, 10, 0); // 左边距 10
+
+    // C. 中间：Hello 文字
+    lv_obj_t * lbl_center = lv_label_create(parts.header);
+    lv_label_set_text(lbl_center, "Hello"); // 或者 "Face Rec"
+    lv_obj_add_style(lbl_center, &style_text_cn, 0); // 使用你的中文字体样式
+    lv_obj_set_style_text_color(lbl_center, lv_color_white(), 0);
+    lv_obj_align(lbl_center, LV_ALIGN_CENTER, 0, 0); // 绝对居中
+
+    // D. 右侧：时间 (HH:MM:SS)
+    lbl_time = lv_label_create(parts.header); 
+    lv_label_set_text(lbl_time, "00:00"); // 初始占位符
+    lv_obj_set_style_text_color(lbl_time, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_time, LV_ALIGN_RIGHT_MID, -10, 0); // 右边距 -10 (向左缩进)
+
+    // 2. 配置中间内容区 (放置摄像头)
+    // 我们的摄像头分辨率是 240x260 (CAM_W x CAM_H)
+    // 屏幕宽是 240，所以摄像头刚好撑满宽度
+    // 确保 content 没有内边距，以便摄像头画面能贴边显示
+    lv_obj_set_style_pad_all(parts.content, 0, 0);// 让摄像头画面能贴边显示
+
+    // 创建摄像头图像对象，父对象直接设为 parts.content
+    img_dsc.data = UiManager::getInstance()->getCameraDisplayBuffer();
+    img_camera = lv_image_create(parts.content);
+    lv_image_set_src(img_camera, &img_dsc);
+    lv_obj_center(img_camera);// 让摄像头画面居中显示在中间区域
+
+    // 给摄像头加一个简单的边框，增加一点科技感
+    lv_obj_set_style_border_width(img_camera, 1, 0);
+    lv_obj_set_style_border_color(img_camera, lv_color_hex(0x66CCFF), 0);
+    lv_obj_set_style_border_side(img_camera, (lv_border_side_t)(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM), 0);
+
+    // 3. 自定义 Header 内容 (覆盖/添加标准内容)
+
+    // 底部提示语 (覆盖默认的 "退出-ESC 确认-ENTER")
+    set_base_footer_hint(parts.footer, LV_SYMBOL_POWER " -ESC ",LV_SYMBOL_HOME " -ENTER "); // 设置底部提示语
+
+    // 5. 事件与逻辑绑定
+    // 绑定按键事件 (挂在最外层 screen 上)
+    lv_obj_add_event_cb(screen, screen_event_cb, LV_EVENT_KEY, NULL);
+    lv_obj_add_event_cb(screen, screen_cleanup_cb, LV_EVENT_DELETE, NULL);// 绑定销毁清理回调，确保资源安全释放
+    
 }
 
 // 加载屏幕
@@ -184,8 +206,10 @@ void load_screen(void) {
     bus.subscribe(EventType::TIME_UPDATE, [](void* data) {
         std::string* t = static_cast<std::string*>(data);
         lv_async_call([](void* d){
-            if(lbl_time) lv_label_set_text(lbl_time, (const char*)d);
-            delete (std::string*)d;
+            std::string* time_str_ptr = (std::string*)d;
+                if(lbl_time && time_str_ptr && !time_str_ptr->empty()) {
+                lv_label_set_text(lbl_time, time_str_ptr->c_str());
+            }
         }, new std::string(*t));
     });
 

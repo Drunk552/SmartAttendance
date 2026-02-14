@@ -156,33 +156,34 @@ static void menu_btn_event_cb(lv_event_t *e) {
 void load_screen() {
     // 1. 创建屏幕
     if (screen_menu) lv_obj_delete(screen_menu);
-    screen_menu = lv_obj_create(nullptr);
+
+    BaseScreenParts parts = create_base_screen("main_menu / 主菜单");
+    
+    screen_menu = parts.screen;
     lv_obj_add_style(screen_menu, &style_base, 0);
     
     UiManager::getInstance()->registerScreen(ScreenType::MENU, &screen_menu);
 
-    // 2. 标题 (System Menu / 系统菜单)
-    lv_obj_t *title = lv_label_create(screen_menu);
-    lv_label_set_text(title, "System Menu / 系统菜单");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-    // 使用全局样式 style_text_cn应用中文字体
-    lv_obj_add_style(title, &style_text_cn, 0); 
-
     // 4. 定义九宫格布局
+    //使用 LV_GRID_FR(1) 让两列平分宽度，自动填满容器
     static int32_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST}; 
-    static int32_t row_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST}; 
+    //行高也可以设为 FR 让其平分高度，或者保持固定值
+    static int32_t row_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
 
-    obj_grid = lv_obj_create(screen_menu); 
-    lv_obj_set_size(obj_grid, LV_PCT(90), LV_PCT(80));
-    lv_obj_align(obj_grid, LV_ALIGN_BOTTOM_MID, 0, -10); // 靠下居中
+    obj_grid = lv_obj_create(parts.content); 
+    lv_obj_set_size(obj_grid, 220, LV_PCT(96)); // 宽度适应屏幕，高度自适应
+    lv_obj_center(obj_grid); // 在内容区居中
     lv_obj_set_layout(obj_grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(obj_grid, col_dsc, row_dsc);
     
-    lv_obj_add_style(obj_grid, &style_panel_transp, 0);// 使用透明样式
+    // 添加行列间距 (Gap)
+    lv_obj_set_style_pad_row(obj_grid, 10, 0);    // 行间距 10px
+    lv_obj_set_style_pad_column(obj_grid, 10, 0); // 列间距 10px
+
+    // 样式：透明背景，无边框
     lv_obj_set_style_bg_opa(obj_grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(obj_grid, 0, 0);
-    lv_obj_set_style_pad_column(obj_grid, THEME_GUTTER, 0);
-    lv_obj_set_style_pad_row(obj_grid, THEME_GUTTER, 0);
+    lv_obj_set_style_pad_all(obj_grid, 0, 0); // 清除内边距
 
     // 5. 菜单内容定义 
     static MenuEntry menu_items[] = {

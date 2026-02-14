@@ -51,15 +51,22 @@ std::string UiController::getCurrentTimeStr() {
 // 移入原 get_next_available_id 逻辑
 int UiController::generateNextUserId() {
     std::vector<UserData> users = db_get_all_users();
-    std::set<int> existing_ids;
+    
+    int max_id = 0;
+    
+    // 遍历所有用户，找出目前最大的 ID
     for (const auto& user : users) {
-        existing_ids.insert(user.id);
+        if (user.id > max_id) {
+            max_id = user.id;
+        }
     }
-    int next_id = 1;
-    while (existing_ids.find(next_id) != existing_ids.end()) {
-        next_id++;
+    // 如果没有任何用户(max_id=0)，默认从 1 开始
+    // 否则，返回 最大值 + 1
+    if (max_id == 0) {
+        return 1; 
+    } else {
+        return max_id + 1;
     }
-    return next_id;
 }
 
 std::vector<DeptInfo> UiController::getDepartmentList() {
@@ -280,7 +287,7 @@ void UiController::monitorThreadFunc() {
 // 摄像头采集线程
 void UiController::captureThreadFunc() {
     const int W = 240; 
-    const int H = 180; 
+    const int H = 260; 
 
     printf("[Controller] 采集线程启动: 目标尺寸 %dx%d\n", W, H);
 

@@ -1077,20 +1077,44 @@ cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_onc
  * @note 该函数线程安全，会加锁保护读取最新帧
  */
 bool business_get_display_frame(void* buffer, int w, int h) {
-    cv::Mat temp;
+    cv::Mat frame;
     
     // 1. 快速取出最新的一帧 (加锁时间极短)
     {
         std::lock_guard<std::mutex> lock(g_display_mutex);
         if (g_display_frame_buffer.empty()) return false;
         // 拷贝引用或深拷贝均可，这里用深拷贝最安全
-        g_display_frame_buffer.copyTo(temp);
+        g_display_frame_buffer.copyTo(frame);
     }
 
     // 2. 耗时的缩放和转换在锁外进行，不影响后台采集
     cv::Mat resized, rgb;
-    cv::resize(temp, resized, cv::Size(w, h));
-    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+
+    // ==========================================
+    // 解决 240x260 拉伸问题的裁剪逻辑
+    // ==========================================
+    
+    // 目标是填满高度 (h>=260)，保持 4:3 比例
+    // 计算等比缩放后的宽度： 260 / 480 * 640 ≈ 346
+    int scaled_w = (frame.cols * h) / frame.rows; 
+    // 先等比缩放 (此时图像是 346x260，不会变形)
+    cv::resize(frame, frame, cv::Size(scaled_w, h));
+    // 计算需要裁剪掉的左右两边宽度
+    // (346 - 240) / 2 = 53
+    int crop_x = (scaled_w - w) / 2;
+    // 执行中心裁剪 (只保留中间的 width=240 部分)
+    if (crop_x > 0) {
+        // 确保裁剪区域不越界
+        if (crop_x + w > scaled_w) crop_x = scaled_w - w;
+        
+        cv::Rect roi(crop_x, 0, w, h);
+        // 使用 clone() 确保内存连续，防止显示花屏
+        frame = frame(roi).clone(); 
+    } else {
+        // 兜底逻辑：如果计算出的宽度不够（极少情况），则强制缩放
+        cv::resize(frame, frame, cv::Size(w, h));
+    }
+    cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
 
     // 3. 填入 buffer
     memcpy(buffer, rgb.data, w * h * 3);
