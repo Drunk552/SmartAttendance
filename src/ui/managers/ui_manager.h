@@ -28,6 +28,7 @@ enum class ScreenType {
     PWD_CHANGE,    // Level 3-A
     ROLE_AUTH,     // Level 3-B
     DELETE_USER,
+    SYS_SELF_CHECK, // 自检功能屏幕
     // ... 其他屏幕
     UNKNOWN
 };
