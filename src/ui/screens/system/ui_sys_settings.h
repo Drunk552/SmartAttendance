@@ -16,6 +16,16 @@ void load_sys_settings_menu_screen();
  */
 void load_system_param_screen();
 
+/**
+ * @brief 加载基础设置屏幕
+ */
+void load_sys_settings_basic_screen();
+
+/**
+ * @brief 加载高级设置界面
+ */
+void load_system_advanced_screen();
+
 } // namespace system
 } // namespace ui
 

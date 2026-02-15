@@ -31,8 +31,9 @@ enum class ScreenType {
     PWD_CHANGE,// 密码修改
     ROLE_AUTH,// 权限变更
     DELETE_USER,//删除用户
-     // ... 其他屏幕类型
-     // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑
+    SYS_SELF_CHECK, // 自检功能屏幕
+    // ... 其他屏幕类型
+    // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑
     // ... 其他屏幕
     UNKNOWN
 };
