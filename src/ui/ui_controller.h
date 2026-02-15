@@ -26,6 +26,7 @@ public:
     // --- 1. 系统状态类 ---
     bool isDiskFull();             // 替换原来的 check_disk_low
     std::string getCurrentTimeStr(); // 替换原来的 get_current_time_str
+    std::string getCurrentWeekdayStr();// 获取当前星期几字符串 (例如 "周一")
 
     // --- 2. 员工管理类 ---
     int generateNextUserId();      // 替换原来的 get_next_available_id

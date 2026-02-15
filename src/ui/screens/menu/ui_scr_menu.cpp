@@ -28,45 +28,26 @@ struct MenuEntry {
     const char* event_tag;  // 事件回调用的 Tag
 };
 
-// 手动导航逻辑 
-static void handle_manual_navigation(lv_event_t *e) {
-    uint32_t key = lv_event_get_key(e);
-    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
-    lv_obj_t *grid = lv_obj_get_parent(btn);
-    
-    uint32_t cnt = lv_obj_get_child_cnt(grid);
-    uint32_t curr_idx = lv_obj_get_index(btn);
-    uint32_t next_idx = curr_idx;
-    
-    // 2列布局: Up/Down +/- 2, Left/Right +/- 1
-    if (key == LV_KEY_DOWN) {
-        if (curr_idx + 2 < cnt) next_idx = curr_idx + 2;
-    } 
-    else if (key == LV_KEY_UP) {
-        if (curr_idx >= 2) next_idx = curr_idx - 2;
-    } 
-    else if (key == LV_KEY_RIGHT) {
-        if (curr_idx + 1 < cnt) next_idx = curr_idx + 1;
-    } 
-    else if (key == LV_KEY_LEFT) {
-        if (curr_idx > 0) next_idx = curr_idx - 1;
-    }
-
-    if (next_idx != curr_idx) {
-        lv_group_focus_obj(lv_obj_get_child(grid, next_idx));
-    }
-}
-
-// 菜单按钮事件回调
+// 主菜单按钮事件回调
 static void menu_btn_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     // 使用 C 风格强转：
     lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
     const char* tag = static_cast<const char*>(lv_event_get_user_data(e));
 
+    uint32_t key = 0;
+    // 获取按键值 (如果不是按键事件，key 会是 0)
+    if(code==LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
     // 仅处理按键事件
     if (code == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
+
+        if(key == LV_KEY_ESC) {
+            ui::home::load_screen(); // 按 ESC 返回主页
+            return; // 处理完返回后直接返回，避免继续执行下面的导航逻辑
+        }
         
         // 获取当前按钮在 Grid 中的索引 (0, 1, 2, 3)
         // 0:左上, 1:右上, 2:左下, 3:右下
@@ -98,71 +79,65 @@ static void menu_btn_event_cb(lv_event_t *e) {
         }
 
         // --- 执行跳转 ---
-        if (next_index >= 0) {
+        if (next_index >= 0 && next_index < (int)total) {
             // 找到目标按钮
             lv_obj_t *target_btn = lv_obj_get_child(grid, next_index);
             // 强制聚焦
             lv_group_focus_obj(target_btn);
             return; // 完成跳转，直接返回
         }
-
-        // --- 处理功能键 ---
-        if (key == LV_KEY_ESC) {
-            std::printf("[UI] ESC -> Back\n");
-            ui::home::load_screen(); // 返回主页
-        }
-        else if (key == LV_KEY_ENTER) {
-            std::printf("[UI] Action: %s\n", tag);
-
-            if(std::strcmp(tag, "UserMgmt") == 0) {
-                ui::user_mgmt::load_user_menu_screen();// 1.进入员工管理页面
-            }
-            else if(std::strcmp(tag, "Records") == 0) {
-                ui::record_query::load_record_query_menu_screen(); // 2.进入记录查询页面
-            }
-            else if(std::strcmp(tag, "STATS") == 0) {
-                ui::att_stats::load_att_stats_menu_screen(); // 3.进入考勤统计页面
-            }
-            else if(std::strcmp(tag, "AttDesign") == 0) {
-                ui::att_design::load_att_design_menu_screen(); // 4.进入考勤设计页面
-            }
-            else if(std::strcmp(tag, "System") == 0) {
-                ui::system::load_sys_settings_menu_screen();  //5.进入系统设置页面
-            }
-            else if(std::strcmp(tag, "SysInfo") == 0) {
-                ui::sys_info::load_sys_info_menu_screen(); // 6.进入系统信息页面
-            }
-        }
     }
     
-    // 保留点击支持
-    if (code == LV_EVENT_CLICKED) {
-         std::printf("[UI] Click: %s\n", tag);
-         //  点击 System 应该进入设置，而不是退出程序
-         if(std::strcmp(tag, "System") == 0) {
-            ui::system::load_sys_settings_menu_screen(); // 进入系统设置页面
+    // ==========================================
+    // 2. 触发跳转逻辑 (CLICKED)
+    // ==========================================
+    // 无论是 触摸屏点击 还是 键盘按回车，最终都会触发这个事件
+    if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+        
+        lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
+
+        if (tag == nullptr) return;// 安全检查
+
+        // 根据 Tag 跳转到对应模块
+        if (strcmp(tag, "UserMgmt") == 0) {
+            ui::user_mgmt::load_user_menu_screen(); // 1.进入员工管理页面
         }
-        // 处理其他点击...
-        else if(std::strcmp(tag, "UserMgmt") == 0) ui::user_mgmt::load_user_menu_screen();// 1.进入员工管理页面
-        else if(std::strcmp(tag, "Records") == 0) ui::record_query::load_record_query_menu_screen();// 2.进入记录查询页面
-        else if(std::strcmp(tag, "STATS") == 0) ui::att_stats::load_att_stats_menu_screen();// 3.进入考勤统计页面
-        else if(std::strcmp(tag, "AttDesign") == 0) ui::att_design::load_att_design_menu_screen();// 4.进入考勤设计页
-        else if(std::strcmp(tag, "System") == 0) ui::system::load_sys_settings_menu_screen();  //5.进入系统设置页面
-        else if(std::strcmp(tag, "SysInfo") == 0) ui::sys_info::load_sys_info_menu_screen();// 6.进入系统信息页面
+        else if (strcmp(tag, "Records") == 0) {
+            ui::record_query::load_record_query_menu_screen();// 2.进入记录查询页面
+        }
+        else if (strcmp(tag, "STATS") == 0) {
+            ui::att_stats::load_att_stats_menu_screen();// 3.进入考勤统计页面
+        }
+        else if (strcmp(tag, "AttDesign") == 0) {
+            ui::att_design::load_att_design_menu_screen();// 4.进入考勤设计页
+        }
+        else if (strcmp(tag, "System") == 0) {
+            ui::system::load_sys_settings_menu_screen();// 5.进入系统设置页面
+        }
+        else if (strcmp(tag, "SysInfo") == 0) {
+            ui::sys_info::load_sys_info_menu_screen();// 6.进入系统信息页面
+        }
     }
 }
 
 // 主屏幕实现
-void load_screen() {
+void load_menu_screen() {
     // 1. 创建屏幕
-    if (screen_menu) lv_obj_delete(screen_menu);
+    if (screen_menu){
+        lv_obj_delete(screen_menu);
+        screen_menu = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("main_menu / 主菜单");
-    
+    BaseScreenParts parts = create_base_screen("主菜单");
     screen_menu = parts.screen;
-    lv_obj_add_style(screen_menu, &style_base, 0);
-    
     UiManager::getInstance()->registerScreen(ScreenType::MENU, &screen_menu);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(screen_menu, [](lv_event_t * e) {
+        screen_menu = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 4. 定义九宫格布局
     //使用 LV_GRID_FR(1) 让两列平分宽度，自动填满容器

@@ -33,49 +33,48 @@ static void sys_main_event_cb(lv_event_t *e) {
         }
     } 
     else if (lv_event_get_key(e) == LV_KEY_ESC) {
-        ui::menu::load_screen();
+        ui::menu::load_menu_screen();
     }
 }
 
 // 主屏幕实现
 void load_sys_settings_menu_screen() {
-    if (scr_sys) lv_obj_delete(scr_sys);
+    if (scr_sys){
+        lv_obj_delete(scr_sys);
+        scr_sys = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("system / 系统设置");
+    BaseScreenParts parts = create_base_screen("系统设置");
     scr_sys = parts.screen;
-    lv_obj_add_style(scr_sys, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::SYS_SETTINGS, &scr_sys);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_sys, [](lv_event_t * e) {
+        scr_sys = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+
+    lv_obj_t *grid = create_menu_grid_container(parts.content);// 创建统一样式的菜单 Grid 容器
 
     // Grid 布局
     static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
     static int32_t row_dsc[] = {50, 50, LV_GRID_TEMPLATE_LAST};
     
-    lv_obj_t *grid = lv_obj_create(scr_sys);
-    lv_obj_set_size(grid, 220, 200);
-    lv_obj_center(grid);
-    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(grid, 0, 0);
     lv_obj_set_style_pad_row(grid, 10, 0);
 
     // 1. 参数设置
-    lv_obj_t *b1 = create_sys_grid_btn(grid, 0, LV_SYMBOL_SETTINGS, "Params", "参数设置", sys_main_event_cb, "PARAM");
+    lv_obj_t *b1 = create_sys_grid_btn(grid, 0, "1. ", "Params", "参数设置", sys_main_event_cb, "PARAM");
     
     // 2. 恢复出厂 (红色样式)
-    lv_obj_t *b2 = create_sys_grid_btn(grid, 1, LV_SYMBOL_TRASH, "Reset", "恢复出厂", sys_main_event_cb, "RESET");
+    lv_obj_t *b2 = create_sys_grid_btn(grid, 1, "2. ", "Reset", "恢复出厂", sys_main_event_cb, "RESET");
     // 手动覆盖背景色为红
     lv_obj_set_style_bg_color(b2, lv_palette_main(LV_PALETTE_RED), 0);
 
-    UiManager::getInstance()->resetKeypadGroup();
     UiManager::getInstance()->addObjToGroup(b1);
     UiManager::getInstance()->addObjToGroup(b2);
     lv_group_focus_obj(b1);
-
-    lv_obj_add_event_cb(scr_sys, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) ui::menu::load_screen();
-    }, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(scr_sys);
 
     lv_screen_load(scr_sys);
     UiManager::getInstance()->destroyAllScreensExcept(scr_sys);
@@ -129,6 +128,13 @@ void load_system_param_screen() {
     scr_param = lv_obj_create(nullptr);
     lv_obj_add_style(scr_param, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::SYS_ADVANCED, &scr_param);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_param, [](lv_event_t * e) {
+        scr_param = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t *title = lv_label_create(scr_param);
     lv_label_set_text(title, "参数设置 / Params");

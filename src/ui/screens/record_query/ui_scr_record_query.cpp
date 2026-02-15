@@ -43,7 +43,7 @@ static void query_screen_event_cb(lv_event_t *e) {
                 }
             }
             else if (key == LV_KEY_ESC) {
-                ui::menu::load_screen();
+                ui::menu::load_menu_screen();
             }
         }
         // 2. 如果焦点在 返回按钮
@@ -53,7 +53,7 @@ static void query_screen_event_cb(lv_event_t *e) {
                 if(ta_query_id) lv_group_focus_obj(ta_query_id);
             }
             else if (key == LV_KEY_ENTER || key == LV_KEY_ESC) {
-                ui::menu::load_screen();
+                ui::menu::load_menu_screen();
             }
         }
     }
@@ -61,12 +61,21 @@ static void query_screen_event_cb(lv_event_t *e) {
 
 // 主屏幕实现
 void load_record_query_menu_screen() {
-    if (scr_query) lv_obj_delete(scr_query);
+    if (scr_query){
+        lv_obj_delete(scr_query);
+        scr_query = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("query / 记录查询");
+    BaseScreenParts parts = create_base_screen("记录查询");
     scr_query = parts.screen;
-    lv_obj_add_style(scr_query, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::RECORD_QUERY, &scr_query);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_query, [](lv_event_t * e) {
+        scr_query = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 输入框
     ta_query_id = lv_textarea_create(scr_query);
@@ -111,10 +120,22 @@ void load_record_query_menu_screen() {
 
 // 显示查询结果的屏幕
 void load_record_result_screen(int user_id) {
-    if (scr_result) lv_obj_delete(scr_result);
+    if (scr_result) {
+        lv_obj_delete(scr_result);
+        scr_result = nullptr;
+    }
+
     scr_result = lv_obj_create(nullptr);
-    lv_obj_add_style(scr_result, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::RECORD_RESULT, &scr_result);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_result, [](lv_event_t * e) {
+        scr_result = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+
+    // 标题
     lv_obj_t *title = lv_label_create(scr_result);
     lv_label_set_text_fmt(title, "User: %d Records", user_id);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 5);

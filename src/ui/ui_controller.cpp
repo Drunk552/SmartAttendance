@@ -48,6 +48,20 @@ std::string UiController::getCurrentTimeStr() {
     return std::string(buf);
 }
 
+// 获取当前星期几字符串实现
+std::string UiController::getCurrentWeekdayStr() {
+    time_t now = time(0);
+    struct tm tstruct;
+    char buf[16];
+    localtime_r(&now, &tstruct);
+    
+    // %a 表示星期的缩写 (如: Mon, Tue, Wed...)
+    // 如果你想要全称用 %A (如: Monday)，但考虑到顶部空间有限(60px)，建议用缩写
+    strftime(buf, sizeof(buf), "%a", &tstruct);
+    
+    return std::string(buf);
+}
+
 // 移入原 get_next_available_id 逻辑
 int UiController::generateNextUserId() {
     std::vector<UserData> users = db_get_all_users();

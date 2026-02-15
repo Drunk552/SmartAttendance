@@ -41,18 +41,27 @@ static void sys_menu_event_cb(lv_event_t *e) {
             show_popup("Info", "Device: SmartAtt-V1.5\nVer: 2024.01");
         }
     } else if (lv_event_get_key(e) == LV_KEY_ESC) {
-        ui::menu::load_screen();
+        ui::menu::load_menu_screen();
     }
 }
 
 // 主屏幕实现
 void load_sys_info_menu_screen() {
-    if (scr_sys) lv_obj_delete(scr_sys);
+    if (scr_sys){
+        lv_obj_delete(scr_sys);
+        scr_sys = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("sys_info / 系统信息");
+    BaseScreenParts parts = create_base_screen("系统信息");
     scr_sys = parts.screen;
-    lv_obj_add_style(scr_sys, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::SYS_INFO, &scr_sys);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_sys, [](lv_event_t * e) {
+        scr_sys = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 简单列表菜单
     lv_obj_t *list = lv_obj_create(scr_sys);
@@ -64,7 +73,7 @@ void load_sys_info_menu_screen() {
     // 按钮1: 基础信息
     lv_obj_t *b1 = lv_button_create(list);
     lv_obj_set_width(b1, LV_PCT(100));
-    lv_label_set_text(lv_label_create(b1), "Basic Info / 基础信息");
+    lv_label_set_text(lv_label_create(b1), "1. Basic Info / 基础信息");
     lv_obj_add_style(b1, &style_btn_default, 0);
     lv_obj_add_style(b1, &style_btn_focused, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(b1, sys_menu_event_cb, LV_EVENT_KEY, (void*)"BASIC");
@@ -72,7 +81,7 @@ void load_sys_info_menu_screen() {
     // 按钮2: 存储详情
     lv_obj_t *b2 = lv_button_create(list);
     lv_obj_set_width(b2, LV_PCT(100));
-    lv_label_set_text(lv_label_create(b2), "Storage / 存储详情");
+    lv_label_set_text(lv_label_create(b2), "2. Storage / 存储详情");
     lv_obj_add_style(b2, &style_btn_default, 0);
     lv_obj_add_style(b2, &style_btn_focused, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(b2, sys_menu_event_cb, LV_EVENT_KEY, (void*)"STORAGE");
@@ -84,7 +93,7 @@ void load_sys_info_menu_screen() {
     
     // ESC
     lv_obj_add_event_cb(scr_sys, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) ui::menu::load_screen();
+        if(lv_event_get_key(e) == LV_KEY_ESC) ui::menu::load_menu_screen();
     }, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(scr_sys);
 
@@ -98,6 +107,13 @@ void load_storage_info_screen() {
     scr_sys = lv_obj_create(nullptr);
     lv_obj_add_style(scr_sys, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::STORAGE_INFO, &scr_sys);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_sys, [](lv_event_t * e) {
+        scr_sys = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t *title = lv_label_create(scr_sys);
     lv_label_set_text(title, "存储统计 / Storage Stats");

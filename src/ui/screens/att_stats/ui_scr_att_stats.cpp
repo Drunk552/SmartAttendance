@@ -78,11 +78,15 @@ static void ui_on_export_complete(void* data) {
 
 // --- 界面 A: 下载考勤报表 (全员) ---
 void load_download_all_screen() {
-    if(scr_download_all) lv_obj_delete(scr_download_all);
+    // 先删除旧屏幕（如果存在），避免重复创建
+    if(scr_download_all){
+        lv_obj_delete(scr_download_all);
+        scr_download_all = nullptr;
+    }
 
+    // 创建新屏幕并注册
     BaseScreenParts parts = create_base_screen("下载考勤报表");
     scr_download_all = parts.screen;
-    lv_obj_add_style(scr_download_all, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::ALL_ATT_STATS, &scr_download_all);
 
     // 绑定销毁回调
@@ -191,12 +195,13 @@ void load_download_all_screen() {
 
 // --- 界面 B: 下载个人报表 ---
 void load_download_personal_screen() {
-    if (scr_download_personal) lv_obj_delete(scr_download_personal);
+    if (scr_download_personal){
+        lv_obj_delete(scr_download_personal);
+        scr_download_personal = nullptr;
+    }
 
     BaseScreenParts parts = create_base_screen("下载个人考勤报表");
     scr_download_personal = parts.screen;
-    lv_obj_add_style(scr_download_personal, &style_base, 0);
-
     UiManager::getInstance()->registerScreen(ScreenType::PERSONAGE_ATT_STATS, &scr_download_personal);
 
     // 绑定销毁回调
@@ -311,117 +316,153 @@ void load_download_personal_screen() {
 
 // ===================== 主入口逻辑 =================
 
+//考勤统计界面按键事件回调
 static void stats_menu_btn_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
-    intptr_t index = (intptr_t)lv_event_get_user_data(e);
-    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();// 获取全局按键组
 
+    // 提前获取 key，方便后面判断
+    uint32_t key = 0;
     if (code == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 导航与返回逻辑 (仅处理按键)
+    if (code == LV_EVENT_KEY) {
         
-        // 处理 ESC 返回主菜单
+        // --- ESC 返回 ---
         if (key == LV_KEY_ESC) {
-            ui::menu::load_screen();
-            return;
+            ui::menu::load_menu_screen(); // 返回上一级
+            return; // 防止继续执行下面代码
         }
 
-        // 处理上下键导航 (在 Grid 中循环切换)
+        // --- 方向键导航 ---
+        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
         if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-            lv_group_focus_next(group);
+            lv_group_focus_next(group);// 向下/向右导航
         }
         else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-            lv_group_focus_prev(group);
+            lv_group_focus_prev(group);// 向上/向左导航
         }
-        // 处理确认键
-        else if (key == LV_KEY_ENTER) {
-            if (index == 0) {
-                // A：下载考勤报表
-                load_download_all_screen(); 
-            } 
-            else if (index == 1) {
-                // B：下载个人报表
-                load_download_personal_screen();
-            }
-            else {
-                show_popup_local("Info", "Coming Soon"); 
-            }
+    }
+
+    // 2. 触发逻辑 (兼容 触摸点击 和 键盘回车)
+    if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+        
+        lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
+
+        // 获取 index (放在这里获取更安全)
+        const char* user_data = (const char*)lv_event_get_user_data(e);
+        intptr_t index = (intptr_t)user_data;
+
+        if (index == 0) {
+            // A：下载考勤报表
+            load_download_all_screen(); // 跳转到下载考勤报表界面
+        } 
+        else if (index == 1) {
+            // B：下载个人报表
+            load_download_personal_screen();// 跳转到下载个人报表界面
+        }
+        else {
+            show_popup_local("Info", "Coming Soon"); // 其他功能占位
         }
     }
 }
 
-// 创建界面(create)
+// 创建界面(create)-考勤统计界面
 void create_att_stats_menu_screen() {
-    if (scr_stats) return;
+    if (scr_stats){
+        lv_obj_delete(scr_stats);
+        scr_stats = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("att_stats / 考勤统计");
+    BaseScreenParts parts = create_base_screen("考勤统计");
     scr_stats = parts.screen;
-    // 1. 创建屏幕 - 统一使用黑色背景
-    lv_obj_add_style(scr_stats, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::ATT_STATS, &scr_stats);
 
-    // 3. Grid 布局 - 1列 5行 (列表式布局，清晰易读)
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_stats, [](lv_event_t * e) {
+        scr_stats = nullptr;
+        sub_screen_cont = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+
+    lv_obj_t * sub_screen_cont = create_menu_grid_container(parts.content);
+
+    // Grid 布局 - 1列 5行 (列表式布局，清晰易读)
     static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST}; 
     static int32_t row_dsc[] = {45, 45, 45, 45, 45, LV_GRID_TEMPLATE_LAST}; 
 
-    sub_screen_cont = lv_obj_create(parts.content);
-    lv_obj_set_size(sub_screen_cont, 230, 260); // 调整容器大小适配内容
-    lv_obj_align(sub_screen_cont, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_layout(sub_screen_cont, LV_LAYOUT_GRID);
-    lv_obj_set_grid_dsc_array(sub_screen_cont, col_dsc, row_dsc);
-    
-    // 样式改为透明
-    lv_obj_set_style_bg_opa(sub_screen_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(sub_screen_cont, 0, 0);
-    lv_obj_set_style_pad_row(sub_screen_cont, 5, 0); // 按钮间距
+    lv_obj_set_grid_dsc_array(sub_screen_cont, col_dsc, row_dsc);// 设置 Grid 描述数组
+    lv_obj_set_style_pad_row(sub_screen_cont, 5, 0); // 设置行间距
 
-    // 4. 创建按钮 
+    // 创建按钮 
     // 参数: 父对象, 行号, 图标, 英文标题, 中文标题, 回调, 索引(作为user_data)
     
     // 按钮 0: 下载考勤报表
-    create_sys_grid_btn(sub_screen_cont, 0, LV_SYMBOL_DOWNLOAD, "", "下载考勤报表", 
+    create_sys_grid_btn(sub_screen_cont, 0, " ", "1.", "下载考勤报表", 
                         stats_menu_btn_cb, (const char*)(intptr_t)0);
 
     // 按钮 1: 下载个人考勤报表
-    create_sys_grid_btn(sub_screen_cont, 1, LV_SYMBOL_EDIT, "", "下载个人考勤报表", 
+    create_sys_grid_btn(sub_screen_cont, 1, " ", "2.", "下载个人考勤报表", 
                         stats_menu_btn_cb, (const char*)(intptr_t)1);
 
     // 按钮 2: 下载员工设置 (占位)
-    create_sys_grid_btn(sub_screen_cont, 2, LV_SYMBOL_SETTINGS, "", "下载员工设置", 
+    create_sys_grid_btn(sub_screen_cont, 2, " ", "3.", "下载员工设置", 
                         stats_menu_btn_cb, (const char*)(intptr_t)2);
 
     // 按钮 3: 上传员工设置 (占位)
-    create_sys_grid_btn(sub_screen_cont, 3, LV_SYMBOL_UPLOAD, "", "上传员工设置", 
+    create_sys_grid_btn(sub_screen_cont, 3, " ", "4.", "上传员工设置", 
                         stats_menu_btn_cb, (const char*)(intptr_t)3);
                         
     // 按钮 4: 下载员工数据 (占位)
-    create_sys_grid_btn(sub_screen_cont, 4, LV_SYMBOL_SD_CARD, "", "下载员工数据", 
+    create_sys_grid_btn(sub_screen_cont, 4, " ", "5.", "下载员工数据", 
                         stats_menu_btn_cb, (const char*)(intptr_t)4);
+
+    //UiManager::getInstance()->resetKeypadGroup();// 按键组管理
+
+    // 遍历容器子对象(按钮)加入组
+    uint32_t child_cnt = lv_obj_get_child_cnt(sub_screen_cont);
+    for(uint32_t i=0; i < child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(sub_screen_cont, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+    }
+    // 聚焦第一个
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(sub_screen_cont, 0));
+    }
+
+    lv_screen_load(scr_stats);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_stats);// 加载后销毁其他屏幕，保持资源清晰
+
 }
 
 // 加载界面 (Load)
 void load_att_stats_menu_screen() {
-    if (!scr_stats) create_att_stats_menu_screen();
+    if (!scr_stats) {
+        create_att_stats_menu_screen();
+    } 
+    else {
+        // 如果屏幕已经存在（只是切回来），我们需要重新把按键组接管过来
+        // 这部分逻辑仿照 ui_user_mgmt.cpp 的加载逻辑
+        UiManager::getInstance()->resetKeypadGroup();
+        if (sub_screen_cont) {
+             uint32_t child_cnt = lv_obj_get_child_cnt(sub_screen_cont);
+             for(uint32_t i=0; i < child_cnt; i++) {
+                 UiManager::getInstance()->addObjToGroup(lv_obj_get_child(sub_screen_cont, i));
+             }
+             if(child_cnt > 0) {
+                 lv_group_focus_obj(lv_obj_get_child(sub_screen_cont, 0));
+             }
+        }
+    }
 
     std::printf("[UI] Enter: Attendance Stats\n");
 
-    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
-    // 关键修复：正确设置输入组
-    lv_group_remove_all_objs(group);
-    
-    if (sub_screen_cont) {
-        uint32_t cnt = lv_obj_get_child_cnt(sub_screen_cont);
-        for(uint32_t i=0; i<cnt; i++) {
-            lv_group_add_obj(group, lv_obj_get_child(sub_screen_cont, i));
-        }
-        // 默认聚焦第一个按钮
-        if(cnt > 0) lv_group_focus_obj(lv_obj_get_child(sub_screen_cont, 0));
-    }
-
-    // 还要把背景加入组，以防焦点丢失时按键失效
-    lv_group_add_obj(group, scr_stats);
-
+    // 切换屏幕
     lv_screen_load(scr_stats);
+
+    // 销毁其他屏幕，节省内存
     UiManager::getInstance()->destroyAllScreensExcept(scr_stats);
 }
 

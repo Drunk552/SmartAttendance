@@ -90,7 +90,7 @@ static void screen_event_cb(lv_event_t * e) {
             // 等待按键释放以防连跳
             lv_indev_wait_release(lv_indev_get_act());
             // 跳转到菜单页逻辑 (假设已实现)
-            ui::menu::load_screen(); 
+            ui::menu::load_menu_screen(); 
         }
         if (key == LV_KEY_ESC) {
             // 退出程序请求
@@ -125,7 +125,10 @@ static std::string get_current_date() {
 
 // 创建并配置屏幕
 static void create_screen() {
-    if (screen) return;
+    if (screen){
+        lv_obj_delete(screen);
+        screen = nullptr;
+    }
 
     // 1. 使用标准框架构建 (自动应用深蓝渐变背景 + 玻璃质感 Header/Footer)
     BaseScreenParts parts = create_base_screen(""); 
@@ -141,6 +144,24 @@ static void create_screen() {
     lv_obj_clean(parts.header); 
 
     UiManager::getInstance()->registerScreen(ScreenType::MAIN, &screen);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(screen, [](lv_event_t * e) {
+        screen = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+
+    // 设置 Flex 布局：两端对齐
+    lv_obj_set_flex_flow(parts.header, LV_FLEX_FLOW_ROW); // 行布局
+    // SPACE_BETWEEN 会自动把第一个元素推到最左，第二个推到最右
+    lv_obj_set_flex_align(parts.header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    // 这里设置 10px，意味着左边的标签离左边 10px，右边的标签离右边 10px
+    lv_obj_set_style_pad_left(parts.header, 10, 0);
+    lv_obj_set_style_pad_right(parts.header, 10, 0);
+    lv_obj_set_style_pad_top(parts.header, 0, 0);
+    lv_obj_set_style_pad_bottom(parts.header, 0, 0);
 
     // B. 左侧：日期 (Year-Month-Day)
     lv_obj_t* obj_date = lv_label_create(parts.header);

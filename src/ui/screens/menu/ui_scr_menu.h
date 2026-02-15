@@ -9,7 +9,7 @@ namespace menu {
 /**
  * @brief 加载系统菜单屏幕
 */
-void load_screen();
+void load_menu_screen();
 
 }
 }

@@ -38,6 +38,7 @@ void UiManager::resetKeypadGroup() {
     }
 }
 
+// 添加对象到组
 void UiManager::addObjToGroup(lv_obj_t* obj) {
     if (g_keypad_group && obj) {
         lv_group_add_obj(g_keypad_group, obj);

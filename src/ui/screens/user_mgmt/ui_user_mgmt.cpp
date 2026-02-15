@@ -62,11 +62,6 @@ static lv_image_dsc_t img_dsc_reg_cam = {
     .reserved = 0
 };
 
-// 辅助：统一返回主菜单
-static void back_to_main_menu() {
-    ui::menu::load_screen(); 
-}
-
 // 辅助：统一显示操作结果弹窗
 void user_init() {
     g_reg_user_id = 0;
@@ -77,57 +72,92 @@ void user_init() {
 // 1. 员工管理菜单 (Menu Screen)
 // =========================================================
 
-// 菜单按钮事件回调
-static void menu_btn_event_cb(lv_event_t *e) {
+// 员工管理菜单按钮事件回调
+static void user_menu_btn_event_cb(lv_event_t *e) {
     const char* tag = (const char*)lv_event_get_user_data(e);
     lv_event_code_t code = lv_event_get_code(e);
 
+    uint32_t key = 0;
+    // 获取按键值 (如果不是按键事件，key 会是 0)
+    if(code==LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 纯按键逻辑 (处理导航、退出、或者未来的数字快捷键)
     if (code == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
-        
-        // 物理按键导航逻辑
-        if (key == LV_KEY_DOWN) lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
-        else if (key == LV_KEY_UP) lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
-        else if (key == LV_KEY_ESC) back_to_main_menu();
-        
-        else if (key == LV_KEY_ENTER) {
-            if (strcmp(tag, "LIST") == 0) load_user_list_screen();
-            else if (strcmp(tag, "REG") == 0) load_user_register_form();
-            else if (strcmp(tag, "DEL") == 0) load_user_delete_screen();
-        }
+
+        if(key == LV_KEY_ESC) {
+             ui::menu::load_menu_screen(); // 按 ESC 返回主页
+             return; // 处理完返回后直接返回，避免继续执行下面的导航逻辑
+         }
+        // 导航
+        if (key == LV_KEY_DOWN) {
+            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下导航
+        } 
+        else if (key == LV_KEY_UP) {
+            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上导航
+        } 
+    }
+    
+    // 2. 触发逻辑 (处理 回车键 和 触摸点击)
+    // 注意：LVGL 会自动把 LV_KEY_ENTER 转换成 LV_EVENT_CLICKED，
+    // 所以我们这里只需要处理 CLICKED，就能同时兼容 触摸屏 和 实体键盘回车。
+    else if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+
+        lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
+
+        if (tag == nullptr) return;// 安全检查
+
+        // 根据按钮的 user_data（tag）来区分功能
+        if (strcmp(tag, "LIST") == 0)      load_user_list_screen();// 员工列表
+        else if (strcmp(tag, "REG") == 0)  load_user_register_form();// 员工注册
+        else if (strcmp(tag, "DEL") == 0)  load_user_delete_screen();//删除员工
     }
 }
 
 // 主菜单界面实现
 void load_user_menu_screen() {
-    if (scr_menu) lv_obj_delete(scr_menu);
-    
-    BaseScreenParts parts = create_base_screen("user_mgmt / 员工管理");
+    if (scr_menu){
+        lv_obj_delete(scr_menu);
+        scr_menu = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("员工管理");
     scr_menu = parts.screen;
-    lv_obj_add_style(scr_menu, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::USER_MGMT, &scr_menu);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_menu, [](lv_event_t * e) {
+        scr_menu = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t * grid = create_menu_grid_container(parts.content);// 创建统一样式的菜单 Grid 容器
 
     static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
     static int32_t row_dsc[] = {70, 70, 70, LV_GRID_TEMPLATE_LAST};
-
-    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
+    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);// 设置 Grid 行列描述
 
     // 创建按钮
-    create_sys_grid_btn(grid, 0, LV_SYMBOL_LIST, "User List", "员工列表", menu_btn_event_cb, "LIST");
-    create_sys_grid_btn(grid, 1, LV_SYMBOL_PLUS, "Register", "员工注册", menu_btn_event_cb, "REG");
-    create_sys_grid_btn(grid, 2, LV_SYMBOL_TRASH, "Delete", "删除员工", menu_btn_event_cb, "DEL");
+    create_sys_grid_btn(grid, 0, "1. ", "User List", "员工列表", user_menu_btn_event_cb, "LIST");
+    create_sys_grid_btn(grid, 1, "2. ", "Register", "员工注册", user_menu_btn_event_cb, "REG");
+    create_sys_grid_btn(grid, 2, "3. ", "Delete", "删除员工", user_menu_btn_event_cb, "DEL");
     
-    UiManager::getInstance()->resetKeypadGroup();
-    for(uint32_t i=0; i<lv_obj_get_child_cnt(grid); i++) {
-        UiManager::getInstance()->addObjToGroup(lv_obj_get_child(grid, i));
+    UiManager::getInstance()->resetKeypadGroup();// 按键组管理
+
+    uint32_t child_cnt = lv_obj_get_child_cnt(grid);// 遍历容器子对象(按钮)加入组
+    for(uint32_t i=0; i<child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(grid, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
     }
-    if(lv_obj_get_child_cnt(grid) > 0) lv_group_focus_obj(lv_obj_get_child(grid, 0));
-    UiManager::getInstance()->addObjToGroup(scr_menu);
+    // 聚焦第一个按钮
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(grid, 0));
+    }
 
     lv_screen_load(scr_menu);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_menu);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_menu);// 加载后销毁其他屏幕，保持资源清晰
 }
 
 // =========================================================
@@ -136,37 +166,61 @@ void load_user_menu_screen() {
 
 // 列表项事件回调
 static void list_item_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
-        if (key == LV_KEY_ENTER) {
-            int uid = (int)(intptr_t)lv_obj_get_user_data((lv_obj_t*)lv_event_get_target(e));
-            load_user_info_screen(uid);
-        } else if (key == LV_KEY_ESC) {
-            load_user_menu_screen();
-        } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
-        } else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
-        }
+    lv_event_code_t code = lv_event_get_code(e);
+    uint32_t key = 0;
+
+    // 获取按键值 (如果不是按键事件，key 会是 0)
+    if(code==LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 导航逻辑 (兼容键盘方向键)
+    if (code == LV_EVENT_KEY) {
+        if(key == LV_KEY_ESC) {
+            load_user_menu_screen(); // 返回主菜单
+            return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
+         } 
+        else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下或向右导航
+            return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
+        } 
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上或向左导航
+            return;
+         }
+    }
+    
+    // 2. 跳转详情页逻辑(逻辑：如果收到“点击” 或者 “按键是回车” -> 都视为触发)
+    if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+        
+        lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
+
+        // 获取传递过来的 User ID
+        // 注意：user_data 是在创建按钮时传入的 uid
+        int uid = (int)(intptr_t)lv_event_get_user_data(e);
+        
+        load_user_info_screen(uid);// 跳转到员工详情页，传入 User ID
     }
 }
 
 // 员工列表界面实现
 void load_user_list_screen() {
-    if (scr_list) lv_obj_delete(scr_list);
+    if (scr_list){
+        lv_obj_delete(scr_list);
+        scr_list = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("User List / 员工列表");
+    BaseScreenParts parts = create_base_screen("员工列表");
     scr_list = parts.screen;
-    lv_obj_add_style(scr_list, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::USER_LIST, &scr_list);
 
+    // 绑定销毁回调
     lv_obj_add_event_cb(scr_list, [](lv_event_t * e) {
         scr_list = nullptr;
         obj_list_view = nullptr; // 把这个全局内容区指针也清空！
     }, LV_EVENT_DELETE, NULL);
 
-    // 清空上一个界面的按键残留组
-    UiManager::getInstance()->resetKeypadGroup();
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // ==========================================
     // 将内容区改为 Flex 垂直布局，方便表头和列表堆叠
@@ -293,7 +347,6 @@ void load_user_list_screen() {
             lv_async_call([](void*){ load_user_menu_screen(); }, nullptr); // 防卡死异步调用
         }
     }, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(scr_list);
 
     // 加载这个全新生成的屏幕，并销毁其他老旧屏幕
     lv_screen_load(scr_list);
@@ -432,13 +485,22 @@ static void show_modal_msg(const char* msg, lv_obj_t* restore_focus_obj) {
 
 // 注册 Step 1: 加载表单
 void load_user_register_form() {
-    if (scr_register) lv_obj_delete(scr_register);
+    if (scr_register){
+        lv_obj_delete(scr_register);
+        scr_register = nullptr;
+    }
 
     int next_user_id = UiController::getInstance()->generateNextUserId();
-    BaseScreenParts parts = create_base_screen("register / 员工注册");
+    BaseScreenParts parts = create_base_screen("员工注册");
     scr_register = parts.screen;
-    lv_obj_add_style(scr_register, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::REGISTER, &scr_register);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_register, [](lv_event_t * e) {
+        scr_register = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 设置内容区为垂直 Flex 布局，方便后续堆叠表单行和按钮
     lv_obj_set_flex_flow(parts.content, LV_FLEX_FLOW_COLUMN);
@@ -722,12 +784,21 @@ static void register_btn_next_event_handler(lv_event_t * e) {
 
 // 注册 Step 2: 加载拍照界面
 void load_user_register_camera_step() {
-    if (scr_camera) lv_obj_delete(scr_camera);
+    if (scr_camera){
+        lv_obj_delete(scr_camera);
+        scr_camera = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("camera / 拍照");
+    BaseScreenParts parts = create_base_screen("注册拍照");
     scr_camera = parts.screen;
-    lv_obj_add_style(scr_camera, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::REGISTER_CAMERA, &scr_camera);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_camera, [](lv_event_t * e) {
+        scr_camera = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
     
     // 准备摄像头数据显示 
     static lv_image_dsc_t img_dsc;
@@ -830,12 +901,21 @@ static void reg_step2_event_cb(lv_event_t *e) {
 // =========================================================
 
 void load_user_delete_screen() {
-    if(scr_del) lv_obj_delete(scr_del);
+    if(scr_del){
+        lv_obj_delete(scr_del);
+        scr_del = nullptr;
+    }
 
-    BaseScreenParts parts = create_base_screen("Delete_user / 删除用户");
+    BaseScreenParts parts = create_base_screen("删除用户");
     scr_del = parts.screen;
-    lv_obj_add_style(scr_del, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::DELETE_USER, &scr_del);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_del, [](lv_event_t * e) {
+        scr_del = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+    
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 输入框
     lv_obj_t *ta_id = lv_textarea_create(scr_del);
@@ -903,10 +983,16 @@ void load_user_info_screen(int user_id) {
         scr_info = nullptr;
     }
 
-    BaseScreenParts parts = create_base_screen("User_Info / 员工详情");
+    BaseScreenParts parts = create_base_screen("员工详情");
     scr_info = parts.screen;
-    lv_obj_add_style(scr_info, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::USER_INFO, &scr_info);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_info, [](lv_event_t * e) {
+        scr_info = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     UserData u = UiController::getInstance()->getUserInfo(user_id);// 从业务层获取用户数据
 
@@ -1079,10 +1165,16 @@ void load_user_password_change_screen(int user_id) {
         scr_pwd = nullptr;
     }
 
-    BaseScreenParts parts = create_base_screen("password / 设置密码");
+    BaseScreenParts parts = create_base_screen("密码设置");
     scr_pwd = parts.screen;
-    lv_obj_add_style(scr_pwd, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::PWD_CHANGE, &scr_pwd);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_pwd, [](lv_event_t * e) {
+        scr_pwd = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 容器
     lv_obj_t *cont = lv_obj_create(scr_pwd);
@@ -1192,10 +1284,16 @@ void load_user_role_change_screen(int user_id, int current_role) {
         scr_role = nullptr;
     }
 
-    BaseScreenParts parts = create_base_screen("role / 设置权限");
+    BaseScreenParts parts = create_base_screen("设置权限");
     scr_role = parts.screen;
-    lv_obj_add_style(scr_role, &style_base, 0);
     UiManager::getInstance()->registerScreen(ScreenType::ROLE_AUTH, &scr_role);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_role, [](lv_event_t * e) {
+        scr_role = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 输入框：验证当前用户密码
     lv_obj_t *ta = lv_textarea_create(scr_role);
