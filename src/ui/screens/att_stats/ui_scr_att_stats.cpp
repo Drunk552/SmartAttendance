@@ -387,49 +387,35 @@ void create_att_stats_menu_screen() {
 
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
-    lv_obj_t * sub_screen_cont = create_menu_grid_container(parts.content);
-
-    // Grid 布局 - 1列 5行 (列表式布局，清晰易读)
-    static int32_t col_dsc[] = {220, LV_GRID_TEMPLATE_LAST}; 
-    static int32_t row_dsc[] = {45, 45, 45, 45, 45, LV_GRID_TEMPLATE_LAST}; 
-
-    lv_obj_set_grid_dsc_array(sub_screen_cont, col_dsc, row_dsc);// 设置 Grid 描述数组
-    lv_obj_set_style_pad_row(sub_screen_cont, 5, 0); // 设置行间距
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
     // 创建按钮 
     // 参数: 父对象, 行号, 图标, 英文标题, 中文标题, 回调, 索引(作为user_data)
     
     // 按钮 0: 下载考勤报表
-    create_sys_grid_btn(sub_screen_cont, 0, " ", "1.", "下载考勤报表", 
-                        stats_menu_btn_cb, (const char*)(intptr_t)0);
+    create_sys_list_btn(list, "1. ", "", "下载考勤报表", stats_menu_btn_cb, (const char*)(intptr_t)0);
 
     // 按钮 1: 下载个人考勤报表
-    create_sys_grid_btn(sub_screen_cont, 1, " ", "2.", "下载个人考勤报表", 
-                        stats_menu_btn_cb, (const char*)(intptr_t)1);
+    create_sys_list_btn(list, "2. ", "", "下载个人考勤报表", stats_menu_btn_cb, (const char*)(intptr_t)1);
 
     // 按钮 2: 下载员工设置 (占位)
-    create_sys_grid_btn(sub_screen_cont, 2, " ", "3.", "下载员工设置", 
-                        stats_menu_btn_cb, (const char*)(intptr_t)2);
+    create_sys_list_btn(list, "3. ", "", "下载员工设置", stats_menu_btn_cb, (const char*)(intptr_t)2);
 
     // 按钮 3: 上传员工设置 (占位)
-    create_sys_grid_btn(sub_screen_cont, 3, " ", "4.", "上传员工设置", 
-                        stats_menu_btn_cb, (const char*)(intptr_t)3);
+    create_sys_list_btn(list, "4. ", "", "上传员工设置", stats_menu_btn_cb, (const char*)(intptr_t)3);
                         
     // 按钮 4: 下载员工数据 (占位)
-    create_sys_grid_btn(sub_screen_cont, 4, " ", "5.", "下载员工数据", 
-                        stats_menu_btn_cb, (const char*)(intptr_t)4);
-
-    //UiManager::getInstance()->resetKeypadGroup();// 按键组管理
+    create_sys_list_btn(list, "5. ", "", "下载员工数据", stats_menu_btn_cb, (const char*)(intptr_t)4);
 
     // 遍历容器子对象(按钮)加入组
-    uint32_t child_cnt = lv_obj_get_child_cnt(sub_screen_cont);
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);
     for(uint32_t i=0; i < child_cnt; i++) {
-        lv_obj_t* btn = lv_obj_get_child(sub_screen_cont, i);
+        lv_obj_t* btn = lv_obj_get_child(list, i);
         UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个
     if(child_cnt > 0) {
-        lv_group_focus_obj(lv_obj_get_child(sub_screen_cont, 0));
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
     }
 
     lv_screen_load(scr_stats);

@@ -87,6 +87,20 @@ std::vector<DeptInfo> UiController::getDepartmentList() {
     return db_get_departments();
 }
 
+// 通过部门 ID 获取部门名称的实现
+std::string UiController::getDeptNameById(int deptId) {
+    // 1. 获取所有部门列表
+    std::vector<DeptInfo> depts = getDepartmentList();
+    
+    // 2. 遍历查找匹配的 ID
+    for (const auto& dept : depts) {
+        if (dept.id == deptId) {
+            return dept.name; // 找到了，返回真实部门名称
+        }
+    }
+    return "未知部门"; // 没找到时的默认返回值
+}
+
 bool UiController::registerNewUser(const std::string& name, int deptId) {
     // 调用业务层接口
     return business_register_user(name.c_str(), deptId);
@@ -176,13 +190,29 @@ bool UiController::updateUserName(int userId, const std::string& newName) {
     return db_update_user_basic(userId, newName, user.dept_id, user.role, user.card_id);
 }
 
+//更新用户部门信息
+bool UiController::updateUserDept(int userId, int newDeptId) {
+    // 1. 先获取该用户当前所有的基本信息
+    UserData currentUser = getUserInfo(userId);
+    
+    // 2. 调用 db_update_user_basic，只把 dept_id 替换成新的，其他用旧的
+    return db_update_user_basic(userId, currentUser.name, newDeptId, currentUser.role, currentUser.card_id);
+}
+
+//更新用户人脸
+bool UiController::updateUserFace(int userId) {
+    // 直接调用业务层刚刚封装好的接口！
+    // 业务层会自动抓取当前画面、更新数据库，并刷新识别模型。
+    return business_update_user_face(userId);
+}
+
 // 更新用户密码实现
 bool UiController::updateUserPassword(int userId, const std::string& newPassword) {
     // 底层有单独修改密码的接口，直接调用即可
     return db_update_user_password(userId, newPassword);
 }
 
-// 更新用户角色实现
+// 更新用户权限实现
 bool UiController::updateUserRole(int userId, int newRole) {
     // 1. 获取当前信息
     UserData user = db_get_user_info(userId);

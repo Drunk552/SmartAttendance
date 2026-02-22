@@ -39,32 +39,21 @@ void load_att_design_menu_screen() {
 
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
-    lv_obj_t *grid = create_menu_grid_container(parts.content);// 创建统一样式的菜单 Grid 容器
-
-    // [Constraint] 1列 Grid 菜单
-    static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
-    static int32_t row_dsc[] = {50, 50, 50, 50, LV_GRID_TEMPLATE_LAST};
-
-    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
-
-    lv_obj_set_style_pad_row(grid, 10, 0);
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
     
-    lv_obj_t *b1 = create_sys_grid_btn(grid, 0, "1. ", "Depts", "部门设置", design_event_cb, "DEPT");
-    lv_obj_t *b2 = create_sys_grid_btn(grid, 1, "2. ", "Shifts", "班次设置", design_event_cb, "SHIFT");
-    lv_obj_t *b3 = create_sys_grid_btn(grid, 2, "3. ", "Rules", "考勤规则", design_event_cb, "RULE");
-    lv_obj_t *b4 = create_sys_grid_btn(grid, 3, "4. ", "Schedule", "人员排班", design_event_cb, "SCH");
-
-    // 按键组管理
-    UiManager::getInstance()->resetKeypadGroup();
+    create_sys_list_btn(list, "1. ", "", "部门设置", design_event_cb, "DEPT");
+    create_sys_list_btn(list, "2. ", "", "班次设置", design_event_cb, "SHIFT");
+    create_sys_list_btn(list, "3. ", "", "考勤规则", design_event_cb, "RULE");
+    create_sys_list_btn(list, "4. ", "", "人员排班", design_event_cb, "SCH");
     
-    uint32_t child_cnt = lv_obj_get_child_cnt(grid);
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);
     for(uint32_t i = 0; i < child_cnt; i++) {
-        UiManager::getInstance()->addObjToGroup(lv_obj_get_child(grid, i));
+        UiManager::getInstance()->addObjToGroup(lv_obj_get_child(list, i));
     }
     
     // 默认聚焦第一个
     if (child_cnt > 0) {
-        lv_group_focus_obj(lv_obj_get_child(grid, 0));
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
     }
 
     // 处理 ESC 返回

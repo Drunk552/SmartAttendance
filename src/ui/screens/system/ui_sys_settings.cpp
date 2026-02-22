@@ -515,7 +515,7 @@ void load_sys_settings_basic_screen() {
     for (int i = 0; i < 9; i++) {
         // 创建主按钮
         lv_obj_t *btn = ::create_sys_grid_btn(scroll, i, basic_items[i].icon, basic_items[i].en_text, basic_items[i].cn_text, basic_event_cb,  basic_items[i].tag);
-        lv_obj_set_width(btn, 220);
+        lv_obj_set_width(btn, 240);
         
         // 添加当前值标签
         char value_str[32] = {0};
@@ -780,14 +780,14 @@ static void advanced_setting_event_cb(lv_event_t *e) {
     }
 }
 
-// 主屏幕实现
+// 高级设置屏幕实现
 void load_system_advanced_screen() {
     if (scr_sys){
         lv_obj_delete(scr_sys);
         scr_sys = nullptr;
     }
 
-    BaseScreenParts parts = create_base_screen("系统设置");
+    BaseScreenParts parts = create_base_screen("高级设置");
     scr_sys = parts.screen;
     UiManager::getInstance()->registerScreen(ScreenType::SYS_SETTINGS, &scr_sys);
 
@@ -801,11 +801,9 @@ void load_system_advanced_screen() {
     lv_obj_t *grid = create_menu_grid_container(parts.content);// 创建统一样式的菜单 Grid 容器
 
     //Grid布局
-    static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
+    static int32_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
     static int32_t row_dsc[] = {50, 50, 50, 50, 50, LV_GRID_TEMPLATE_LAST};
-
     lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
-    lv_obj_set_style_pad_row(grid, 10, 0);
 
     //创建5个设置项按钮
     const char* icons[] = {LV_SYMBOL_TRASH, LV_SYMBOL_CLOSE, LV_SYMBOL_WARNING, LV_SYMBOL_REFRESH, LV_SYMBOL_DOWNLOAD}; // 5个图标
@@ -907,7 +905,7 @@ void load_system_param_screen() {
     lv_obj_add_style(title, &style_text_cn, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
-    static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
+    static int32_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
     static int32_t row_dsc[] = {50, 50, LV_GRID_TEMPLATE_LAST};
     
     lv_obj_t *grid = lv_obj_create(scr_param);
@@ -1019,7 +1017,7 @@ void load_self_check_menu_screen() {
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
     // Grid布局
-    static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
+    static int32_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
     static int32_t row_dsc[] = {50, 50, 50, LV_GRID_TEMPLATE_LAST};
 
     lv_obj_t* grid = lv_obj_create(scr_self_check);
@@ -1165,110 +1163,88 @@ void load_fingerprint_test_screen() {
 
 // =================系统主界面============
 
-// 菜单按钮事件回调
+// 系统设置菜单按钮事件回调
 static void sys_main_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
     const char* tag = (const char*)lv_event_get_user_data(e);
+    lv_event_code_t code = lv_event_get_code(e);
 
+    uint32_t key = 0;
+    // 获取按键值 (如果不是按键事件，key 会是 0)
+    if(code==LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 纯按键逻辑 (处理导航、退出、或者未来的数字快捷键)
     if (code == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
 
-    if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-        lv_obj_t *grid = lv_obj_get_parent(btn);
-        uint32_t total = lv_obj_get_child_cnt(grid);
-        uint32_t index = lv_obj_get_index(btn);
-        uint32_t next_index = (index + 1) % total;
-        lv_group_focus_obj(lv_obj_get_child(grid, next_index));
-        }
-
-    else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-        lv_obj_t *grid = lv_obj_get_parent(btn);
-        uint32_t total = lv_obj_get_child_cnt(grid);
-        uint32_t index = lv_obj_get_index(btn);
-        uint32_t next_index = (index + total - 1) % total;
-        lv_group_focus_obj(lv_obj_get_child(grid, next_index));
-        }
+        if(key == LV_KEY_ESC) {
+             ui::menu::load_menu_screen(); // 按 ESC 返回主页
+             return; // 处理完返回后直接返回，避免继续执行下面的导航逻辑
+         }
+        // 导航
+        if (key == LV_KEY_DOWN) {
+            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下导航
+        } 
+        else if (key == LV_KEY_UP) {
+            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上导航
+        } 
+    }
     
-    else if (key == LV_KEY_ESC) {
-        load_sys_settings_menu_screen(); // 返回上一级
-        }
+    // 2. 触发逻辑 (处理 回车键 和 触摸点击)
+    // 注意：LVGL 会自动把 LV_KEY_ENTER 转换成 LV_EVENT_CLICKED，
+    // 所以我们这里只需要处理 CLICKED，就能同时兼容 触摸屏 和 实体键盘回车。
+    else if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
 
-    else if (key == LV_KEY_ENTER) {
-        if (strcmp(tag, "PARAM") == 0) {
-            // 参数设置
-            load_system_param_screen();
-        }
+        lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
 
-        else if (strcmp(tag, "BASIC") == 0) {
-            // 基础设置
-            ui::system::load_sys_settings_basic_screen(); 
-        }
+        if (tag == nullptr) return;// 安全检查
 
-        else if (strcmp(tag, "ADVANCED") == 0) {
-            // 高级设置
-            ui::system::load_system_advanced_screen();
-        }
-
-        else if (strcmp(tag, "Self-checking") == 0) { 
-            load_self_check_menu_screen();
-
-            // 延时退出
-            lv_timer_t *t = lv_timer_create([](lv_timer_t*){ exit(0); }, 2000, nullptr);
-            lv_timer_set_repeat_count(t, 1);
-        }
-     }
-  }
+        // 根据按钮的 user_data（tag）来区分功能
+        if (strcmp(tag, "BASIC") == 0)      load_sys_settings_basic_screen();// 基础设置
+        else if (strcmp(tag, "ADVANCED") == 0)  load_system_advanced_screen();// 高级设置
+        else if (strcmp(tag, "Self-checking") == 0)  load_self_check_menu_screen();//自检功能
+    }
 }
 
 // 主屏幕实现
 void load_sys_settings_menu_screen() {
-    if (scr_sys) lv_obj_delete(scr_sys);
-    scr_sys = lv_obj_create(nullptr);
-    lv_obj_add_style(scr_sys, &style_base, 0);
+
+    if (scr_sys) {
+        lv_obj_delete(scr_sys);
+        scr_sys = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("系统设置");
+    scr_sys = parts.screen;
     UiManager::getInstance()->registerScreen(ScreenType::SYS_SETTINGS, &scr_sys);
 
-    lv_obj_t *title = lv_label_create(scr_sys);
-    lv_label_set_text(title, "系统设置 / Settings");
-    lv_obj_add_style(title, &style_text_cn, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_sys, [](lv_event_t * e) {
+        scr_sys = nullptr;
+    }, LV_EVENT_DELETE, NULL);
 
-    // Grid 布局
-    static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
-    static int32_t row_dsc[] = {50, 50,50,50, LV_GRID_TEMPLATE_LAST};
-    
-    lv_obj_t *grid = lv_obj_create(scr_sys);
-    lv_obj_set_size(grid, 220, 260);
-    lv_obj_center(grid);
-    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
-    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(grid, 0, 0);
-    lv_obj_set_style_pad_row(grid, 10, 0);
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
-    //基础设置
-    lv_obj_t *b1 = ::create_sys_grid_btn(grid, 0, LV_SYMBOL_SETTINGS, "Basic", "基础设置", sys_main_event_cb, "BASIC");
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
-    // 高级设置
-    lv_obj_t *b2 = ::create_sys_grid_btn(grid, 1, LV_SYMBOL_SETTINGS, "Advanced", "高级设置", sys_main_event_cb, "ADVANCED");
+    //1.基础设置
+    create_sys_list_btn(list, "1. ", "", "基础设置", sys_main_event_cb, "BASIC");
+    // 2.高级设置
+    create_sys_list_btn(list, "2. ", "", "高级设置", sys_main_event_cb, "ADVANCED");
+    // 3.参数设置
+    create_sys_list_btn(list, "3. ", "", "参数设置", sys_main_event_cb, "PARAM");
+    // 4.自检功能
+    create_sys_list_btn(list, "4. ", "", "自检功能", sys_main_event_cb, "Self-checking");
 
-    // 参数设置
-    lv_obj_t *b3 = ::create_sys_grid_btn(grid, 2, LV_SYMBOL_SETTINGS, "Params", "参数设置", sys_main_event_cb, "PARAM");
-
-    // 自检功能
-    lv_obj_t *b4 = ::create_sys_grid_btn(grid, 3, LV_SYMBOL_SETTINGS, "Self-checking", "自检功能", sys_main_event_cb, "Self-checking");
-
-    UiManager::getInstance()->resetKeypadGroup();// 先清空组，后续重新添加以确保正确顺序
-    UiManager::getInstance()->addObjToGroup(b1);//基础设置
-    UiManager::getInstance()->addObjToGroup(b2);//高级设置
-    UiManager::getInstance()->addObjToGroup(b3);//参数设置
-    UiManager::getInstance()->addObjToGroup(b4);//自检功能  
-    lv_group_focus_obj(b1);// 默认焦点在基础设置
-
-    lv_obj_add_event_cb(scr_sys, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) ui::menu::load_menu_screen();
-    }, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(scr_sys);
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
+    for(uint32_t i=0; i<child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(list, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+    }
+    // 聚焦第一个按钮
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
+    }
 
     lv_screen_load(scr_sys);
     UiManager::getInstance()->destroyAllScreensExcept(scr_sys);

@@ -31,6 +31,7 @@ public:
     // --- 2. 员工管理类 ---
     int generateNextUserId();      // 替换原来的 get_next_available_id
     std::vector<DeptInfo> getDepartmentList();
+    std::string getDeptNameById(int deptId);//通过部门ID获取部门名称
     bool registerNewUser(const std::string& name, int deptId);
     
     // 获取用于列表显示的用户数据
@@ -56,6 +57,10 @@ public:
     void startBackgroundServices(); // 启动所有后台线程
     // 更新用户名称
     bool updateUserName(int userId, const std::string& newName);
+    //更新用户部门
+    bool updateUserDept(int userId, int newDeptId);
+    //更新用户人脸
+    bool updateUserFace(int userId);
     // 更新用户密码
     bool updateUserPassword(int userId, const std::string& newPassword);
     // 更新用户角色 (0:普通, 1:管理员)

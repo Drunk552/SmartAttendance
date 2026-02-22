@@ -810,7 +810,7 @@ ShiftInfo db_get_user_shift(int user_id) {
     return s;
 }
 
-//  用户信息修改接口 (不含密码)
+//  用户信息修改接口 (不含人脸，密码)
 bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int privilege, const std::string& card_id) {
     
     std::lock_guard<std::recursive_mutex> lock(g_db_mutex);// 加锁保护
@@ -839,6 +839,44 @@ bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int
     
     if (ok) std::cout << "[Data] User " << user_id << " info updated." << std::endl;
     return ok;
+}
+
+//单独更新用户人脸数据
+bool db_update_user_face(int user_id, const cv::Mat& face_image) {
+
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex); // 确保线程安全
+    
+    if (!db) return false;
+    
+    // 如果传入的图像为空，直接返回失败
+    if (face_image.empty()) {
+        std::cerr << "[DB] Error: Cannot update face with empty image." << std::endl;
+        return false;
+    }
+
+    // 1. 将 OpenCV 的 Mat 图像转为二进制流 (复用你现有的辅助函数)
+    std::vector<uchar> img_data = matToBytes(face_image);
+
+    // 2. 准备 SQL 语句
+    const char* sql = "UPDATE users SET face_image=? WHERE id=?;";
+    sqlite3_stmt* stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        std::cerr << "[DB] SQL Error: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    // 3. 绑定参数
+    // 参数1: BLOB 数据 (人脸图片二进制)
+    sqlite3_bind_blob(stmt, 1, img_data.data(), img_data.size(), SQLITE_TRANSIENT);
+    // 参数2: user_id
+    sqlite3_bind_int(stmt, 2, user_id);
+
+    // 4. 执行并检查是否成功
+    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+    
+    sqlite3_finalize(stmt); // 释放资源
+    return success;
 }
 
 // 用户密码更新接口

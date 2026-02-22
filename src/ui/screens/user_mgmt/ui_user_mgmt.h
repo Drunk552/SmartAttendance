@@ -39,15 +39,29 @@ void load_user_register_camera_step();
 void load_user_info_screen(int user_id);
 
 /**
+ * @brief 修改姓名界面
+ */
+void load_user_edit_name_screen();
+
+/**
+ * @brief 修改部门界面
+ */
+void load_user_edit_dept_screen();
+
+/**
+ * @brief 注册密码界面
+ */
+void load_user_register_password_screen();
+
+/**
+ * @brief 修改密码界面
+ */
+void load_user_edit_password_screen();
+
+/**
  * @brief 加载删除员工确认页
  */
 void load_user_delete_screen();
-
-/**
- * @brief 加载密码修改页 (Level 3-A)
- * @param user_id 员工ID
- */
-void load_user_password_change_screen(int user_id);
 
 /**
  * @brief 加载权限变更页 (Level 3-B)

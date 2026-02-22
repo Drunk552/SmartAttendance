@@ -1241,6 +1241,64 @@ bool business_register_user(const char* name, int dept_id) {
     }
 } 
 
+/**
+ * @brief 使用当前帧更新老用户的人脸
+ * @param user_id 要更新的老用户 ID
+ * @return true 成功；false 失败
+ */
+bool business_update_user_face(int user_id) {
+    // 1. 加锁保护读取
+    std::lock_guard<std::mutex> lock(g_data_mutex);
+
+    // 2. 检查是否有画面
+    if (current_frame.empty()) {
+        std::cerr << "[Business] Error: No camera frame for updating face!\n";
+        return false;
+    }
+
+    std::cout << "[Business] Updating face for user ID: " << user_id << "...\n";
+
+    // 3. 调用数据层接口更新数据库 (调用我们上一轮加的函数)
+    // 注意：确保该文件包含了 db_storage.h 并且能识别 db_update_user_face
+    if (db_update_user_face(user_id, current_frame)) {
+        std::cout << "[Business] DB Face Update Success! ID: " << user_id << "\n";
+        
+        // ========================================================
+        // 核心：更新人脸识别模型 (LBPH 支持给同一个 ID 增量追加人脸)
+        // ========================================================
+        cv::Mat gray_frame;
+        if (current_frame.channels() == 3) {
+            cv::cvtColor(current_frame, gray_frame, cv::COLOR_BGR2GRAY);
+        } else {
+            gray_frame = current_frame.clone();
+        }
+
+        std::vector<cv::Mat> new_imgs = { gray_frame };
+        std::vector<int> new_labels = { user_id };
+
+        // 增量更新模型特征
+        if (!trained) {
+            recog->train(new_imgs, new_labels);
+            trained = true;
+        } else {
+            recog->update(new_imgs, new_labels); // 追加特征
+        }
+
+        // 保存模型到磁盘
+        try {
+            recog->write(MODEL_FILE);
+            std::cout << ">>> [Business] 模型增量更新完成，已保存至: " << MODEL_FILE << std::endl;
+        } catch (const cv::Exception& e) {
+            std::cerr << ">>> [Error] 模型文件保存失败: " << e.what() << std::endl;
+        }
+
+        return true;
+    } else {
+        std::cerr << "[Business] DB Face Update Failed!\n";
+        return false;
+    }
+}
+
 // ==========================================
 // [Epic 3.4] 考勤记录接口实现
 // ==========================================

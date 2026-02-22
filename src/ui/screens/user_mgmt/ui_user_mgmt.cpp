@@ -25,20 +25,45 @@ static lv_obj_t *scr_info = nullptr;
 static lv_obj_t *scr_del = nullptr;
 static lv_obj_t *scr_pwd = nullptr;
 static lv_obj_t *scr_role = nullptr;
+static lv_obj_t *scr_edit_name = nullptr;
+static lv_obj_t *scr_edit_dept = nullptr;
+static lv_obj_t *scr_register_password = nullptr;
+static lv_obj_t *scr_edit_password = nullptr;
+
+// ================= [内部状态: 输入框指针] =================
+static lv_obj_t* g_ta_old_pwd = nullptr;     // 旧密码输入框
+static lv_obj_t* g_ta_new_pwd = nullptr;     // 新密码输入框
+static lv_obj_t* g_ta_confirm_pwd = nullptr; // 确认密码输入框
+static lv_obj_t* g_ta_edit_name = nullptr;   // 编辑姓名输入框
+static lv_obj_t* g_ta_edit_dept = nullptr;   // 编辑部门输入
+static lv_obj_t* g_ta_new_name = nullptr;   // 注册姓名输入框
+static lv_obj_t* g_dd_new_dept = nullptr;   // 注册部门下拉框
+
+static std::vector<int> g_dept_id_map;//专门用于保存下拉框每一项对应的真实数据库部门 ID
 
 // ================= [内部状态: 控件与数据] =================
 static lv_obj_t *obj_list_view = nullptr;
 static lv_obj_t *img_face_reg = nullptr;
+static lv_obj_t *g_btn_confirm = nullptr;//员工注册按钮
+static bool s_dept_ready_to_jump = false; // 记录下拉框状态：是否准备跳转
 
+// ================= [内部状态: 注册临时数据暂存] =================
 static int g_reg_user_id = 0;
 static std::string g_reg_name = "";
 static int g_reg_dept_id = 0;
+static int g_current_info_uid = 0;// 当前正在查看的员工 ID (用于 info screen)
+
+static bool g_is_updating_face = false;// 标记当前进入摄像头界面是为了“更新老员工”还是“注册新员工”
 
 // ================= [前向声明] =================
-static void force_nav_mode_timer_cb(lv_timer_t *t);
 static void form_nav_event_cb(lv_event_t *e);
 static void register_btn_next_event_handler(lv_event_t *e);
 static void reg_step2_event_cb(lv_event_t *e);
+static void register_user_event_cb(lv_event_t *e) ;
+void load_user_edit_name_screen();
+void load_user_edit_dept_screen();
+void load_user_register_password_screen();
+void load_user_edit_password_screen();
 
 //  用于异步关闭弹窗的上下文结构体
 struct MsgBoxCloseCtx {
@@ -87,6 +112,7 @@ static void user_menu_btn_event_cb(lv_event_t *e) {
     if (code == LV_EVENT_KEY) {
 
         if(key == LV_KEY_ESC) {
+            lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
              ui::menu::load_menu_screen(); // 按 ESC 返回主页
              return; // 处理完返回后直接返回，避免继续执行下面的导航逻辑
          }
@@ -115,7 +141,7 @@ static void user_menu_btn_event_cb(lv_event_t *e) {
     }
 }
 
-// 主菜单界面实现
+// 员工管理主菜单界面实现
 void load_user_menu_screen() {
     if (scr_menu){
         lv_obj_delete(scr_menu);
@@ -133,27 +159,21 @@ void load_user_menu_screen() {
 
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
-    lv_obj_t * grid = create_menu_grid_container(parts.content);// 创建统一样式的菜单 Grid 容器
-
-    static int32_t col_dsc[] = {200, LV_GRID_TEMPLATE_LAST};
-    static int32_t row_dsc[] = {70, 70, 70, LV_GRID_TEMPLATE_LAST};
-    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);// 设置 Grid 行列描述
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
     // 创建按钮
-    create_sys_grid_btn(grid, 0, "1. ", "User List", "员工列表", user_menu_btn_event_cb, "LIST");
-    create_sys_grid_btn(grid, 1, "2. ", "Register", "员工注册", user_menu_btn_event_cb, "REG");
-    create_sys_grid_btn(grid, 2, "3. ", "Delete", "删除员工", user_menu_btn_event_cb, "DEL");
-    
-    UiManager::getInstance()->resetKeypadGroup();// 按键组管理
+    create_sys_list_btn(list, "1. ", "", "员工列表", user_menu_btn_event_cb, "LIST");
+    create_sys_list_btn(list, "2. ", "", "员工注册", user_menu_btn_event_cb, "REG");
+    create_sys_list_btn(list, "3. ", "", "删除员工", user_menu_btn_event_cb, "DEL");
 
-    uint32_t child_cnt = lv_obj_get_child_cnt(grid);// 遍历容器子对象(按钮)加入组
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
-        lv_obj_t* btn = lv_obj_get_child(grid, i);
+        lv_obj_t* btn = lv_obj_get_child(list, i);
         UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
-        lv_group_focus_obj(lv_obj_get_child(grid, 0));
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
     }
 
     lv_screen_load(scr_menu);
@@ -178,6 +198,7 @@ static void list_item_event_cb(lv_event_t *e) {
     if (code == LV_EVENT_KEY) {
         if(key == LV_KEY_ESC) {
             load_user_menu_screen(); // 返回主菜单
+            lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
          } 
         else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
@@ -226,7 +247,7 @@ void load_user_list_screen() {
     // 将内容区改为 Flex 垂直布局，方便表头和列表堆叠
     // ==========================================
     lv_obj_set_flex_flow(parts.content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(parts.content, 5, 0);
+    lv_obj_set_style_pad_all(parts.content, 5, 0); // 内容区内边距 
     lv_obj_set_style_pad_gap(parts.content, 5, 0); // 表头和下方列表的间距
 
     // ==========================================
@@ -273,8 +294,8 @@ void load_user_list_screen() {
     lv_obj_set_flex_grow(obj_list_view, 1);// 让它占满剩余空间
     lv_obj_set_style_bg_opa(obj_list_view, LV_OPA_TRANSP, 0); // 让底层蓝色透过来
     lv_obj_set_style_border_width(obj_list_view, 0, 0);       // 去掉灰色边框
-    lv_obj_set_style_pad_all(obj_list_view, 10, 0);           // 左右上下留一点呼吸空间
-    lv_obj_set_style_pad_gap(obj_list_view, 8, 0);            // 列表项之间的间距
+    lv_obj_set_style_pad_all(obj_list_view, 0, 0);           // 左右上下留一点呼吸空间
+    lv_obj_set_style_pad_gap(obj_list_view, 5, 0);            // 列表项之间的间距
     lv_obj_set_flex_flow(obj_list_view, LV_FLEX_FLOW_COLUMN); // 开启垂直滚动的流式布局
 
     // 获取业务数据并动态生成列表项
@@ -292,22 +313,23 @@ void load_user_list_screen() {
         for (const auto& u : users) {
             lv_obj_t *btn = lv_button_create(obj_list_view); 
             lv_obj_set_width(btn, LV_PCT(100)); 
-            lv_obj_set_height(btn, 45);         
+            lv_obj_set_height(btn, 50); // 固定高度，宽度占满  
+            lv_obj_set_style_radius(btn, 0, 0);// 去掉圆角，方形按钮      
             
-            lv_obj_add_style(btn, &style_btn_default, 0);
-            lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUSED); 
+            lv_obj_add_style(btn, &style_btn_default, 0);// 默认样式
+            lv_obj_add_style(btn, &style_btn_focused, LV_STATE_FOCUSED); // 聚焦样式
             
             // 去除按钮默认的内边距，并开启和表头完全一致的横向布局
             lv_obj_set_style_pad_all(btn, 0, 0);
             lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             
-            std::string dname = u.dept_name.empty() ? "-" : u.dept_name;
+            std::string dname = u.dept_name.empty() ? "-" : u.dept_name;// 部门名称可能为空，显示为“-”
 
             // 第 1 列：工号 (25% 宽度)
             lv_obj_t * l_id = lv_label_create(btn);
             lv_obj_set_width(l_id, LV_PCT(25));
-            lv_label_set_long_mode(l_id, LV_LABEL_LONG_DOT); // 绝招：如果字太长，自动变成省略号(...)
+            lv_label_set_long_mode(l_id, LV_LABEL_LONG_DOT); // 如果字太长，自动变成省略号(...)
             lv_label_set_text_fmt(l_id, "%d", u.id);
             lv_obj_add_style(l_id, &style_text_cn, 0);
             lv_obj_set_style_text_align(l_id, LV_TEXT_ALIGN_CENTER, 0);
@@ -328,9 +350,9 @@ void load_user_list_screen() {
             lv_obj_add_style(l_dept, &style_text_cn, 0);
             lv_obj_set_style_text_align(l_dept, LV_TEXT_ALIGN_CENTER, 0);
 
-            // 绑定事件和组
-            lv_obj_set_user_data(btn, (void*)(intptr_t)u.id);
-            lv_obj_add_event_cb(btn, list_item_event_cb, LV_EVENT_KEY, nullptr);
+            // 绑定事件时传入 User ID 作为 user_data，方便在回调中识别哪个用户被点击了
+            lv_obj_add_event_cb(btn, list_item_event_cb, LV_EVENT_ALL, (void*)(intptr_t)u.id);
+
             UiManager::getInstance()->addObjToGroup(btn);
         }
         
@@ -353,143 +375,116 @@ void load_user_list_screen() {
     UiManager::getInstance()->destroyAllScreensExcept(scr_list);
 }
 
-// =========================================================
-// 3. 注册向导 (Registration Wizard) - 核心逻辑
-// =========================================================
-
-// 强制切回导航模式定时器回调
-static void force_nav_mode_timer_cb(lv_timer_t * t) {
-    if (UiManager::getInstance()->getKeypadGroup()) {
-        lv_group_set_editing(UiManager::getInstance()->getKeypadGroup(), false);
-    }
-    lv_timer_del(t); 
-}
-
-// 表单控件导航事件回调
-static void form_nav_event_cb(lv_event_t * e) {
+// 员工注册页面事件回调
+static void register_user_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t * obj = (lv_obj_t *)lv_event_get_target(e);
-    auto group = UiManager::getInstance()->getKeypadGroup();
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
 
-    if (code == LV_EVENT_FOCUSED) {
-        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_ORANGE), 0);
-        lv_obj_set_style_border_width(obj, 3, 0);
-
-        if (group) {
-            // 如果是下拉框或按钮，强制切回导航模式
-            if (lv_obj_check_type(obj, &lv_dropdown_class) || 
-                lv_obj_check_type(obj, &lv_button_class)) {
-                lv_group_set_editing(group, false);
-                lv_timer_create(force_nav_mode_timer_cb, 10, NULL); 
-            }
-            // 输入框保持编辑模式
-            else if (lv_obj_check_type(obj, &lv_textarea_class)) {
-                lv_group_set_editing(group, true);
-            }
-        }
+    uint32_t key = 0;
+    if(code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
     }
-    else if (code == LV_EVENT_DEFOCUSED) {
-        lv_obj_set_style_border_width(obj, 1, 0);
-        lv_obj_set_style_border_color(obj, lv_palette_main(LV_PALETTE_GREY), 0);
+
+    // 1. 处理 ESC 键退出
+    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
+        lv_indev_wait_release(lv_indev_get_act()); 
+        load_user_menu_screen(); 
+        return;
     }
-    else if (code == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
-        bool is_expanded = false;
-        if (lv_obj_check_type(obj, &lv_dropdown_class)) is_expanded = lv_dropdown_is_open(obj);
 
-        if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-            if (!is_expanded) {
-                if (group) lv_group_set_editing(group, false);
-                lv_group_focus_next(group);
+    // 2. 区分当前焦点所在控件
+    if (current_target == g_ta_new_name) {
+        // ================= 焦点在【姓名输入框】 =================
+        if (code == LV_EVENT_KEY) {
+            if (key == LV_KEY_ENTER || key == LV_KEY_DOWN) {
+                lv_group_focus_obj(g_dd_new_dept); // 跳到下拉框
+                lv_indev_wait_release(lv_indev_get_act());
             }
         }
-        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-            if (!is_expanded) {
-                if (group) lv_group_set_editing(group, false);
-                lv_group_focus_prev(group);
-            }
-        }
-        else if (key == LV_KEY_ENTER) {
-            if (lv_obj_check_type(obj, &lv_textarea_class)) {
-                if (group) lv_group_set_editing(group, false);
-                lv_group_focus_next(group);
-            }
-        }
-    }
-}
-
-// ---  辅助函数：支持物理按键回车关闭 ---
-static void show_modal_msg(const char* msg, lv_obj_t* restore_focus_obj) {
-    // 1. 创建标准消息框
-    lv_obj_t * mbox = lv_msgbox_create(NULL);
-    lv_msgbox_add_title(mbox, "提示");
-    lv_msgbox_add_text(mbox, msg);
-    
-    // 2. 添加按钮
-    lv_obj_t * btn = lv_msgbox_add_footer_button(mbox, "我知道了");
-    
-    // 3. 将按钮加入按键组并强制聚焦
-    lv_group_t * group = UiManager::getInstance()->getKeypadGroup();
-    lv_group_add_obj(group, btn); 
-    lv_group_focus_obj(btn);     
-
-    // 4. 处理按钮事件
-    lv_obj_add_event_cb(btn, [](lv_event_t* e) {
-        lv_event_code_t code = lv_event_get_code(e);
-        bool should_close = false;
-
-        // A. 触摸屏点击
-        if (code == LV_EVENT_CLICKED) {
-            should_close = true;
-        }
-        // B. 物理按键 (回车 或 Home键)
-        else if (code == LV_EVENT_KEY) {
-            uint32_t key = lv_event_get_key(e);
-            if (key == LV_KEY_ENTER || key == LV_KEY_HOME) {
-                should_close = true;
-            }
-        }
-
-        if (should_close) {
-            lv_obj_t* btn_obj = (lv_obj_t*)lv_event_get_target(e);
+    } 
+    else if (current_target == g_dd_new_dept) {
+        // ================= 焦点在【部门下拉框】 =================
+        if (code == LV_EVENT_KEY) {
             
-            // 1. 暂时禁用按钮，防止多次触发
-            lv_obj_clear_flag(btn_obj, LV_OBJ_FLAG_CLICKABLE);
-
-            // 2. 准备异步数据
-            // 获取 mbox (按钮的父对象的父对象)
-            lv_obj_t* mbox_obj = lv_obj_get_parent(lv_obj_get_parent(btn_obj));
-            // 获取要恢复焦点的对象
-            lv_obj_t* restore = (lv_obj_t*)lv_event_get_user_data(e);
-            
-            MsgBoxCloseCtx* ctx = new MsgBoxCloseCtx{mbox_obj, restore};
-
-            // 3. 异步延迟关闭！
-            // 等待当前的按键事件彻底结束，下一帧再关闭弹窗并恢复焦点
-            lv_async_call([](void* user_data){
-                MsgBoxCloseCtx* c = (MsgBoxCloseCtx*)user_data;
-                
-                // 关闭弹窗
-                if (c->mbox) lv_msgbox_close(c->mbox);
-                
-                // 恢复焦点 (此时回车键事件已经过去了，不会再误触)
-                if (c->restore_obj && lv_obj_is_valid(c->restore_obj)) {
-                    lv_group_focus_obj(c->restore_obj);
+            if (!lv_dropdown_is_open(g_dd_new_dept)) {
+                // 【状态 A：下拉框未展开】
+                if (key == LV_KEY_UP) {
+                    lv_group_focus_obj(g_ta_new_name); // 按 ↑：回到姓名
+                    lv_event_stop_processing(e);       // 切断事件，防止被下拉框底层吃掉！
+                    return;
+                } else if (key == LV_KEY_DOWN) {
+                    lv_group_focus_obj(g_btn_confirm); // 按 ↓：跳到确认按钮
+                    lv_event_stop_processing(e);       // 切断事件，防止被下拉框底层吃掉导致展开！
+                    return;
                 }
-                
-                delete c;
-            }, ctx);
+                // 注意：这里我们故意不拦截 LV_KEY_ENTER，让 LVGL 正常处理，从而“展开”下拉框。
+            } 
+            else {
+                // 【状态 B：下拉框已展开】
+                // 此时 ↑ ↓ 键用于在列表中挑选，不需要拦截。
+                if (key == LV_KEY_ENTER) {
+                    // 按下回车，LVGL 底层会选中列表项并自动关闭下拉框。
+                    // 此时我们不拦截，但我们在下一帧利用异步调用，自动把焦点甩给“确认按钮”！
+                    lv_async_call([](void*){
+                        if (g_btn_confirm && lv_obj_is_valid(g_btn_confirm)) {
+                            lv_group_focus_obj(g_btn_confirm);
+                        }
+                    }, nullptr);
+                }
+            }
         }
-    }, LV_EVENT_ALL, restore_focus_obj);
+    } 
+    else if (current_target == g_btn_confirm) {
+        // ================= 焦点在【确认按钮】 =================
+        if (code == LV_EVENT_KEY) {
+            if (key == LV_KEY_UP) {
+                lv_group_focus_obj(g_dd_new_dept); // 按 ↑ 回到下拉框
+                return; 
+            }
+        }
+
+        // 处理“确认注册”逻辑
+        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            if (!g_ta_new_name || !g_dd_new_dept) return;
+
+            // 获取填写的姓名
+            const char* name_str = lv_textarea_get_text(g_ta_new_name);
+            if (name_str == nullptr || strlen(name_str) == 0) {
+                show_popup_msg("注册失败", "姓名不能为空! ", g_ta_new_name ,"我知道了");//弹窗提示：姓名不能为空
+                return; 
+            }
+
+            // 把姓名和部门保存到全局暂存变量中！
+            g_reg_name = name_str;
+            //g_reg_dept_id = lv_dropdown_get_selected(g_dd_new_dept); // 保存下拉框选中的索引(ID)
+
+            // 1. 获取下拉框选中的【索引】（0, 1, 2...）
+            uint16_t selected_index = lv_dropdown_get_selected(g_dd_new_dept); 
+            
+            // 2. 通过映射表 g_dept_id_map，将【索引】转换成真实的【数据库部门ID】
+            if (selected_index < g_dept_id_map.size()) {
+                g_reg_dept_id = g_dept_id_map[selected_index];
+            } else {
+                g_reg_dept_id = 0; // 兜底防错
+            }
+
+            load_user_register_camera_step();// 校验并保存完毕后跳转到注册人脸界面
+            
+        }
+    }
 }
 
-// 注册 Step 1: 加载表单
+//注册表单界面实现
 void load_user_register_form() {
+
     if (scr_register){
         lv_obj_delete(scr_register);
         scr_register = nullptr;
     }
 
+    //获取下一个可用工号
     int next_user_id = UiController::getInstance()->generateNextUserId();
     BaseScreenParts parts = create_base_screen("员工注册");
     scr_register = parts.screen;
@@ -500,286 +495,106 @@ void load_user_register_form() {
         scr_register = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    UiManager::getInstance()->resetKeypadGroup();
 
-    // 设置内容区为垂直 Flex 布局，方便后续堆叠表单行和按钮
-    lv_obj_set_flex_flow(parts.content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(parts.content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(parts.content, 12, 0);
+    lv_obj_t* form_cont = create_form_container(parts.content);
 
-    // --- 通用 ESC ---
-    auto form_esc_cb = [](lv_event_t* e) {
-        if (lv_event_get_code(e) == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ESC) {
-            lv_async_call([](void*) { load_user_menu_screen(); }, nullptr);
-        }
-    };
-
-    // --- 辅助函数 ---
-    auto create_text_row = [&](const char* label_txt, const char* default_text, bool is_readonly) -> lv_obj_t* {
-        lv_obj_t* row = lv_obj_create(parts.content);
-        lv_obj_set_size(row, LV_PCT(95), 50);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-
-        lv_obj_t* lbl = lv_label_create(row);
-        lv_label_set_text(lbl, label_txt);
-        lv_obj_add_style(lbl, &style_text_cn, 0);
-        lv_obj_set_width(lbl, 60);
-        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_white(), 0); // 白色标签
-
-        lv_obj_t* ta = lv_textarea_create(row);
-        lv_textarea_set_one_line(ta, true);
-        lv_obj_set_flex_grow(ta, 1);
-        lv_obj_add_event_cb(ta, form_esc_cb, LV_EVENT_KEY, nullptr);
-
-        if (is_readonly) {
-            lv_textarea_set_text(ta, default_text);
-            lv_obj_remove_flag(ta, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_remove_flag(ta, LV_OBJ_FLAG_SCROLLABLE); 
-            lv_textarea_set_cursor_click_pos(ta, false);
-            // 方案1：高亮白底风格 (最清晰)
-            lv_obj_set_style_bg_color(ta, lv_color_hex(0xF5F5F5), 0); 
-            lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(ta, lv_color_black(), 0);
-        } else {
-            lv_textarea_set_placeholder_text(ta, default_text);
-        }
-        return ta;
-    };
-
-    // 4. 创建控件
-    // [工号]
+    // 工号：传入转换后的初始文本，并将 is_readonly 设为 true
     std::string id_str = std::to_string(next_user_id);
-    lv_obj_t* ta_id = create_text_row("工号:", id_str.c_str(), true); 
+    lv_obj_t* ta_id = create_form_input(form_cont, "工号:", nullptr, id_str.c_str(), true);
 
-    // [姓名]
-    lv_obj_t* ta_name = create_text_row("姓名:", "请输入姓名:name", false);
-    
-    // [部门] (创建下拉框行)
-    lv_obj_t* row_dept = lv_obj_create(parts.content);
-    lv_obj_set_size(row_dept, LV_PCT(95), 50);
-    lv_obj_set_flex_flow(row_dept, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row_dept, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_border_width(row_dept, 0, 0);
-    lv_obj_set_style_bg_opa(row_dept, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(row_dept, 0, 0);
+    //lv_textarea_set_text(ta_id, std::to_string(next_user_id).c_str());
+    g_ta_new_name = create_form_input(form_cont, "姓名:", "请输入员工姓名", nullptr, false);
+    lv_obj_add_event_cb(g_ta_new_name, register_user_event_cb, LV_EVENT_ALL, nullptr); // 使用统一回调，监听 ALL
+    UiManager::getInstance()->addObjToGroup(g_ta_new_name); // 加入焦点组
 
-    lv_obj_t* lbl_dept = lv_label_create(row_dept);
-    lv_label_set_text(lbl_dept, "部门:");
-    lv_obj_add_style(lbl_dept, &style_text_cn, 0);
-    lv_obj_set_width(lbl_dept, 60);
-    lv_obj_set_style_text_align(lbl_dept, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_color(lbl_dept, lv_color_white(), 0);
+    // 从控制器获取原生数据
+    std::vector<DeptInfo> depts = UiController::getInstance()->getDepartmentList();
+    std::vector<std::pair<int, std::string>> dept_items;
+    g_dept_id_map.clear();//每次加载页面时，清空旧的映射数据
 
-    lv_obj_t* dd_dept = lv_dropdown_create(row_dept);
-    lv_obj_set_flex_grow(dd_dept, 1);
-    lv_obj_remove_flag(dd_dept, LV_OBJ_FLAG_SCROLLABLE);
-    
-    auto depts = UiController::getInstance()->getDepartmentList();
-    std::string opts = "";
+    // 提取默认部门ID (如果数据库为空则默认为0，否则取第一个部门)
+    int default_dept_id = depts.empty() ? 0 : depts[0].id;
+
     for (const auto& d : depts) {
-        if (!opts.empty()) opts += "\n";
-        opts += d.name;
+        dept_items.push_back({d.id, d.name}); 
+        g_dept_id_map.push_back(d.id);
     }
-    if (opts.empty()) opts = "Default";
-    lv_dropdown_set_options(dd_dept, opts.c_str());
-    lv_obj_add_style(dd_dept, &style_text_cn, 0);
-    lv_obj_add_event_cb(dd_dept, form_esc_cb, LV_EVENT_KEY, nullptr);
-    
-    // 列表样式
-    lv_obj_t* list = lv_dropdown_get_list(dd_dept);
-    if (list) lv_obj_add_style(list, &style_text_cn, 0);
 
-    // [注册按钮]
-    lv_obj_t* btn_next = lv_button_create(parts.content);
-    lv_obj_set_size(btn_next, LV_PCT(50), 40);
-    lv_obj_add_style(btn_next, &style_btn_default, 0);
-    lv_obj_add_style(btn_next, &style_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(btn_next, form_esc_cb, LV_EVENT_KEY, nullptr);
+    g_dd_new_dept = create_form_dropdown(form_cont, "部门:", dept_items, default_dept_id);
+    lv_obj_add_event_cb(g_dd_new_dept, register_user_event_cb, LV_EVENT_ALL, nullptr); // 使用统一回调，监听 ALL 
+    UiManager::getInstance()->addObjToGroup(g_dd_new_dept); // 加入焦点组
 
-    lv_obj_t* lbl_next = lv_label_create(btn_next);
-    lv_label_set_text(lbl_next, "注册");
-    lv_obj_add_style(lbl_next, &style_text_cn, 0);
-    lv_obj_center(lbl_next);
+    g_btn_confirm = create_form_btn(form_cont, "确认注册", register_user_event_cb, nullptr);
+    lv_obj_add_event_cb(g_btn_confirm, register_user_event_cb, LV_EVENT_ALL, nullptr); // 使用统一回调，监听 ALL 
+    UiManager::getInstance()->addObjToGroup(g_btn_confirm); // 加入焦点组
 
-    // ============================================================
-    // 键盘流逻辑 (Chain Logic)
-    // ============================================================
-    
-    // 定义一个结构体来传递这几个关键控件的指针
-    struct ChainContext {
-        lv_obj_t* ta_name;
-        lv_obj_t* dd_dept;
-        lv_obj_t* btn_next;
-    };
-    ChainContext* chain = new ChainContext{ta_name, dd_dept, btn_next};
-
-    // 1. 【姓名框逻辑】：按下 Enter 或 下箭头 -> 跳转部门并展开
-    lv_obj_add_event_cb(ta_name, [](lv_event_t* e) {
-        ChainContext* c = (ChainContext*)lv_event_get_user_data(e);
-        lv_event_code_t code = lv_event_get_code(e);
-
-        // 1. 判断按键类型
-        bool is_enter = (code == LV_EVENT_READY) || 
-                        (code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ENTER);
-        
-        bool is_down = (code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_DOWN);
-
-        // 2. 处理 [向下键] 的特殊逻辑：必须校验非空
-        if (is_down) {
-            const char* txt = lv_textarea_get_text(c->ta_name);
-            if (strlen(txt) == 0) {
-                // 如果为空，异步弹出提示，并阻止跳转
-                lv_async_call([](void* user_data){
-                    lv_obj_t* ta = (lv_obj_t*)user_data;
-                    lv_group_focus_obj(ta); // 确保焦点在输入框
-                    show_modal_msg("姓名不能为空！", ta); 
-                }, c->ta_name);
-                return; // 直接返回，不执行后面的跳转
-            }
-        }
-
-        // 3. 执行跳转 (Enter 直接跳，Down 只有通过校验才会走到这里)
-        if (is_enter || is_down) {
-            lv_async_call([](void* user_data){
-                lv_obj_t* dd = (lv_obj_t*)user_data;
-                lv_group_focus_obj(dd); // 焦点移到部门
-                lv_dropdown_open(dd);   // 展开下拉框
-            }, c->dd_dept);
-        }
-
-    }, LV_EVENT_ALL, chain);
-
-    // 2. 【部门框逻辑】：按下 Enter -> 选中并跳转按钮
-    // 注意：LVGL下拉框打开时，按键由列表处理，但确认选择(Enter)后，
-    // 事件会冒泡回 Dropdown 或者焦点会回到 Dropdown。
-    lv_obj_add_event_cb(dd_dept, [](lv_event_t* e) {
-        ChainContext* c = (ChainContext*)lv_event_get_user_data(e);
-        // 当按下回车确认选择时
-        if (lv_event_get_key(e) == LV_KEY_ENTER) {
-            // 同样使用 async_call 延时跳到按钮
-            lv_async_call([](void* user_data){
-                lv_obj_t* btn = (lv_obj_t*)user_data;
-                lv_group_focus_obj(btn);
-            }, c->btn_next);
-        }
-    }, LV_EVENT_KEY, chain);
-
-    // ============================================================
-
-    // 5. 注册逻辑 (按钮点击)
-    lv_obj_t** widgets = new lv_obj_t*[3];
-    widgets[0] = ta_id; widgets[1] = ta_name; widgets[2] = dd_dept;
-
-    auto next_step_cb = [](lv_event_t* e) {
-        // A. 获取触发事件的类型
-        lv_event_code_t code = lv_event_get_code(e);
-        
-        bool is_triggered = false;
-
-        // B. 判断触发条件
-        // 条件1: 触摸屏点击
-        if (code == LV_EVENT_CLICKED) {
-            is_triggered = true;
-        }
-        // 条件2: 物理按键 (回车 或 Home键/确认键)
-        else if (code == LV_EVENT_KEY) {
-            uint32_t key = lv_event_get_key(e);
-            if (key == LV_KEY_ENTER || key == LV_KEY_HOME) {
-                is_triggered = true;
-            }
-        }
-
-        // C. 如果触发了，执行业务逻辑
-        if (is_triggered) {
-            lv_obj_t** w_arr = (lv_obj_t**)lv_event_get_user_data(e);
-            
-            const char* txt_id = lv_textarea_get_text(w_arr[0]);
-            const char* txt_name = lv_textarea_get_text(w_arr[1]);
-            
-            // 非空校验
-            if (strlen(txt_name) == 0) {
-                show_modal_msg("姓名不能为空，请填写！", w_arr[1]);
-                return;
-            }
-
-            // 获取部门 ID
-            lv_obj_t* dd = w_arr[2];
-            uint32_t selected_idx = lv_dropdown_get_selected(dd);
-            auto depts_list = UiController::getInstance()->getDepartmentList();
-            int selected_dept_id = (!depts_list.empty() && selected_idx < depts_list.size()) 
-                                   ? depts_list[selected_idx].id : 0;
-
-            g_reg_user_id = std::atoi(txt_id);
-            g_reg_name = txt_name;
-            g_reg_dept_id = selected_dept_id;
-
-            printf("[UI] Reg Step 1: ID=%d, Name=%s, DeptID=%d\n", g_reg_user_id, g_reg_name.c_str(), g_reg_dept_id);
-            lv_async_call([](void*) { load_user_register_camera_step(); }, nullptr);
-        }
-    };
-
-    lv_obj_add_event_cb(btn_next, next_step_cb, LV_EVENT_ALL, widgets);
-    
-    // 内存清理 (清理 widgets 数组 和 chain 结构体)
-    lv_obj_add_event_cb(btn_next, [](lv_event_t* e){
-        delete[] (lv_obj_t**)lv_event_get_user_data(e);
-    }, LV_EVENT_DELETE, widgets); // 这里清理 widgets
-
-    // 把 ChainContext 的清理挂在 ta_name 的删除事件上 (或者 btn_next 上也可以，只要保证不漏)
-    lv_obj_add_event_cb(ta_name, [](lv_event_t* e){
-        delete (ChainContext*)lv_event_get_user_data(e);
-    }, LV_EVENT_DELETE, chain);
-
-    // 物理按键兼容
-    lv_obj_add_event_cb(btn_next, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ENTER || lv_event_get_key(e) == LV_KEY_HOME) {
-             lv_obj_send_event((lv_obj_t*)lv_event_get_target(e), LV_EVENT_CLICKED, lv_event_get_user_data(e));
-        }
-    }, LV_EVENT_KEY, widgets);
-
-    // 6. 加入按键组
-    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
-    lv_group_remove_all_objs(group);
-    
-    lv_group_add_obj(group, ta_name);
-    lv_group_add_obj(group, dd_dept);
-    lv_group_add_obj(group, btn_next);
-    
-    lv_group_focus_obj(ta_name); // 默认聚焦姓名，准备开始输入！
+    lv_group_focus_obj(g_ta_new_name); 
 
     lv_screen_load(scr_register);
-
-    UiManager::getInstance()->destroyAllScreensExcept(scr_register);// 这里我们已经在注册界面了，理论上不应该有其他界面了，但为了保险起见，还是调用一下销毁其他屏幕的函数，防止内存泄漏。
-
+    UiManager::getInstance()->destroyAllScreensExcept(scr_register);
 }
 
-// 注册按钮事件回调
-static void register_btn_next_event_handler(lv_event_t * e) {
-    lv_obj_t * name_ta = (lv_obj_t *)lv_event_get_user_data(e);
-    lv_obj_t * dept_dd = (lv_obj_t *)lv_obj_get_user_data(name_ta);
+// ================= 人脸录入与更新事件回调 (Step 2) =================
 
-    const char * name_txt = lv_textarea_get_text(name_ta);
-    uint16_t selected_dept_idx = lv_dropdown_get_selected(dept_dd);
+//拍照界面事件回调
+static void reg_step2_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
 
-    if (strlen(name_txt) == 0) {
-        lv_obj_set_style_border_color(name_ta, lv_palette_main(LV_PALETTE_RED), 0);
-        return;
+        // --- 情况 A: 按下回车 (注册/更新) ---
+        if (key == LV_KEY_ENTER) {
+            lv_indev_wait_release(lv_indev_get_act()); // 【防连跳】防止长按回车触发多次数据库写入
+
+            bool success = false;
+            
+            // 区分保存逻辑
+            if (g_is_updating_face) {
+                // 调用更新人脸接口 
+                success = UiController::getInstance()->updateUserFace(g_current_info_uid);
+            } else {
+                // 这里就是把第一步表单存下来的姓名(g_reg_name)和部门(g_reg_dept_id)传给底层接口！
+                success = UiController::getInstance()->registerNewUser(g_reg_name, g_reg_dept_id);
+            }
+
+            if (success) {
+                // 成功提示
+                show_popup_msg(g_is_updating_face ? "更新人脸" : "员工注册", g_is_updating_face ? "人脸更新成功! " : "员工注册成功! ", nullptr, "确认");
+                // 1.5秒后返回相应菜单
+                lv_timer_create([](lv_timer_t* t){
+                    if (g_is_updating_face) {
+                        g_is_updating_face = false; // 用完后立刻重置标志位
+                        load_user_info_screen(g_current_info_uid); // 返回详情页
+                    } else {
+                        // 注册成功，清空暂存的表单数据，防止数据污染下一次注册
+                        g_reg_name = "";
+                        g_reg_dept_id = 0; // 如果你这里是 string 类型，请改成 ""
+                        load_user_menu_screen(); // 注册成功返回菜单
+                    }
+                    lv_timer_del(t);
+                }, 1500, nullptr);
+            } else {
+                // 失败提示
+                show_popup_msg(g_is_updating_face ? "更新人脸" : "员工注册", g_is_updating_face ? "人脸更新失败! " : "员工注册失败! ", nullptr, "确认");
+            }
+        }
+        // --- 情况 B: 按下 ESC (返回) ---
+        else if (key == LV_KEY_ESC) {
+            lv_indev_wait_release(lv_indev_get_act()); // 【防连跳】防止退回后误触其他界面
+            img_face_reg = nullptr; 
+            
+            // 区分返回路径
+            if (g_is_updating_face) {
+                g_is_updating_face = false; // 重置标志位
+                load_user_info_screen(g_current_info_uid); // 取消更新，返回详情页
+            } else {
+                // 取消录入，退回填表界面 (此时 g_reg_name 等变量的数据还在，可以继续修改)
+                load_user_register_form(); 
+            }
+        }
     }
-
-    auto depts = UiController::getInstance()->getDepartmentList();
-    if (selected_dept_idx < depts.size()) {
-        g_reg_dept_id = depts[selected_dept_idx].id;
-    } else {
-        g_reg_dept_id = 0; 
-    }
-    g_reg_name = std::string(name_txt);
-
-    load_user_register_camera_step();
 }
 
 // 注册 Step 2: 加载拍照界面
@@ -789,7 +604,8 @@ void load_user_register_camera_step() {
         scr_camera = nullptr;
     }
 
-    BaseScreenParts parts = create_base_screen("注册拍照");
+    //根据动态获取标题
+    BaseScreenParts parts = create_base_screen(g_is_updating_face ? "更新人脸" : "注册拍照");
     scr_camera = parts.screen;
     UiManager::getInstance()->registerScreen(ScreenType::REGISTER_CAMERA, &scr_camera);
 
@@ -820,43 +636,26 @@ void load_user_register_camera_step() {
     lv_obj_set_style_border_width(img_face_reg, 3, 0);
     lv_obj_set_style_border_color(img_face_reg, lv_palette_main(LV_PALETTE_GREEN), 0);
  
-    // 添加提示文字
+    // 动态显示用户名字和提示
     lv_obj_t* lbl_hint = lv_label_create(parts.content);
-    lv_label_set_text_fmt(lbl_hint, "Hi, %s!\nPress ENTER to Register", g_reg_name.c_str());
-    lv_obj_set_style_text_align(lbl_hint, LV_TEXT_ALIGN_CENTER, 0);// 居中对齐
+    std::string display_name;
+    if (g_is_updating_face) {
+        // 如果是更新，获取当前详情页员工的名字
+        UserData user = UiController::getInstance()->getUserInfo(g_current_info_uid);
+        display_name = user.name;
+    } else {
+        // 如果是注册，使用第一步暂存的新名字
+        display_name = g_reg_name;
+    }
+    lv_label_set_text_fmt(lbl_hint, "Hi, %s!\nPress ENTER to %s", 
+                          display_name.c_str(), 
+                          g_is_updating_face ? "Update" : "Register");
+    lv_obj_set_style_text_align(lbl_hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_hint, lv_color_white(), 0);
     lv_obj_align_to(lbl_hint, img_face_reg, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
 
-    //绑定按键事件
-    lv_obj_add_event_cb(img_face_reg, [](lv_event_t* e){
-        uint32_t key = lv_event_get_key(e);
-
-        // --- 情况 A: 按下回车 (注册) ---
-        if (key == LV_KEY_ENTER) {
-            // 直接调用注册接口
-            bool success = UiController::getInstance()->registerNewUser(g_reg_name, g_reg_dept_id);
-
-            if (success) {
-                // 成功提示
-                show_modal_msg("Success\nUser Registered!", nullptr);
-                
-                // 1.5秒后返回菜单
-                lv_timer_create([](lv_timer_t* t){
-                    load_user_menu_screen();
-                    lv_timer_del(t);
-                }, 1500, nullptr);
-            } else {
-                // 失败提示
-                show_modal_msg("Error\nRegistration Failed!", nullptr);
-            }
-        }
-        // --- 情况 B: 按下 ESC (返回) ---
-        else if (key == LV_KEY_ESC) {
-            img_face_reg = nullptr; // 清空指针防止野指针
-            load_user_register_form(); // 返回填表界面
-        }
-
-    }, LV_EVENT_KEY, nullptr);
+    // 绑定提取出来的按键回调函数
+    lv_obj_add_event_cb(img_face_reg, reg_step2_event_cb, LV_EVENT_KEY, nullptr);
 
     // 焦点设置
     // 这一步必须做，否则接收不到键盘事件
@@ -875,25 +674,7 @@ void load_user_register_camera_step() {
     });
 
     lv_screen_load(scr_camera);
-
     UiManager::getInstance()->destroyAllScreensExcept(scr_camera);
-
-}
-
-// 注册 Step 2: 拍照事件回调
-static void reg_step2_event_cb(lv_event_t *e) {
-    if (lv_event_get_key(e) == LV_KEY_ENTER) {
-        if (UiController::getInstance()->registerNewUser(g_reg_name.c_str(), g_reg_dept_id)) {
-            show_popup("Success", "User Registered!");
-            lv_timer_t *t = lv_timer_create([](lv_timer_t*){ load_user_menu_screen(); }, 1500, nullptr);
-            lv_timer_set_repeat_count(t, 1);
-        } else {
-            show_popup("Error", "Registration Failed!\n(Check DB/Dept ID)");
-        }
-    } else if (lv_event_get_key(e) == LV_KEY_ESC) {
-        img_face_reg = nullptr;
-        load_user_register_form(); 
-    }
 }
 
 // =========================================================
@@ -977,301 +758,646 @@ void load_user_delete_screen() {
 // 5. 员工详情页 (User Info) 
 // =========================================================
 
+// 员工详情界面事件回调 (兼容点击和键盘事件)
+static void user_info_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    uint32_t key = 0;
+
+    // 获取按键值 (如果不是按键事件，key 会是 0)
+    if(code==LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 导航逻辑 (兼容键盘方向键)
+    if (code == LV_EVENT_KEY) {
+        if(key == LV_KEY_ESC) {
+            load_user_list_screen(); // 返回员工列表界面
+            return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
+         } 
+        else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下或向右导航
+            return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
+        } 
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上或向左导航
+            return;
+         }
+    }
+    
+    // 2. 跳转详情页逻辑(逻辑：如果收到“点击” 或者 “按键是回车” -> 都视为触发)
+    if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+        
+        lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
+
+        // 获取 index (放在这里获取更安全)
+        const char* user_data = (const char*)lv_event_get_user_data(e);
+        intptr_t index = (intptr_t)user_data;
+
+        if (index == 1) {
+            load_user_edit_name_screen(); //跳转到修改姓名界面
+        } 
+        else if (index == 2) {
+            load_user_edit_dept_screen();//跳转到修改部门界面
+        }
+        else if (index == 3) {
+            g_is_updating_face = true;// 告诉摄像头界面：这次是来“更新人脸”的
+            load_user_register_camera_step();//跳转到注册人脸界面
+        }
+        else if (index == 4) {
+            //跳转到修改指纹界面
+        }
+        else if (index == 5) {
+            //跳转到修改卡号界面
+        }
+        else if (index == 6) {
+            UserData user = UiController::getInstance()->getUserInfo(g_current_info_uid);
+            // 如果密码为空，跳转到“注册密码”
+            if (user.password.empty()) {
+                load_user_register_password_screen();
+            } 
+            // 如果已有密码，跳转到“修改密码”
+            else {
+                load_user_edit_password_screen();
+            }
+        }
+        else if (index == 7) {
+            //跳转到修改权限界面
+        }
+        else {
+            
+        }
+    }
+}
+
+// 员工详情界面实现
 void load_user_info_screen(int user_id) {
+
+    g_current_info_uid = user_id;// 存储当前查看的用户 ID，方便在修改界面使用
+
     if (scr_info) {
         lv_obj_delete(scr_info);
         scr_info = nullptr;
+    }
+    
+    UserData user = UiController::getInstance()->getUserInfo(user_id);// 先获取用户数据，确保用户存在
+    if (user.id == 0) {
+        show_popup("Error", "User Not Found!");
+        load_user_list_screen();// 返回员工列表界面
+        return;
     }
 
     BaseScreenParts parts = create_base_screen("员工详情");
     scr_info = parts.screen;
     UiManager::getInstance()->registerScreen(ScreenType::USER_INFO, &scr_info);
-
+    
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_info, [](lv_event_t * e) {
         scr_info = nullptr;
     }, LV_EVENT_DELETE, NULL);
-
+    
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    
+    //UserData u = UiController::getInstance()->getUserInfo(user_id);// 从业务层获取用户数据
+    
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
-    UserData u = UiController::getInstance()->getUserInfo(user_id);// 从业务层获取用户数据
+    // 准备各项需要显示的数据文本
+    std::string str_id    = std::to_string(user.id);
+    std::string str_name  = user.name;
+    // 假设部门有名称映射，如果没有可以直接显示 ID
+    std::string str_dept  = UiController::getInstance()->getDeptNameById(user.dept_id); 
+    // 判断生物特征是否已录入 (这里假设非空代表已录入)
+    std::string str_face  = user.face_feature.empty() ? "未注册" : "已注册";
+    std::string str_fp    = user.fingerprint_feature.empty() ? "未注册" : "已注册";
+    std::string str_card  = user.card_id.empty() ? "未绑定" : user.card_id;
+    std::string str_pwd   = user.password.empty() ? "无" : "***";
+    std::string str_role  = (user.role == 1) ? "管理员" : "普通";
 
-    // 4. 创建内容容器 (使用 Grid 布局来排列各项信息)
-    lv_obj_t *grid = lv_obj_create(parts.content);
-    lv_obj_set_size(grid, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(grid, 0, 0);       // 透明背景
-    lv_obj_set_style_border_width(grid, 0, 0); // 无边框
-    lv_obj_set_style_pad_all(grid, 0, 0);      // 无内边距
+    int* pass_id = new int(user_id);// 需要在事件回调中使用用户 ID，所以放在堆上并传递指针
 
-    // 定义 Grid 行列 (2列 x 8行)
-    // 第一列宽度固定 90px (放标签)，第二列占满剩余空间 (1fr)
-    static int32_t col_dsc[] = {90, LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
-    static int32_t row_dsc[] = {45, 45, 45, 45, 45, 45, 45, 45, LV_GRID_TEMPLATE_LAST};
-    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
-    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
+    // 第0行：工号
+    create_sys_list_btn(list, "1.", "工号", str_id.c_str(), user_info_event_cb, (const char*)(intptr_t)0);
+    //第2行： 姓名
+    create_sys_list_btn(list, "2.", "姓名", str_name.c_str(), user_info_event_cb, (const char*)(intptr_t)1);
+    // 第3行：部门
+    create_sys_list_btn(list, "3.", "部门", str_dept.c_str(), user_info_event_cb, (const char*)(intptr_t)2);
+    // 第4行：人脸
+    create_sys_list_btn(list, "4.", "人脸", str_face.c_str(), user_info_event_cb, (const char*)(intptr_t)3);
+    // 第5行：指纹
+    create_sys_list_btn(list, "5.", "指纹", str_fp.c_str(), user_info_event_cb, (const char*)(intptr_t)4);
+    // 第6行：卡号
+    create_sys_list_btn(list, "6.", "卡号", str_card.c_str(), user_info_event_cb, (const char*)(intptr_t)5);
+    // 第7行：密码 (这里可以绑定去改密码页的回调，传递用户 ID)
+    create_sys_list_btn(list, "7.", "密码", str_pwd.c_str(), user_info_event_cb, (const char*)(intptr_t)6);
+    // 第8行：权限 (这里可以绑定去改权限页的回调，传递用户 ID)
+    create_sys_list_btn(list, "8.", "权限", str_role.c_str(), user_info_event_cb, (const char*)(intptr_t)7);
 
-    // 5. 重置按键组 (准备添加新控件)
-    UiManager::getInstance()->resetKeypadGroup();
-    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
-
-    // --- 辅助 Lambda: 快速创建一行详情 ---
-    auto create_row = [&](int row, const char* label, lv_obj_t* content) {
-        // A. 左侧标签
-        lv_obj_t *lbl = lv_label_create(grid);
-        lv_label_set_text(lbl, label);
-        lv_obj_add_style(lbl, &style_text_cn, 0);
-        lv_obj_set_style_text_color(lbl, lv_palette_main(LV_PALETTE_GREY), 0);
-        lv_obj_set_grid_cell(lbl, LV_GRID_ALIGN_START, 0, 1, LV_GRID_ALIGN_CENTER, row, 1);
-        
-        // B. 右侧内容 (如果存在)
-        if (content) {
-            lv_obj_set_grid_cell(content, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, row, 1);
-            
-            // 如果是可交互对象 (输入框/按钮)，加入按键组并处理 ESC
-            if (lv_obj_has_flag(content, LV_OBJ_FLAG_CLICKABLE) || lv_obj_check_type(content, &lv_textarea_class)) {
-                lv_obj_add_style(content, &style_btn_focused, LV_STATE_FOCUSED);
-                lv_group_add_obj(group, content); 
-                
-                // 绑定 ESC 返回列表 (防止焦点陷阱)
-                lv_obj_add_event_cb(content, [](lv_event_t* e){
-                    if (lv_event_get_key(e) == LV_KEY_ESC) {
-                        load_user_list_screen();
-                    }
-                }, LV_EVENT_KEY, nullptr);
-            }
-        }
-        return content;
-    };
-
-    // --- [Row 0] 工号 (只读) ---
-    lv_obj_t *lbl_id = lv_label_create(grid);
-    lv_label_set_text_fmt(lbl_id, "%d", u.id);
-    lv_obj_set_style_text_color(lbl_id, lv_color_white(), 0);
-    lv_obj_align(lbl_id, LV_ALIGN_LEFT_MID, 0, 0); 
-    create_row(0, "工号", lbl_id);
-
-    // --- [Row 1] 姓名 (可编辑) ---
-    lv_obj_t *ta_name = lv_textarea_create(grid);
-    lv_textarea_set_one_line(ta_name, true);
-    lv_textarea_set_text(ta_name, u.name.c_str());
-    lv_obj_set_user_data(ta_name, (void*)(intptr_t)u.id);
-    // 逻辑：失去焦点时自动保存修改
-    lv_obj_add_event_cb(ta_name, [](lv_event_t* e){
-         if(lv_event_get_code(e) == LV_EVENT_DEFOCUSED) {
-             lv_obj_t* ta = (lv_obj_t*)lv_event_get_target(e);
-             int uid = (int)(intptr_t)lv_event_get_user_data(e);
-             UiController::getInstance()->updateUserName(uid, lv_textarea_get_text(ta));
-         }
-    }, LV_EVENT_ALL, nullptr);
-    create_row(1, "姓名", ta_name);
-
-    // --- [Row 2] 人脸 (按钮) ---
-    lv_obj_t *btn_face = lv_button_create(grid);
-    lv_obj_t *lbl_face = lv_label_create(btn_face);
-    bool has_face = !u.face_feature.empty();
-    lv_label_set_text(lbl_face, has_face ? "已注册 (重录)" : "未注册 (录入)");
-    lv_obj_add_style(lbl_face, &style_text_cn, 0);
-    lv_obj_center(lbl_face);
-    lv_obj_set_user_data(btn_face, (void*)(intptr_t)u.id);
-    // 逻辑：点击/回车 -> 跳转拍照页
-    lv_obj_add_event_cb(btn_face, [](lv_event_t* e){
-        lv_event_code_t code = lv_event_get_code(e);
-        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ENTER)) {
-            int uid = (int)(intptr_t)lv_event_get_user_data(e);
-            
-            // 设置全局注册变量，供拍照页使用
-            g_reg_user_id = uid; 
-            g_reg_name = UiController::getInstance()->getUserInfo(uid).name; 
-            g_reg_dept_id = UiController::getInstance()->getUserInfo(uid).dept_id;
-
-            load_user_register_camera_step(); // 跳转去拍照
-        }
-    }, LV_EVENT_ALL, nullptr);
-    create_row(2, "人脸", btn_face);
-
-    // --- [Row 3] 部门 (只读) ---
-    lv_obj_t *lbl_dept = lv_label_create(grid);
-    lv_label_set_text(lbl_dept, u.dept_name.c_str());
-    lv_obj_add_style(lbl_dept, &style_text_cn, 0);
-    lv_obj_set_style_text_color(lbl_dept, lv_color_white(), 0);
-    create_row(3, "部门", lbl_dept);
-
-    // --- [Row 4] 指纹 (占位) ---
-    lv_obj_t *lbl_fp = lv_label_create(grid);
-    lv_label_set_text(lbl_fp, "暂不支持");
-    lv_obj_add_style(lbl_fp, &style_text_cn, 0);
-    create_row(4, "指纹", lbl_fp);
-
-    // --- [Row 5] 密码 (按钮) ---
-    lv_obj_t *btn_pwd = lv_button_create(grid);
-    lv_obj_t *lbl_pwd = lv_label_create(btn_pwd);
-    bool has_pwd = !u.password.empty();
-    lv_label_set_text(lbl_pwd, has_pwd ? "已设置 (修改)" : "未设置 (添加)");
-    lv_obj_add_style(lbl_pwd, &style_text_cn, 0);
-    lv_obj_center(lbl_pwd);
-    lv_obj_set_user_data(btn_pwd, (void*)(intptr_t)u.id);
-    // 逻辑：跳转修改密码页
-    lv_obj_add_event_cb(btn_pwd, [](lv_event_t* e){
-        lv_event_code_t code = lv_event_get_code(e);
-        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ENTER)) {
-            load_user_password_change_screen((int)(intptr_t)lv_event_get_user_data(e));
-        }
-    }, LV_EVENT_ALL, nullptr);
-    create_row(5, "密码", btn_pwd);
-
-    // --- [Row 6] 卡号 (只读) ---
-    lv_obj_t *lbl_card = lv_label_create(grid);
-    lv_label_set_text(lbl_card, u.card_id.empty() ? "无" : u.card_id.c_str());
-    lv_obj_set_style_text_color(lbl_card, lv_color_white(), 0);
-    create_row(6, "卡号", lbl_card);
-
-    // --- [Row 7] 权限 (按钮) ---
-    lv_obj_t *btn_role = lv_button_create(grid);
-    lv_obj_t *lbl_role = lv_label_create(btn_role);
-    lv_label_set_text(lbl_role, (u.role == 1) ? "管理员" : "普通员工");
-    lv_obj_add_style(lbl_role, &style_text_cn, 0);
-    lv_obj_center(lbl_role);
-    lv_obj_set_user_data(btn_role, (void*)(intptr_t)u.id);
-    // 逻辑：跳转修改权限页
-    lv_obj_add_event_cb(btn_role, [](lv_event_t* e){
-        lv_event_code_t code = lv_event_get_code(e);
-        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ENTER)) {
-            int uid = (int)(intptr_t)lv_event_get_user_data(e);
-            int r = UiController::getInstance()->getUserInfo(uid).role;
-            load_user_role_change_screen(uid, r);
-        }
-    }, LV_EVENT_ALL, nullptr);
-    create_row(7, "权限", btn_role);
-
-    // 默认聚焦：姓名输入框
-    lv_group_focus_obj(ta_name);
-
-    // 6. 全局 ESC 返回 (防止有漏网之鱼)
-    lv_obj_add_event_cb(scr_info, [](lv_event_t* e){
-        if (lv_event_get_key(e) == LV_KEY_ESC) load_user_list_screen();
-    }, LV_EVENT_KEY, nullptr);
-
-    lv_screen_load(scr_info);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_info);
-}
-
-// =========================================================
-// 6. 修改密码页 (Password Change) - 完整双重校验逻辑
-// =========================================================
-
-void load_user_password_change_screen(int user_id) {
-    if (scr_pwd) {
-        lv_obj_delete(scr_pwd);
-        scr_pwd = nullptr;
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
+    for(uint32_t i=0; i<child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(list, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+    }
+    // 聚焦第一个按钮
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
     }
 
-    BaseScreenParts parts = create_base_screen("密码设置");
-    scr_pwd = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::PWD_CHANGE, &scr_pwd);
+    // 防止内存泄漏：当 list 销毁时，释放 pass_id
+    lv_obj_add_event_cb(list, [](lv_event_t* e){
+        int* id_ptr = (int*)lv_event_get_user_data(e);
+        if(id_ptr) delete id_ptr;
+    }, LV_EVENT_DELETE, pass_id);
+
+    lv_screen_load(scr_info);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_info);// 加载后销毁其他屏幕，保持资源清晰
+
+}
+
+// 修改姓名事件回调 (兼容点击和键盘事件)
+static void edit_name_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *ta_new = (lv_obj_t *)lv_event_get_user_data(e); 
+
+    uint32_t key = 0;
+    // 获取按键值
+    if(code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 处理 ESC 键退出 (返回员工详情页)
+    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
+        lv_indev_wait_release(lv_indev_get_act()); // 【防连跳】防止 ESC 穿透到上一个界面
+        load_user_info_screen(g_current_info_uid);
+        return;
+    }
+
+    // 2. 区分当前焦点所在控件
+    if (current_target == ta_new) {
+        // ================= 当前焦点在【新姓名输入框】 =================
+        if (code == LV_EVENT_KEY) {
+            // 按下回车键(ENTER) 或 下键(DOWN)，转移焦点到确认按钮
+            if (key == LV_KEY_ENTER || key == LV_KEY_DOWN) {
+                lv_group_t *group = lv_obj_get_group(current_target);
+                if (group != nullptr) {
+                    lv_group_focus_next(group); 
+                    lv_indev_wait_release(lv_indev_get_act());// 【防连跳】防止回车键穿透到下一个界面
+                }
+            }
+        }
+    } else {
+        // ================= 当前焦点在【确认修改按钮】 =================
+        if (code == LV_EVENT_KEY) {
+            // 按下上键(UP)，焦点回到新姓名输入框
+            if (key == LV_KEY_UP && ta_new != nullptr) {
+                lv_group_focus_obj(ta_new); 
+                return; // 处理完焦点切换直接返回
+            }
+        }
+
+        // 3. 处理“确认修改”逻辑
+        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+            
+            // 【防连跳】防止在这里按下的回车键穿透到接下来要加载的“员工详情页”里
+            lv_indev_wait_release(lv_indev_get_act());
+
+            if (ta_new != nullptr) {
+                const char* new_name = lv_textarea_get_text(ta_new);
+
+                if (strlen(new_name) == 0) {
+                    show_popup_msg("修改失败", "新姓名不能为空! ", ta_new, "我知道了");
+                    return;
+                }
+
+                // 调用数据库更新逻辑
+                UiController::getInstance()->updateUserName(g_current_info_uid, new_name); 
+
+                // 修改成功后，重新加载员工详情页
+                load_user_info_screen(g_current_info_uid);
+            }
+        }
+    }
+}
+
+// 修改姓名界面
+void load_user_edit_name_screen() {
+
+    UserData user = UiController::getInstance()->getUserInfo(g_current_info_uid);
+
+    if (scr_edit_name){
+        lv_obj_delete(scr_edit_name);
+        scr_edit_name = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("修改姓名");
+    scr_edit_name = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::USER_EDIT_NAME, &scr_edit_name);
 
     // 绑定销毁回调
-    lv_obj_add_event_cb(scr_pwd, [](lv_event_t * e) {
-        scr_pwd = nullptr;
+    lv_obj_add_event_cb(scr_edit_name, [](lv_event_t * e) {
+        scr_edit_name = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
-    // 容器
-    lv_obj_t *cont = lv_obj_create(scr_pwd);
-    lv_obj_set_size(cont, 220, 200);
-    lv_obj_align(cont, LV_ALIGN_CENTER, 0, 10);
-    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_bg_color(cont, lv_color_hex(0x222222), 0);
+    lv_obj_t* form_cont = create_form_container(parts.content);
 
-    // 输入框 1: 新密码
-    lv_obj_t *p1 = lv_textarea_create(cont);
-    lv_textarea_set_password_mode(p1, true);
-    lv_textarea_set_placeholder_text(p1, "输入新密码");
-    lv_textarea_set_one_line(p1, true);
-    lv_obj_set_width(p1, LV_PCT(100));
-    lv_obj_add_style(p1, &style_btn_focused, LV_STATE_FOCUSED);
+    // 放入表单组件
+    create_form_input(form_cont, "原始姓名:", nullptr, user.name.c_str(), true);
+    lv_obj_t* ta_new = create_form_input(form_cont, "新姓名:", "请输入新姓名:", nullptr, false);
+    
+    // 绑定事件与焦点
+    lv_obj_add_event_cb(ta_new, edit_name_event_cb, LV_EVENT_ALL, ta_new);
+    UiManager::getInstance()->addObjToGroup(ta_new);
 
-    // 输入框 2: 确认密码
-    lv_obj_t *p2 = lv_textarea_create(cont);
-    lv_textarea_set_password_mode(p2, true);
-    lv_textarea_set_placeholder_text(p2, "再次输入");
-    lv_textarea_set_one_line(p2, true);
-    lv_obj_set_width(p2, LV_PCT(100));
-    lv_obj_add_style(p2, &style_btn_focused, LV_STATE_FOCUSED);
+    // 创建确认按钮，并手动加入按键组
+    lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认修改", edit_name_event_cb, ta_new);
+    UiManager::getInstance()->addObjToGroup(btn_confirm);
 
-    // 按钮区
-    lv_obj_t *btn_box = lv_obj_create(cont);
-    lv_obj_set_size(btn_box, LV_PCT(100), 50);
-    lv_obj_set_flex_flow(btn_box, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_box, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(btn_box, LV_OPA_TRANSP, 0);
+    lv_group_focus_obj(ta_new); 
+    lv_screen_load(scr_edit_name);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_edit_name);
+}
 
-    // 确认按钮
-    lv_obj_t *btn_ok = lv_button_create(btn_box);
-    lv_label_set_text(lv_label_create(btn_ok), "确认");
-    lv_obj_add_style(btn_ok, &style_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_style(lv_obj_get_child(btn_ok, 0), &style_text_cn, 0);
+// 修改部门事件回调 (兼容点击和键盘事件)
+static void edit_dept_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *dd_new = (lv_obj_t *)lv_event_get_user_data(e); 
 
-    // 上下文传递结构体
-    struct Ctx { int uid; lv_obj_t *t1; lv_obj_t *t2; };
-    Ctx *ctx = new Ctx{user_id, p1, p2}; 
+    uint32_t key = 0;
+    if(code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
 
-    // 绑定删除回调防止内存泄漏
-    lv_obj_add_event_cb(btn_ok, [](lv_event_t* e){
-        Ctx* c = (Ctx*)lv_event_get_user_data(e);
-        if (c) delete c; 
-    }, LV_EVENT_DELETE, NULL);
+    // 1. 处理 ESC 键退出 (防连跳拦截)
+    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
+        // 如果下拉框处于展开状态，按 ESC 会让 LVGL 自动收起它，这里要拦截一下避免直接退出界面
+        if (current_target == dd_new && lv_dropdown_is_open(dd_new)) {
+            return; // 让 LVGL 内部事件去收起下拉框
+        }
+        lv_indev_wait_release(lv_indev_get_act()); 
+        load_user_info_screen(g_current_info_uid);
+        return;
+    }
 
-    // 确认逻辑
-    lv_obj_add_event_cb(btn_ok, [](lv_event_t* e){
-        if (lv_event_get_key(e) == LV_KEY_ENTER) {
-            Ctx* c = (Ctx*)lv_event_get_user_data(e);
-            const char* s1 = lv_textarea_get_text(c->t1);
-            const char* s2 = lv_textarea_get_text(c->t2);
-            
-            if (strlen(s1) > 0 && strcmp(s1, s2) == 0) {
-                UiController::getInstance()->updateUserPassword(c->uid, s1);
-                show_popup("Success", "Password Updated");
-                load_user_info_screen(c->uid); // 成功后返回详情
-            } else {
-                show_popup("Error", "Password Mismatch\nor Empty");
+    // 2. 区分焦点所在控件
+    if (current_target == dd_new) {
+        // ================= 当前焦点在【新部门下拉框】 =================
+        
+        // 核心交互：当用户在下拉列表中按回车选中某项并收起下拉框时，会触发 VALUE_CHANGED
+        if (code == LV_EVENT_VALUE_CHANGED) {
+            lv_group_t *group = lv_obj_get_group(current_target);
+            if (group != nullptr) {
+                lv_group_focus_next(group); // 跳转到确认按钮
+                lv_indev_wait_release(lv_indev_get_act()); // 防连跳
             }
         }
-    }, LV_EVENT_KEY, ctx);
-    lv_obj_set_user_data(btn_ok, ctx);
+        // 如果在未展开时按下了 DOWN 键，也允许跳转焦点到确认按钮
+        else if (code == LV_EVENT_KEY && key == LV_KEY_DOWN) {
+            if (!lv_dropdown_is_open(dd_new)) {
+                lv_group_t *group = lv_obj_get_group(current_target);
+                if (group != nullptr) {
+                    lv_group_focus_next(group); 
+                    lv_indev_wait_release(lv_indev_get_act());
+                }
+            }
+        }
 
-    // 取消按钮
-    lv_obj_t *btn_cancel = lv_button_create(btn_box);
-    lv_label_set_text(lv_label_create(btn_cancel), "取消");
-    lv_obj_add_style(btn_cancel, &style_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_style(lv_obj_get_child(btn_cancel, 0), &style_text_cn, 0);
-    lv_obj_add_event_cb(btn_cancel, [](lv_event_t* e){
-         if (lv_event_get_key(e) == LV_KEY_ENTER) {
-             // 清空输入
-             Ctx* c = (Ctx*)lv_event_get_user_data(e); // 复用同一个Ctx注意生命周期，这里简单处理
-             lv_textarea_set_text(c->t1, "");
-             lv_textarea_set_text(c->t2, "");
-             // 实际上应该返回上一级
-             load_user_info_screen(c->uid);
-         }
-    }, LV_EVENT_KEY, ctx);
+    } else {
+        // ================= 当前焦点在【确认修改按钮】 =================
+        if (code == LV_EVENT_KEY) {
+            // 按下上键(UP)，焦点回到新部门下拉框
+            if (key == LV_KEY_UP && dd_new != nullptr) {
+                lv_group_focus_obj(dd_new); 
+                return; 
+            }
+        }
 
-    // ESC 绑定到输入框
-    lv_obj_add_event_cb(p1, [](lv_event_t* e){
-        if (lv_event_get_key(e) == LV_KEY_ESC) 
-             load_user_info_screen((int)(intptr_t)lv_event_get_user_data(e));
-    }, LV_EVENT_KEY, (void*)(intptr_t)user_id);
+        // 3. 处理“确认修改”逻辑
+        if (code == LV_EVENT_CLICKED) {
+            lv_indev_wait_release(lv_indev_get_act());
 
-    // 输入组
+            if (dd_new != nullptr) {
+                // 获取当前下拉框选中的索引
+                uint16_t selected_index = lv_dropdown_get_selected(dd_new);
+                
+                // 获取部门列表以匹配对应的 ID
+                std::vector<DeptInfo> depts = UiController::getInstance()->getDepartmentList();
+                if (selected_index < depts.size()) {
+                    int new_dept_id = depts[selected_index].id;
+
+                    UiController::getInstance()->updateUserDept(g_current_info_uid, new_dept_id);
+
+                    // 修改成功后，重新加载员工详情页
+                    load_user_info_screen(g_current_info_uid);
+                }
+            }
+        }
+    }
+}
+
+// 修改部门界面
+void load_user_edit_dept_screen() {
+
+    UserData user = UiController::getInstance()->getUserInfo(g_current_info_uid);
+
+    if (scr_edit_dept){
+        lv_obj_delete(scr_edit_dept);
+        scr_edit_dept = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("修改部门");
+    scr_edit_dept = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::USER_MGMT, &scr_edit_dept);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_edit_dept, [](lv_event_t * e) {
+        scr_edit_dept = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
     UiManager::getInstance()->resetKeypadGroup();
-    UiManager::getInstance()->addObjToGroup(p1);
-    UiManager::getInstance()->addObjToGroup(p2);
-    UiManager::getInstance()->addObjToGroup(btn_ok);
-    UiManager::getInstance()->addObjToGroup(btn_cancel);
-    lv_group_focus_obj(p1);
 
-    lv_screen_load(scr_pwd);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_pwd);
+    lv_obj_t* form_cont = create_form_container(parts.content);
+
+    // 原始部门展示 (复用你现有的文本框方式)
+    create_form_input(form_cont, "原始部门:", nullptr, user.dept_name.c_str(), true);
+    
+    //// 1. 从控制器获取原生数据
+    std::vector<DeptInfo> depts = UiController::getInstance()->getDepartmentList();
+
+    // 2. 转换为通用 items 格式
+    std::vector<std::pair<int, std::string>> dept_items;
+    for (const auto& d : depts) {
+        dept_items.push_back({d.id, d.name}); // 存入 ID 和 部门名称
+    }
+    // 3. 创建部门下拉框
+    lv_obj_t* dd_new = create_form_dropdown(form_cont, "新部门:", dept_items, user.dept_id);
+
+    // 绑定事件与焦点
+    lv_obj_add_event_cb(dd_new, edit_dept_event_cb, LV_EVENT_ALL, dd_new);
+    UiManager::getInstance()->addObjToGroup(dd_new);
+
+    // 创建确认按钮，并手动加入按键组
+    lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认修改", edit_dept_event_cb, dd_new);
+    UiManager::getInstance()->addObjToGroup(btn_confirm);
+
+    lv_group_focus_obj(dd_new); 
+    lv_screen_load(scr_edit_dept);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_edit_dept);
+}
+
+// 注册密码事件回调 (兼容点击和键盘事件)
+static void register_password_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+
+    uint32_t key = 0;
+    // 获取按键值
+    if(code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 处理 ESC 键退出 (返回员工详情页)
+    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
+        lv_indev_wait_release(lv_indev_get_act()); // 【防连跳】防止 ESC 穿透
+        load_user_info_screen(g_current_info_uid);
+        return;
+    }
+
+    // 2. 区分当前焦点所在控件
+    if (current_target == g_ta_new_pwd || current_target == g_ta_confirm_pwd) {
+        // ================= 当前焦点在【密码输入框】 =================
+        if (code == LV_EVENT_KEY) {
+            // 按下回车键(ENTER) 或 下键(DOWN)，转移焦点到下一个控件
+            if (key == LV_KEY_ENTER || key == LV_KEY_DOWN) {
+                lv_group_t *group = lv_obj_get_group(current_target);
+                if (group != nullptr) {
+                    lv_group_focus_next(group); 
+                    lv_indev_wait_release(lv_indev_get_act());// 防连跳
+                }
+            }
+            // 按下上键(UP)，转移焦点到上一个控件
+            else if (key == LV_KEY_UP) {
+                lv_group_t *group = lv_obj_get_group(current_target);
+                if (group != nullptr) {
+                    lv_group_focus_prev(group);
+                    lv_indev_wait_release(lv_indev_get_act());
+                }
+            }
+        }
+    } else {
+        // ================= 当前焦点在【确认注册按钮】 =================
+        if (code == LV_EVENT_KEY) {
+            // 按下上键(UP)，焦点回到最后一个输入框（确认密码框）
+            if (key == LV_KEY_UP && g_ta_confirm_pwd != nullptr) {
+                lv_group_focus_obj(g_ta_confirm_pwd); 
+                return; // 处理完焦点切换直接返回
+            }
+        }
+
+        // 3. 处理“确认注册”逻辑
+        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+            
+            // 【防连跳】防止在这里按下的回车键穿透到接下来要加载的界面里
+            lv_indev_wait_release(lv_indev_get_act());
+
+            const char* pwd1 = lv_textarea_get_text(g_ta_new_pwd);
+            const char* pwd2 = lv_textarea_get_text(g_ta_confirm_pwd);
+
+            if (strlen(pwd1) == 0) return;
+            if (strcmp(pwd1, pwd2) != 0) return;
+
+            // 调用数据库更新逻辑
+            UiController::getInstance()->updateUserPassword(g_current_info_uid, pwd1); 
+
+            // 修改成功后，重新加载员工详情页
+            load_user_info_screen(g_current_info_uid);
+        }
+    }
+}
+
+// 注册密码界面
+void load_user_register_password_screen() {
+
+    if (scr_register_password){
+        lv_obj_delete(scr_register_password);
+        scr_register_password = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("密码登记");
+    scr_register_password = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::USER_REGISTER_PASSWORD, &scr_register_password);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_register_password, [](lv_event_t * e) {
+        scr_register_password = nullptr;
+        g_ta_new_pwd = nullptr;     // 清理指针防止野指针
+        g_ta_confirm_pwd = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+
+    lv_obj_t* form_cont = create_form_container(parts.content);
+
+    // 放入表单组件
+    g_ta_new_pwd = create_form_input(form_cont, "输入密码:", "请输入密码：", nullptr, false);
+    g_ta_confirm_pwd = create_form_input(form_cont, "确认密码:", "请再次输入密码：", nullptr, false);
+    
+    // 设置为密码模式（显示为星号 *）
+    lv_textarea_set_password_mode(g_ta_new_pwd, true);
+    lv_textarea_set_password_mode(g_ta_confirm_pwd, true);
+
+    // 2. 将输入框按顺序加入输入组
+    UiManager::getInstance()->addObjToGroup(g_ta_new_pwd);
+    UiManager::getInstance()->addObjToGroup(g_ta_confirm_pwd);
+
+    // 绑定事件与焦点
+    lv_obj_add_event_cb(g_ta_new_pwd, register_password_event_cb, LV_EVENT_ALL, g_ta_new_pwd);
+    lv_obj_add_event_cb(g_ta_confirm_pwd, register_password_event_cb, LV_EVENT_ALL, g_ta_confirm_pwd);
+
+    // 创建确认按钮，并手动加入按键组
+    lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认注册", register_password_event_cb, nullptr);
+    UiManager::getInstance()->addObjToGroup(btn_confirm);
+
+    lv_group_focus_obj(g_ta_new_pwd); 
+    lv_screen_load(scr_register_password);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_register_password);
+}
+
+//修改密码事件回调 (兼容点击和键盘事件)
+static void edit_password_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+
+    uint32_t key = 0;
+    // 获取按键值
+    if(code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 处理 ESC 键退出 (返回员工详情页)
+    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
+        lv_indev_wait_release(lv_indev_get_act()); 
+        load_user_info_screen(g_current_info_uid);
+        return;
+    }
+
+    // 2. 区分当前焦点所在控件 (判断三个输入框)
+    if (current_target == g_ta_old_pwd || current_target == g_ta_new_pwd || current_target == g_ta_confirm_pwd) {
+        // ================= 当前焦点在【密码输入框】 =================
+        if (code == LV_EVENT_KEY) {
+            // 按下回车键(ENTER) 或 下键(DOWN)，转移焦点到下一个
+            if (key == LV_KEY_ENTER || key == LV_KEY_DOWN) {
+                lv_group_t *group = lv_obj_get_group(current_target);
+                if (group != nullptr) {
+                    lv_group_focus_next(group); 
+                    lv_indev_wait_release(lv_indev_get_act());
+                }
+            }
+            // 按下上键(UP)，焦点上移
+            else if (key == LV_KEY_UP) {
+                lv_group_t *group = lv_obj_get_group(current_target);
+                if (group != nullptr) {
+                    lv_group_focus_prev(group);
+                    lv_indev_wait_release(lv_indev_get_act());
+                }
+            }
+        }
+    } else {
+        // ================= 当前焦点在【确认修改按钮】 =================
+        if (code == LV_EVENT_KEY) {
+            // 按下上键(UP)，焦点回到最后一个输入框（确认新密码框）
+            if (key == LV_KEY_UP && g_ta_confirm_pwd != nullptr) {
+                lv_group_focus_obj(g_ta_confirm_pwd); 
+                return; 
+            }
+        }
+
+        // 3. 处理“确认修改”逻辑
+        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+            
+            lv_indev_wait_release(lv_indev_get_act());
+
+            const char* old_pwd = lv_textarea_get_text(g_ta_old_pwd);
+            const char* new_pwd = lv_textarea_get_text(g_ta_new_pwd);
+            const char* confirm_pwd = lv_textarea_get_text(g_ta_confirm_pwd);
+
+            // 业务校验逻辑
+            UserData user = UiController::getInstance()->getUserInfo(g_current_info_uid);
+            if (strcmp(old_pwd, user.password.c_str()) != 0) {
+                show_popup_msg("修改失败", "旧密码不正确! ", g_ta_old_pwd, "我知道了");
+                return;
+            }
+            if (strlen(new_pwd) == 0) {
+                show_popup_msg("修改失败", "新密码不能为空! ", g_ta_new_pwd ,"我知道了");
+                return;
+            }
+            if (strcmp(new_pwd, confirm_pwd) != 0) {
+                show_popup_msg("修改失败", "两次新密码不一致! ", g_ta_confirm_pwd, "我知道了");
+                return;
+            }
+
+            // 调用数据库更新逻辑
+            UiController::getInstance()->updateUserPassword(g_current_info_uid, new_pwd); 
+
+            // 修改成功后，重新加载员工详情页
+            load_user_info_screen(g_current_info_uid);
+        }
+    }
+}
+
+// 修改密码界面
+void load_user_edit_password_screen() {
+
+    if (scr_edit_password){ // 这里可以复用同一个屏幕指针，或者如果你定义了 scr_modify_password 就用那个
+        lv_obj_delete(scr_edit_password);
+        scr_edit_password = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("修改密码");
+    scr_edit_password = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::USER_EDIT_PASSWORD, &scr_edit_password); // 类型可复用
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_edit_password, [](lv_event_t * e) {
+        scr_edit_password = nullptr;
+        g_ta_old_pwd = nullptr;     // 清理指针
+        g_ta_new_pwd = nullptr;
+        g_ta_confirm_pwd = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();
+    lv_obj_t* form_cont = create_form_container(parts.content);
+
+    // 1. 创建三个输入框
+    g_ta_old_pwd = create_form_input(form_cont, "旧密码:", "请输入原密码", nullptr, false);
+    g_ta_new_pwd = create_form_input(form_cont, "新密码:", "请输入新密码", nullptr, false);
+    g_ta_confirm_pwd = create_form_input(form_cont, "确认密码:", "请再次输入新密码", nullptr, false);
+    
+    // 设置为密码模式（显示为星号 *）
+    lv_textarea_set_password_mode(g_ta_old_pwd, true);
+    lv_textarea_set_password_mode(g_ta_new_pwd, true);
+    lv_textarea_set_password_mode(g_ta_confirm_pwd, true);
+
+    // 2. 按顺序加入输入组
+    UiManager::getInstance()->addObjToGroup(g_ta_old_pwd);
+    UiManager::getInstance()->addObjToGroup(g_ta_new_pwd);
+    UiManager::getInstance()->addObjToGroup(g_ta_confirm_pwd);
+
+    // 绑定事件回调
+    lv_obj_add_event_cb(g_ta_old_pwd, edit_password_event_cb, LV_EVENT_KEY, nullptr);
+    lv_obj_add_event_cb(g_ta_new_pwd, edit_password_event_cb, LV_EVENT_KEY, nullptr);
+    lv_obj_add_event_cb(g_ta_confirm_pwd, edit_password_event_cb, LV_EVENT_KEY, nullptr);
+
+    // 3. 创建确认按钮 (绑定 btn_modify_password_cb)
+    lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认修改", edit_password_event_cb, nullptr);
+    UiManager::getInstance()->addObjToGroup(btn_confirm);
+    lv_obj_add_event_cb(btn_confirm, edit_password_event_cb, LV_EVENT_KEY, nullptr);
+
+    lv_group_focus_obj(g_ta_old_pwd); // 默认焦点在旧密码框
+    lv_screen_load(scr_edit_password);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_edit_password);
 }
 
 // =========================================================

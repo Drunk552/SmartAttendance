@@ -346,6 +346,14 @@ ShiftInfo db_get_user_shift(int user_id);
 bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int privilege, const std::string& card_id);
 
 /**
+ * @brief 单独修改用户人脸
+ * @param user_id 用户ID
+ * @param  face_image新人脸 
+ * @return true 修改成功
+ */
+bool db_update_user_face(int user_id, const cv::Mat& face_image);
+
+/**
  * @brief 单独修改用户密码
  * @param user_id 用户ID
  * @param new_raw_password 新密码 (明文，内部会自动哈希)

@@ -141,6 +141,13 @@ bool business_get_user_at(int index, int *id_out, char *name_buf, int len);
  */
 bool business_register_user(const char* name, int dept_id);
 
+/**
+ * @brief 使用当前帧更新老用户的人脸
+ * @param user_id 要更新的老用户 ID
+ * @return true 成功；false 失败
+ */
+bool business_update_user_face(int user_id);
+
 // ==========================================
 // 考勤记录查询接口 (Data Model for UI List)
 // ==========================================

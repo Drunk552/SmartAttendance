@@ -32,6 +32,10 @@ enum class ScreenType {
     ROLE_AUTH,// 权限变更
     DELETE_USER,//删除用户
     SYS_SELF_CHECK, // 自检功能屏幕
+    USER_EDIT_NAME,//修改姓名
+    USER_EDIT_DEPT,//修改部门
+    USER_EDIT_PASSWORD,//修改密码
+    USER_REGISTER_PASSWORD,//注册密码
     // ... 其他屏幕类型
     // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑
     // ... 其他屏幕
