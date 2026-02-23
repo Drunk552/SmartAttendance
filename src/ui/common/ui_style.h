@@ -36,7 +36,7 @@ extern lv_style_t style_base;         // 基础全屏样式
 extern lv_style_t style_bar_glass;    // 顶部/底部玻璃质感栏
 extern lv_style_t style_panel_transp; // 透明面板
 extern lv_style_t style_btn_default;  // 默认按钮
-extern lv_style_t style_focus_red;    // 红底黄框 (强焦点)
+extern lv_style_t style_focus_red;    // 特殊聚焦样式
 
 
 

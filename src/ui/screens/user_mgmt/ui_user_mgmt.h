@@ -22,15 +22,14 @@ void load_user_menu_screen();
 void load_user_list_screen();
 
 /**
- * @brief 启动注册向导 (Step 1: 填写表单)
+ * @brief 启动注册向导 ( 填写表单)
  */
 void load_user_register_form();
 
 /**
- * @brief 加载注册向导 (Step 2: 拍照)
- * 通常由 Step 1 的"下一步"按钮触发
+ * @brief 加载注册向导 ( 拍照)
  */
-void load_user_register_camera_step();
+void load_face_photograph_screen();
 
 /**
  * @brief 加载员工详情页

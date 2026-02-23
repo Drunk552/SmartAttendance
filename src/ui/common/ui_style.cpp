@@ -10,7 +10,7 @@ lv_style_t style_base;         // 基础全屏样式
 lv_style_t style_bar_glass;    // 顶部/底部玻璃质感栏
 lv_style_t style_panel_transp; // 透明面板
 lv_style_t style_btn_default;  // 默认按钮
-lv_style_t style_focus_red;    // 红底黄框 (强焦点)
+lv_style_t style_focus_red;    // 特殊聚焦样式
 
 // ================= 样式初始化实现 =================
 void ui_style_init() {
@@ -66,15 +66,13 @@ void ui_style_init() {
     lv_style_set_radius(&style_btn_default, 10);// 圆角
     lv_style_set_text_color(&style_btn_default, lv_color_white());// 白字
 
-    // 7.特殊聚焦样式 (红底黄框)，用于重要操作的二次确认界面
+    // 7.特殊聚焦样式 (正红色背景 + 纯白色的粗边框。利用红白的极致反差，产生类似“紧急制动”按钮的刺眼效果。)，用于重要操作的二次确认界面
     lv_style_init(&style_focus_red);
-    lv_style_set_bg_color(&style_focus_red, lv_palette_main(LV_PALETTE_RED));
+    lv_style_set_bg_color(&style_focus_red, lv_palette_main(LV_PALETTE_RED)); // 纯正大红色
     lv_style_set_bg_opa(&style_focus_red, LV_OPA_COVER);
-    lv_style_set_border_color(&style_focus_red, lv_palette_main(LV_PALETTE_YELLOW));
-    lv_style_set_border_width(&style_focus_red, 3);
-    lv_style_set_text_color(&style_focus_red, lv_color_white());
-
-
+    lv_style_set_border_width(&style_focus_red, 4); // 粗边框
+    lv_style_set_border_color(&style_focus_red, lv_color_white()); // 纯白边框，拉高对比度
+    lv_style_set_radius(&style_focus_red, 8); // 圆角稍微变大一点
 
     style_inited = true;
 }
