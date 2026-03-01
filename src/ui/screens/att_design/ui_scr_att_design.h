@@ -11,6 +11,26 @@ namespace att_design {
  */
 void load_att_design_menu_screen();
 
+/**
+ * @brief 加载部门设置子界面
+ */
+void load_dept_screen();
+
+/**
+ * @brief 加载班次设置子界面
+ */
+void load_shift_screen();
+
+/**
+ * @brief 加载考勤规则子界面
+ */
+void load_rule_screen();
+
+/**
+ * @brief 加载人员排班子界面
+ */
+void load_schedule_screen();
+
 } // namespace att_design
 } // namespace ui
 

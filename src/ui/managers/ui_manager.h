@@ -42,6 +42,10 @@ enum class ScreenType {
     ALL_ATT_STATS,//全员考勤报表下载
     PERSONAGE_ATT_STATS,//个人考勤报表下载
     ATT_DESIGN,// 考勤设计
+    DEPT_SETTING, //部门设置子界面
+    SHIFT_SETTING,//班次设置子界面
+    RULE_SETTING,//考勤规则设置
+    SCHEDULE_SETTING,//排班设置
     USER_INFO, // 员工详情
     PWD_CHANGE,// 密码修改
     ROLE_AUTH,// 权限变更
