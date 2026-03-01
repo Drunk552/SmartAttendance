@@ -150,15 +150,17 @@ BaseScreenParts create_base_screen(const char* title) {
     // [Footer 内容1] 操作提示退出 (左对齐)
     lv_obj_t *lbl_out = lv_label_create(parts.footer);
     lv_label_set_text(lbl_out, "退出-ESC"); 
+    lv_obj_add_style(lbl_out, &style_text_cn, 0); // 中文字体
     lv_obj_set_style_text_color(lbl_out, lv_color_hex(0xDDDDDD), 0); // 稍微灰一点的白
-    lv_obj_set_style_text_font(lbl_out, &lv_font_montserrat_14, 0);
+    //lv_obj_set_style_text_font(lbl_out, &lv_font_montserrat_14, 0);
     lv_obj_align(lbl_out, LV_ALIGN_LEFT_MID, 10, 0);
 
     // [Footer 内容2] 操作提示确认 (右对齐))
     lv_obj_t *lbl_notarize = lv_label_create(parts.footer);
     lv_label_set_text(lbl_notarize, "确认-OK"); 
+    lv_obj_add_style(lbl_notarize, &style_text_cn, 0);//中文字体
     lv_obj_set_style_text_color(lbl_notarize, lv_color_hex(0xDDDDDD), 0); // 稍微灰一点的白
-    lv_obj_set_style_text_font(lbl_notarize, &lv_font_montserrat_14, 0);
+    //lv_obj_set_style_text_font(lbl_notarize, &lv_font_montserrat_14, 0);
     lv_obj_align(lbl_notarize, LV_ALIGN_RIGHT_MID, -10, 0);
 
 

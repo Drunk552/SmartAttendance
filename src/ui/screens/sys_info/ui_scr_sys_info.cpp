@@ -12,42 +12,80 @@
 namespace ui {
 namespace sys_info {
 
-static lv_obj_t *scr_sys = nullptr;
 
-// [Constraint] 本地统计逻辑，保留原代码算法
-static void get_storage_statistics(int &total_users, int &admin_count, int &pwd_users) {
-    total_users = 0;
-    admin_count = 0;
-    pwd_users = 0;
+// ================= [内部状态: 屏幕指针] =================
+static lv_obj_t *scr_sys = nullptr;//系统信息主菜单界面
+static lv_obj_t *scr_storage_info = nullptr;//存储信息界面
+static lv_obj_t *scr_facility_info = nullptr;//设备信息界面
 
-    // 调用 Controller 获取原始数据
-    auto users = UiController::getInstance()->getAllUsers();
-    total_users = users.size();
+// ================= [内部状态: 输入框指针] =================
 
-    // 手动遍历计算
-    for (const auto& u : users) {
-        if (u.role == 1) admin_count++;
-        if (!u.password.empty()) pwd_users++;
+
+// ================= [内部状态: 控件与数据] =================
+
+
+// ================= [内部状态: 注册临时数据暂存] =================
+
+
+// ===================== 辅助函数 =================
+
+
+// =========================================================
+// 一、 系统设置主菜单 (Sys Info) (一级界面)
+// =========================================================
+
+
+// 系统设置主菜单事件回调
+static void sys_info_menu_event_cb(lv_event_t *e) {
+
+    lv_event_code_t code = lv_event_get_code(e);
+
+    // 提前获取 key，方便后面判断
+    uint32_t key = 0;
+    if (code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
     }
-}
 
-// 菜单点击回调
-static void sys_menu_event_cb(lv_event_t *e) {
-    if (lv_event_get_key(e) == LV_KEY_ENTER) {
-        const char* tag = (const char*)lv_event_get_user_data(e);
-        if (strcmp(tag, "STORAGE") == 0) {
-            load_storage_info_screen();
-        } else {
-            show_popup("Info", "Device: SmartAtt-V1.5\nVer: 2024.01");
+    // 1. 导航与返回逻辑 (仅处理按键)
+    if (code == LV_EVENT_KEY) {
+        
+        // --- ESC 返回 ---
+        if (key == LV_KEY_ESC) {
+            ui::menu::load_menu_screen(); // 返回上一级系统主菜单
+            return; // 防止继续执行下面代码
         }
-    } else if (lv_event_get_key(e) == LV_KEY_ESC) {
-        ui::menu::load_menu_screen();
+
+        // --- 方向键导航 ---
+        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+        if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(group);// 向下/向右导航
+        }
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(group);// 向上/向左导航
+        }
+    }
+
+    // 2. 触发逻辑 (兼容 触摸点击 和 键盘回车)
+    if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+        
+        lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
+
+        // 获取 index (放在这里获取更安全)
+        const char* user_data = (const char*)lv_event_get_user_data(e);
+        intptr_t index = (intptr_t)user_data;
+
+        if (index == 0) {
+            load_storage_info_screen();//存储信息界面
+        } 
+        else if (index == 1) {
+            load_facility_info_screen();//设备信息界面
+        }
     }
 }
 
-// 主屏幕实现
+// 系统信息主菜单界面
 void load_sys_info_menu_screen() {
-    if (scr_sys){
+        if (scr_sys){
         lv_obj_delete(scr_sys);
         scr_sys = nullptr;
     }
@@ -63,110 +101,200 @@ void load_sys_info_menu_screen() {
 
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
-    // 简单列表菜单
-    lv_obj_t *list = lv_obj_create(scr_sys);
-    lv_obj_set_size(list, 200, 200);
-    lv_obj_center(list);
-    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
-    
-    // 按钮1: 基础信息
-    lv_obj_t *b1 = lv_button_create(list);
-    lv_obj_set_width(b1, LV_PCT(100));
-    lv_label_set_text(lv_label_create(b1), "1. Basic Info / 基础信息");
-    lv_obj_add_style(b1, &style_btn_default, 0);
-    lv_obj_add_style(b1, &style_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(b1, sys_menu_event_cb, LV_EVENT_KEY, (void*)"BASIC");
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
-    // 按钮2: 存储详情
-    lv_obj_t *b2 = lv_button_create(list);
-    lv_obj_set_width(b2, LV_PCT(100));
-    lv_label_set_text(lv_label_create(b2), "2. Storage / 存储详情");
-    lv_obj_add_style(b2, &style_btn_default, 0);
-    lv_obj_add_style(b2, &style_btn_focused, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(b2, sys_menu_event_cb, LV_EVENT_KEY, (void*)"STORAGE");
+    // 创建按钮
+    create_sys_list_btn(list, "1. ", "", "存储信息", sys_info_menu_event_cb, (const char*)(intptr_t)0);
+    create_sys_list_btn(list, "2. ", "", "设备信息", sys_info_menu_event_cb, (const char*)(intptr_t)1);
 
-    UiManager::getInstance()->resetKeypadGroup();
-    UiManager::getInstance()->addObjToGroup(b1);
-    UiManager::getInstance()->addObjToGroup(b2);
-    lv_group_focus_obj(b1);
-    
-    // ESC
-    lv_obj_add_event_cb(scr_sys, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) ui::menu::load_menu_screen();
-    }, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(scr_sys);
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
+    for(uint32_t i=0; i<child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(list, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+    }
+    // 聚焦第一个按钮
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
+    }
 
     lv_screen_load(scr_sys);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_sys);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_sys);// 加载后销毁其他屏幕，保持资源清晰
 }
 
-// [Constraint] 二级页面实现
+
+// =========================================================
+// 1. 存储信息 (Storage Info) (二级界面)
+// =========================================================
+
+//存储信息事件回调
+static void storage_info_event_cb(lv_event_t *e) {
+
+    lv_event_code_t code = lv_event_get_code(e);
+
+    // 提前获取 key，方便后面判断
+    uint32_t key = 0;
+    if (code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 导航与返回逻辑 (仅处理按键)
+    if (code == LV_EVENT_KEY) {
+        
+        // --- ESC 返回 ---
+        if (key == LV_KEY_ESC) {
+            load_sys_info_menu_screen(); // 返回上一级系统信息主菜单界面
+            return; // 防止继续执行下面代码
+        }
+
+        // --- 方向键导航 ---
+        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+        if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(group);// 向下/向右导航
+        }
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(group);// 向上/向左导航
+        }
+    }
+}
+
+//存储信息界面STORAGE_INFO
 void load_storage_info_screen() {
-    if (scr_sys) lv_obj_delete(scr_sys); // 复用同一个全局指针，或新建
-    scr_sys = lv_obj_create(nullptr);
-    lv_obj_add_style(scr_sys, &style_base, 0);
-    UiManager::getInstance()->registerScreen(ScreenType::STORAGE_INFO, &scr_sys);
+
+    if (scr_storage_info){
+        lv_obj_delete(scr_storage_info);
+        scr_storage_info = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("存储信息");
+    scr_storage_info = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::STORAGE_INFO, &scr_storage_info);
 
     // 绑定销毁回调
-    lv_obj_add_event_cb(scr_sys, [](lv_event_t * e) {
-        scr_sys = nullptr;
+    lv_obj_add_event_cb(scr_storage_info, [](lv_event_t * e) {
+        scr_storage_info = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
 
-    lv_obj_t *title = lv_label_create(scr_sys);
-    lv_label_set_text(title, "存储统计 / Storage Stats");
-    lv_obj_add_style(title, &style_text_cn, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
-    // 计算数据
-    int total = 0, admin = 0, pwd = 0;
-    get_storage_statistics(total, admin, pwd); // 调用本地逻辑
+    //获取存储信息数
+    SystemStats stats = UiController::getInstance()->getSystemStatistics();
 
-    // 显示内容
-    lv_obj_t *cont = lv_obj_create(scr_sys);
-    lv_obj_set_size(cont, 200, 180);
-    lv_obj_align(cont, LV_ALIGN_CENTER, 0, 10);
-    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_bg_color(cont, lv_color_hex(0x222222), 0);
+    char buf[64];
+    // 1. 员工注册数
+    snprintf(buf, sizeof(buf), "%d", stats.total_employees);//员工注册数
+    create_sys_list_btn(list, "1. ", "员工注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)0);
 
-    auto add_line = [&](const char* label, int val, lv_color_t color) {
-        lv_obj_t *line = lv_obj_create(cont);
-        lv_obj_set_size(line, LV_PCT(100), 30);
-        lv_obj_remove_style_all(line);
-        lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(line, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    // 2. 管理员注册数
+    snprintf(buf, sizeof(buf), "%d", stats.total_admins);//管理员注册数
+    create_sys_list_btn(list, "2. ", "管理员注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)1);
 
-        lv_obj_t *l = lv_label_create(line);
-        lv_label_set_text(l, label);
-        lv_obj_set_style_text_color(l, lv_color_white(), 0);
-        lv_obj_add_style(l, &style_text_cn, 0);
+    // 3. 人脸注册数
+    snprintf(buf, sizeof(buf), "%d", stats.total_faces);//人脸注册数
+    create_sys_list_btn(list, "3. ", "人脸注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)2);
 
-        lv_obj_t *v = lv_label_create(line);
-        lv_label_set_text_fmt(v, "%d", val);
-        lv_obj_set_style_text_color(v, color, 0);
+    // 4. 指纹注册数
+    snprintf(buf, sizeof(buf), "%d", stats.total_fingerprints);//指纹注册数
+    create_sys_list_btn(list, "4. ", "指纹注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)3);
 
-        return line;
-    };
+    // 5. 卡号注册数
+    snprintf(buf, sizeof(buf), "%d", stats.total_cards);//卡号注册数
+    create_sys_list_btn(list, "5. ", "卡号注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)4);
 
-    add_line("Total Users / 总用户", total, lv_palette_main(LV_PALETTE_BLUE));
-    add_line("Admins / 管理员", admin, lv_palette_main(LV_PALETTE_RED));
-    add_line("Pwd Users / 密码用户", pwd, lv_palette_main(LV_PALETTE_ORANGE));
-    add_line("Free Space / 剩余空间", 120, lv_palette_main(LV_PALETTE_GREEN)); // 模拟值
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
+    for(uint32_t i=0; i<child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(list, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+    }
+    // 聚焦第一个按钮
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
+    }
 
-    // ESC 返回上一级
-    lv_obj_add_event_cb(scr_sys, [](lv_event_t* e){
-        if(lv_event_get_key(e) == LV_KEY_ESC) load_sys_info_menu_screen(); // 返回 SysInfo 菜单
-    }, LV_EVENT_KEY, nullptr);
+    lv_screen_load(scr_storage_info);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_storage_info);// 加载后销毁其他屏幕，保持资源清晰
 
-    UiManager::getInstance()->resetKeypadGroup();
-    UiManager::getInstance()->addObjToGroup(scr_sys);
-    lv_group_focus_obj(scr_sys);
-
-    lv_screen_load(scr_sys);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_sys);
 }
+
+
+// =========================================================
+// 2. 设备信息 (Facility Info) (二级界面)
+// =========================================================
+
+//设备信息事件回调
+static void facility_info_event_cb(lv_event_t *e) {
+
+    lv_event_code_t code = lv_event_get_code(e);
+
+    // 提前获取 key，方便后面判断
+    uint32_t key = 0;
+    if (code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 导航与返回逻辑 (仅处理按键)
+    if (code == LV_EVENT_KEY) {
+        
+        // --- ESC 返回 ---
+        if (key == LV_KEY_ESC) {
+            load_sys_info_menu_screen(); // 返回上一级系统信息主菜单界面
+            return; // 防止继续执行下面代码
+        }
+
+        // --- 方向键导航 ---
+        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+        if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(group);// 向下/向右导航
+        }
+        else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(group);// 向上/向左导航
+        }
+    }
+
+}
+
+//设备信息界面
+void load_facility_info_screen() {
+
+    if (scr_facility_info){
+        lv_obj_delete(scr_facility_info);
+        scr_facility_info = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("设备信息");
+    scr_facility_info = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::FACILITY_INFO, &scr_facility_info);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_facility_info, [](lv_event_t * e) {
+        scr_facility_info = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
+
+    // 创建按钮
+    create_sys_list_btn(list, "1. ", "", "设备名称", facility_info_event_cb, (const char*)(intptr_t)0);
+    create_sys_list_btn(list, "2. ", "", "机器号", facility_info_event_cb, (const char*)(intptr_t)1);
+    create_sys_list_btn(list, "3. ", "", "固定版本", facility_info_event_cb, (const char*)(intptr_t)2);
+
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
+    for(uint32_t i=0; i<child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(list, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+    }
+    // 聚焦第一个按钮
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
+    }
+
+    lv_screen_load(scr_facility_info);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_facility_info);// 加载后销毁其他屏幕，保持资源清晰
+
+}
+
 
 } // namespace sys_info
 } // namespace ui

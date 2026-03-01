@@ -7,14 +7,20 @@ namespace ui {
 namespace sys_info {
 
 /**
- * @brief 加载系统信息屏幕
+ * @brief 系统信息界面
  */
 void load_sys_info_menu_screen();
 
 /**
- * @brief 加载存储信息屏幕
+ * @brief 存储信息界面
  */
 void load_storage_info_screen();
+
+/**
+ * @brief 设备信息界面
+ */
+void load_facility_info_screen();
+
 
 }
 }

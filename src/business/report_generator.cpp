@@ -266,7 +266,6 @@ int ReportGenerator::calculateEarlyMinutes(long long timestamp, const ShiftInfo&
  */
 std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts, long long end_ts) {
     std::vector<AttendanceRecord> records;
-
     auto db_records = ::db_get_records(start_ts, end_ts);
 
     // 班次缓存 map，避免同一个人同一天重复查询数据库
@@ -275,19 +274,18 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
     
     for (const auto& record : db_records) {
         AttendanceRecord rec; // 复制数据
-        rec.id = record.id; // 保留原ID
-        rec.user_id = record.user_id; // 保留原用户ID
-        rec.timestamp = record.timestamp; // 保留原时间戳
-        rec.status = record.status; // 保留原状态
-        rec.user_name = record.user_name; // 保留原用户名
-        rec.dept_name = record.dept_name; // 保留原部门名称
+        rec.id = record.id; 
+        rec.user_id = record.user_id; 
+        rec.timestamp = record.timestamp; 
+        rec.status = record.status; 
+        rec.user_name = record.user_name; 
+        rec.dept_name = record.dept_name; 
         rec.image_path = record.image_path;
 
         rec.minutes_late = 0; // 默认值为0
         rec.minutes_early = 0; // 默认值为0
 
         // 动态获取班次信息
-        // 生成缓存 Key (用户ID + 日期)
         std::string date_str = formatDate(rec.timestamp);
         std::string cache_key = std::to_string(rec.user_id) + "_" + date_str;
 
@@ -296,28 +294,33 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
         if (shift_cache.find(cache_key) != shift_cache.end()) {
             current_shift = shift_cache[cache_key];
         } 
-        
         else {
-            //智能获取当天的排班 (个人排班 > 部门排班 > 默认班次)
-            current_shift = ::db_get_user_shift_smart(rec.user_id, rec.timestamp);
+            // 智能获取当天的排班
+            auto shift_opt = ::db_get_user_shift_smart(rec.user_id, rec.timestamp);
+            
+            if (shift_opt.has_value()) {
+                current_shift = shift_opt.value(); // 如果有排班，把数据拆盒取出来
+            } else {
+                current_shift = ShiftInfo(); // 如果是空盒子(休息日)，构造一个默认空对象
+                current_shift.id = 0;        // 确保 ID 为 0，兼容后续的迟到早退计算逻辑
+            }
+
             shift_cache[cache_key] = current_shift;
         } 
         
-        //计算迟到/早退逻辑
+        // 计算迟到/早退逻辑 (自动处理 id=0 的情况)
         int late_min = calculateLateMinutes(rec.timestamp, current_shift);
         int early_min = calculateEarlyMinutes(rec.timestamp, current_shift);
 
-        //根据计算结果强制更新状态和分钟数
+        // 根据计算结果强制更新状态和分钟数
         if (late_min > 0) {
             rec.status = STATUS_LATE;       // 强制标记为迟到
             rec.minutes_late = late_min;    // 记录迟到时长
         } 
-
         else if (early_min > 0) {
             rec.status = STATUS_EARLY;      // 强制标记为早退
             rec.minutes_early = early_min;  // 记录早退时长
         }
-
         else {
             // 如果既不迟到也不早退，但原状态显示异常，则修正为正常
             if (rec.status == STATUS_LATE || rec.status == STATUS_EARLY) {
@@ -758,9 +761,15 @@ std::map<int,ShiftInfo> ReportGenerator::db_get_user_monthly_shifts(int user_id,
         std::string date_str = formatDateString(year, month, day); // 构建日期字符串
         long long timestamp = parseDateToTimestamp(date_str, false);
 
-        ShiftInfo shift = ::db_get_user_shift_smart(user_id, timestamp); // 调用现有的智能获取排班接口
+        auto shift_opt = ::db_get_user_shift_smart(user_id, timestamp); 
         
-        monthly_shifts[day] = shift;
+        if (shift_opt.has_value()) {
+            monthly_shifts[day] = shift_opt.value(); // 取出实际排班信息
+        } else {
+            ShiftInfo empty_shift; 
+            empty_shift.id = 0; // 如果没排班/休息，返回一个 id=0 的空对象存入 map
+            monthly_shifts[day] = empty_shift;
+        }
     }
     
     return monthly_shifts;

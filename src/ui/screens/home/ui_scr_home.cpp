@@ -206,6 +206,16 @@ static void create_screen() {
     // 底部提示语 (覆盖默认的 "退出-ESC 确认-ENTER")
     set_base_footer_hint(parts.footer, LV_SYMBOL_POWER " -ESC ",LV_SYMBOL_HOME " -ENTER "); // 设置底部提示语
 
+    lv_obj_t* lbl_left = lv_obj_get_child(parts.footer, 0);  // 获取左边的 Label (退出提示)
+    lv_obj_t* lbl_right = lv_obj_get_child(parts.footer, 1); // 获取右边的 Label (确认提示)
+    
+    if (lbl_left) {
+        lv_obj_set_style_text_font(lbl_left, &lv_font_montserrat_14, 0);
+    }
+    if (lbl_right) {
+        lv_obj_set_style_text_font(lbl_right, &lv_font_montserrat_14, 0);
+    }
+
     // 5. 事件与逻辑绑定
     // 绑定按键事件 (挂在最外层 screen 上)
     lv_obj_add_event_cb(screen, screen_event_cb, LV_EVENT_KEY, NULL);

@@ -41,6 +41,8 @@ static lv_obj_t* g_dd_new_dept = nullptr;   // 注册部门下拉框
 static lv_obj_t* g_ta_del_uid = nullptr;     // 工号输入框
 static lv_obj_t* g_ta_del_name = nullptr;    // 姓名只读展示框
 static lv_obj_t* g_ta_del_dept = nullptr;    // 部门只读展示框
+static lv_obj_t* g_ta_role_pwd = nullptr; // 权限修改-密码输入框
+static lv_obj_t* g_dd_role = nullptr;     // 权限修改-下拉框
 
 static std::vector<int> g_dept_id_map;//专门用于保存下拉框每一项对应的真实数据库部门 ID
 
@@ -50,12 +52,14 @@ static lv_obj_t *img_face_reg = nullptr;
 static lv_obj_t *g_btn_confirm = nullptr;//员工注册按钮
 static lv_obj_t* g_btn_del_confirm = nullptr;// 确认删除按钮
 static bool s_dept_ready_to_jump = false; // 记录下拉框状态：是否准备跳转
+static lv_obj_t* g_btn_role_confirm = nullptr; // 权限修改-确认按钮
 
 // ================= [内部状态: 注册临时数据暂存] =================
 static int g_reg_user_id = 0;
 static std::string g_reg_name = "";
 static int g_reg_dept_id = 0;
 static int g_current_info_uid = 0;// 当前正在查看的员工 ID (用于 info screen)
+static int g_current_edit_user_id = -1;   // 当前正在编辑权限的用户ID
 
 static bool g_is_updating_face = false;// 标记当前进入摄像头界面是为了“更新老员工”还是“注册新员工”
 
@@ -423,9 +427,11 @@ static void user_info_event_cb(lv_event_t *e) {
             load_face_photograph_screen();//跳转到注册人脸界面
         }
         else if (index == 4) {
+            show_popup_msg("指纹", "该功能还未开发!\n尽请期待! ", nullptr, "我知道了");
             //跳转到修改指纹界面
         }
         else if (index == 5) {
+            show_popup_msg("卡号", "该功能还未开发!\n尽请期待! ", nullptr, "我知道了");
             //跳转到修改卡号界面
         }
         else if (index == 6) {
@@ -440,7 +446,7 @@ static void user_info_event_cb(lv_event_t *e) {
             }
         }
         else if (index == 7) {
-            //跳转到修改权限界面
+            load_user_role_change_screen();//跳转到修改权限界面
         }
         else {
             
@@ -486,11 +492,11 @@ void load_user_info_screen(int user_id) {
     // 假设部门有名称映射，如果没有可以直接显示 ID
     std::string str_dept  = UiController::getInstance()->getDeptNameById(user.dept_id); 
     // 判断生物特征是否已录入 (这里假设非空代表已录入)
-    std::string str_face  = user.face_feature.empty() ? "未注册" : "已注册";
-    std::string str_fp    = user.fingerprint_feature.empty() ? "未注册" : "已注册";
-    std::string str_card  = user.card_id.empty() ? "未绑定" : user.card_id;
-    std::string str_pwd   = user.password.empty() ? "未注册" : "***";
-    std::string str_role  = (user.role == 1) ? "管理员" : "普通";
+    std::string str_face  = user.avatar_path.empty() ? "未注册" : "已注册";//人脸照片存储路径
+    std::string str_fp    = user.fingerprint_feature.empty() ? "未注册" : "已注册";//指纹
+    std::string str_card  = user.card_id.empty() ? "未绑定" : user.card_id;//卡号
+    std::string str_pwd   = user.password.empty() ? "未注册" : "***";//密码
+    std::string str_role  = (user.role == 1) ? "管理员" : "普通";//权限
 
     int* pass_id = new int(user_id);// 需要在事件回调中使用用户 ID，所以放在堆上并传递指针
 
@@ -987,7 +993,7 @@ void load_user_edit_password_screen() {
 
     BaseScreenParts parts = create_base_screen("修改密码");
     scr_edit_password = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_EDIT_PASSWORD, &scr_edit_password); // 类型可复用
+    UiManager::getInstance()->registerScreen(ScreenType::USER_EDIT_PASSWORD, &scr_edit_password); 
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_edit_password, [](lv_event_t * e) {
@@ -1033,13 +1039,122 @@ void load_user_edit_password_screen() {
 
 // ========================== 1.1.4. 修改员工权限 ===============================
 
-void load_user_role_change_screen(int user_id, int current_role) {
+// 修改员工权限事件回调
+static void edit_rols_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+
+    uint32_t key = 0;
+    if(code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 处理 ESC 键退出
+    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
+        lv_indev_wait_release(lv_indev_get_act()); 
+        load_user_menu_screen(); 
+        return;
+    }
+
+    // 2. 区分当前焦点所在控件
+    if (current_target == g_ta_role_pwd) {
+        // ================= 焦点在【验证密码输入框】 =================
+        if (code == LV_EVENT_KEY) {
+            if (key == LV_KEY_ENTER || key == LV_KEY_DOWN) {
+                lv_group_focus_obj(g_dd_role); // 跳到权限下拉框
+                lv_indev_wait_release(lv_indev_get_act());
+                lv_event_stop_processing(e); // 拦截回车键，防止输入框输入换行符
+            }
+        }
+    } 
+    else if (current_target == g_dd_role) {
+        // ================= 焦点在【权限下拉框】 =================
+        if (code == LV_EVENT_KEY) {
+            
+            if (!lv_dropdown_is_open(g_dd_role)) {
+                // 【状态 A：下拉框未展开】
+                if (key == LV_KEY_UP) {
+                    lv_group_focus_obj(g_ta_role_pwd); // 按 ↑：回到验证密码输入框
+                    lv_event_stop_processing(e);       // 切断事件，防止被下拉框底层吃掉！
+                    return;
+                } else if (key == LV_KEY_DOWN) {
+                    lv_group_focus_obj(g_btn_role_confirm); // 按 ↓：跳到确认按钮
+                    lv_event_stop_processing(e);       // 切断事件，防止被下拉框底层吃掉导致展开！
+                    return;
+                }
+                // 注意：这里我们故意不拦截 LV_KEY_ENTER，让 LVGL 正常处理，从而“展开”下拉框。
+            } 
+            else {
+                // 【状态 B：下拉框已展开】
+                // 此时 ↑ ↓ 键用于在列表中挑选，不需要拦截。
+                if (key == LV_KEY_ENTER) {
+                    // 按下回车，LVGL 底层会选中列表项并自动关闭下拉框。
+                    // 此时我们不拦截，但我们在下一帧利用异步调用，自动把焦点甩给“确认按钮”！
+                    lv_async_call([](void*){
+                        if (g_btn_role_confirm && lv_obj_is_valid(g_btn_role_confirm)) {
+                            lv_group_focus_obj(g_btn_role_confirm);
+                        }
+                    }, nullptr);
+                }
+            }
+        }
+    } 
+    else if (current_target == g_btn_role_confirm) {
+        // ================= 焦点在【确认修改按钮】 =================
+        if (code == LV_EVENT_KEY) {
+            if (key == LV_KEY_UP) {
+                lv_group_focus_obj(g_dd_role); // 按 ↑ 回到下拉框
+                return; 
+            }
+        }
+
+        // 处理“确认修改”逻辑
+        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+            
+            lv_indev_wait_release(lv_indev_get_act());
+
+            const char* role_pwd = lv_textarea_get_text(g_ta_role_pwd);
+            uint16_t role_index = lv_dropdown_get_selected(g_dd_role); // 0:普通, 1:管理员
+            const char* role_pwd_plaintext = lv_textarea_get_text(g_ta_role_pwd);// 获取输入框中的明文密码
+
+            // 业务校验逻辑
+            UserData user = UiController::getInstance()->getUserInfo(g_current_info_uid);
+
+            if (user.password.empty()) {
+                show_popup_msg("修改失败！", "该员工未设置密码，请先设置密码!", nullptr, "我知道了");
+                return;
+            }
+
+            if (!UiController::getInstance()->verifyUserPassword(g_current_info_uid, role_pwd_plaintext)) {
+                show_popup_msg("验证失败！", "密码错误，无法修改权限!", g_ta_role_pwd, "我知道了");
+                lv_textarea_set_text(g_ta_role_pwd, ""); // 清空密码框
+                return;
+            }
+
+            // 调用接口更新权限
+            if (UiController::getInstance()->updateUserRole(g_current_info_uid, (int)role_index)) {
+                show_popup_msg("修改成功!", "权限修改成功!", nullptr, "我知道了");
+                load_user_info_screen(g_current_info_uid);// 修改成功，返回详情页
+            } else {
+                show_popup_msg("修改失败!", "数据库更新失败!", nullptr, "我知道了");
+            }
+            
+        }
+    }
+}
+
+//修改员工权限界面
+void load_user_role_change_screen() {
+
+    int current_role = UiController::getInstance()->getUserRoleById(g_current_info_uid);
+
     if (scr_role) {
         lv_obj_delete(scr_role);
         scr_role = nullptr;
     }
 
-    BaseScreenParts parts = create_base_screen("设置权限");
+    // 1. 创建基础屏幕
+    BaseScreenParts parts = create_base_screen("权限修改");
     scr_role = parts.screen;
     UiManager::getInstance()->registerScreen(ScreenType::ROLE_AUTH, &scr_role);
 
@@ -1048,52 +1163,35 @@ void load_user_role_change_screen(int user_id, int current_role) {
         scr_role = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
-
-    // 输入框：验证当前用户密码
-    lv_obj_t *ta = lv_textarea_create(scr_role);
-    lv_textarea_set_password_mode(ta, true);
-    lv_textarea_set_placeholder_text(ta, "Admin Password");
-    lv_textarea_set_one_line(ta, true);
-    lv_obj_align(ta, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_style(ta, &style_btn_focused, LV_STATE_FOCUSED);
-
-    struct Ctx { int uid; int role; };
-    Ctx* ctx = new Ctx{user_id, current_role}; 
-
-    // 内存清理
-    lv_obj_add_event_cb(ta, [](lv_event_t* e){
-        delete (Ctx*)lv_event_get_user_data(e);
-    }, LV_EVENT_DELETE, nullptr);
-
-    // 验证逻辑
-    lv_obj_add_event_cb(ta, [](lv_event_t* e){
-        if (lv_event_get_key(e) == LV_KEY_ENTER) {
-            Ctx* c = (Ctx*)lv_event_get_user_data(e);
-            const char* pwd = lv_textarea_get_text((lv_obj_t*)lv_event_get_target(e));
-            // 简单硬编码校验
-            if(strcmp(pwd, "123456") == 0) { 
-                UiController::getInstance()->updateUserRole(c->uid, c->role == 0 ? 1 : 0);
-                show_popup("Success", "Role Updated");
-                load_user_info_screen(c->uid);
-            } else {
-                show_popup("Error", "Wrong Password");
-                lv_textarea_set_text((lv_obj_t*)lv_event_get_target(e), "");
-            }
-        }
-    }, LV_EVENT_KEY, ctx);
-
-    // ESC
-    lv_obj_add_event_cb(ta, [](lv_event_t* e){
-         if(lv_event_get_key(e) == LV_KEY_ESC) {
-             Ctx* c = (Ctx*)lv_event_get_user_data(e);
-             load_user_info_screen(c->uid);
-         }
-    }, LV_EVENT_KEY, nullptr);
-
     UiManager::getInstance()->resetKeypadGroup();
-    UiManager::getInstance()->addObjToGroup(ta);
-    lv_group_focus_obj(ta);
+
+    // 2. 创建表单容器
+    lv_obj_t* form_cont = create_form_container(parts.content);
+
+    // 3. 密码输入框
+    g_ta_role_pwd = create_form_input(form_cont, "验证密码:", "请输入当前用户密码", nullptr, false);
+    lv_textarea_set_password_mode(g_ta_role_pwd, true); // 开启密码掩码模式 (显示为星号)
+    lv_textarea_set_max_length(g_ta_role_pwd, 8);       // 密码限制最多8位
+    lv_textarea_set_one_line(g_ta_role_pwd, true);      // 强制单行模式
+    lv_obj_add_event_cb(g_ta_role_pwd, edit_rols_event_cb, LV_EVENT_ALL, nullptr);
+    UiManager::getInstance()->addObjToGroup(g_ta_role_pwd);
+
+    // 4. 权限选择下拉框
+    // 组装下拉选项 (0: 普通用户, 1: 管理员)
+    std::vector<std::pair<int, std::string>> role_items = {
+        {0, "普通用户"},
+        {1, "管理员"}
+    };
+    g_dd_role = create_form_dropdown(form_cont, "员工权限", role_items, current_role);
+    lv_obj_add_event_cb(g_dd_role, edit_rols_event_cb, LV_EVENT_ALL, nullptr);
+    UiManager::getInstance()->addObjToGroup(g_dd_role);
+
+    // 5. 确认修改按钮
+    g_btn_role_confirm = create_form_btn(form_cont, "确认修改", edit_rols_event_cb, nullptr);
+    UiManager::getInstance()->addObjToGroup(g_btn_role_confirm);
+
+    // 6. 将默认焦点设置为密码输入框
+    lv_group_focus_obj(g_ta_role_pwd);
 
     lv_screen_load(scr_role);
     UiManager::getInstance()->destroyAllScreensExcept(scr_role);

@@ -1,9 +1,7 @@
 /**
  * @file db_storage.h
- * @brief 数据层核心接口 (Phase 02 - DAO Layer)
+ * @brief 数据层核心接口 
  * @details 封装数据库操作，提供部门、班次、用户及考勤记录的增删改查（DAO）接口。
- * @version 2.0
- * @date 2025-12-14
  */
 
 #ifndef DB_STORAGE_H
@@ -11,9 +9,10 @@
 
 #ifdef __cplusplus
 #include <opencv2/core.hpp>
-#include <string> // [新增] 需要处理字符串
+#include <string> // 需要处理字符串
 #include <vector>
 #include <utility> // for std::pair
+#include <optional>
 
 // ================= 数据结构定义(Data Structures) =================
 
@@ -96,28 +95,31 @@ struct UserData {
     /// @brief 姓名 (支持中英文)
     std::string name;       
 
-    /// @brief [新增] 登录密码 (用于键盘输入验证)
+    /// @brief 登录密码 (用于输入验证)
     std::string password;   
 
-    /// @brief [新增] IC/ID卡号 (用于刷卡验证)
+    /// @brief IC/ID卡号 (用于刷卡验证)
     std::string card_id;    
 
-    /// @brief [新增] 权限等级
+    /// @brief  权限等级
     /// @note 0: 普通员工 (仅考勤), 1: 管理员 (可进入系统菜单)
     int role;               
 
-    /// @brief [新增] 所属部门 ID (关联 DeptInfo.id)
+    /// @brief  所属部门 ID (关联 DeptInfo.id)
     int dept_id;            
 
     ///绑定的默认班次ID
     int default_shift_id; 
 
-    // [新增] 部门名称 (用于UI显示和报表，数据库不直接存，靠联表查询获取)
+    // 部门名称 (用于UI显示和报表，数据库不直接存，靠联表查询获取)
     std::string dept_name;
 
     /// @brief 人脸特征数据 (二进制流)
     /// @details 对应数据库中的 BLOB 字段，存储编码后的 JPG 图片数据
     std::vector<uchar> face_feature; 
+
+    /// @brief 注册员工的人脸图片路径
+    std::string avatar_path;
     
     /// @brief 指纹特征数据 (二进制流)
     std::vector<uint8_t> fingerprint_feature;
@@ -160,6 +162,15 @@ struct AttendanceRecord {
     int minutes_early;
 };
 
+// 用于查询系统信息的结构体
+struct SystemStats {
+    int total_employees;    // 员工注册数 (总人数)
+    int total_admins;       // 管理员注册数
+    int total_faces;        // 人脸注册数
+    int total_fingerprints; // 指纹注册数
+    int total_cards;        // 卡号注册数
+};
+
 // ================= 核心接口声明 =================
 #endif
 
@@ -170,6 +181,9 @@ struct AttendanceRecord {
  * @return false 初始化失败 (如文件权限问题、SQL错误)
  */
 bool data_init();
+
+// [辅助函数] 简单哈希转换
+std::string db_hash_password(const std::string& raw_pwd);
 
 /**
  * @brief  数据播种 (Seeding)
@@ -304,7 +318,7 @@ bool db_delete_user(int user_id);
  * @param user_id 工号
  * @return UserData 用户信息结构体 (若不存在，ID为0)
  */
-UserData db_get_user_info(int user_id);
+std::optional<UserData> db_get_user_info(int user_id);
 
 /**
  * @brief 获取所有用户基础数据
@@ -393,6 +407,14 @@ std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_t
 // 获取指定用户的最后一次打卡时间戳，如果没有记录返回 0
 time_t db_getLastPunchTime(int user_id);
 
+/**
+ * @brief 自动清理过期的考勤抓拍图片
+ * @param days_old 超过多少天的图片将被清理 (默认 30 天)
+ * @return 成功清理的图片数量
+ */
+int db_cleanup_old_attendance_images(int days_old = 30);
+
+
 // ================= 5. 数据库事务接口 =================
 
 /**
@@ -424,7 +446,7 @@ bool db_set_dept_schedule(int dept_id, int day_of_week, int shift_id);
 bool db_set_user_special_schedule(int user_id, const std::string& date_str, int shift_id);
 
 /**
- * @brief [核心] 根据日期智能获取用户当天的班次
+ * @brief  根据日期智能获取用户当天的班次
  * @details 优先级逻辑:
  * 1. 检查 `user_schedule` (个人特殊排班)
  * 2. 若无，检查 `dept_schedule` (部门周排班)
@@ -433,9 +455,10 @@ bool db_set_user_special_schedule(int user_id, const std::string& date_str, int 
  * @param timestamp 查询的时间戳 (秒)
  * @return ShiftInfo 班次信息 (若当天休息或未排班，返回ID=0的空对象)
  */
-ShiftInfo db_get_user_shift_smart(int user_id, long long timestamp);
+std::optional<ShiftInfo> db_get_user_shift_smart(int user_id, long long timestamp);
 
 // ================= 兼容性接口 (Legacy Support) =================
+
 
 /**
  * @brief [已弃用] 简单注册接口
@@ -471,21 +494,26 @@ inline std::vector<UserData> data_getAllUsers() {
 long long data_getLastImageID();// 获取最后保存图像的ID
 
 /**
- * @brief [Epic 4.3] 清空所有考勤记录
+ * @brief  清空所有考勤记录
  * @details 删除 attendance 表数据，清空 captured_images 目录
  */
 bool db_clear_attendance();
 
 /**
- * @brief [Epic 4.3] 清空所有员工数据
+ * @brief  清空所有员工数据
  * @details 删除 users 表数据及其关联的图片文件
  */
 bool db_clear_users();
 
 /**
- * @brief [Epic 4.3] 恢复出厂设置
+ * @brief  恢复出厂设置
  * @details 清除所有数据库数据和图片，重置系统
  */
 bool db_factory_reset();
+
+/**
+ * @brief 查询系统信息
+ */
+SystemStats db_get_system_stats();
 
 #endif // DB_STORAGE_H

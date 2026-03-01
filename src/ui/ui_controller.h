@@ -33,6 +33,10 @@ public:
     std::vector<DeptInfo> getDepartmentList();
     std::string getDeptNameById(int deptId);//通过部门ID获取部门名称
     bool registerNewUser(const std::string& name, int deptId);
+    int getUserRoleById(int userId);// 获取指定用户的权限 (0:普通, 1:管理员, -1:未找到)
+
+    // 验证用户密码是否正确(校验哈希值)
+    bool verifyUserPassword(int userId, const std::string& inputPassword);
     
     // 获取用于列表显示的用户数据
     // 返回简单的结构或直接复用底层，这里演示获取所有用户
@@ -43,6 +47,8 @@ public:
     // --- 3. 记录与查询类 ---
     UserData getUserInfo(int uid);
     std::vector<AttendanceRecord> getRecords(int userId, time_t start, time_t end);
+    // 检查用户是否存在 (用于 UI 导出报表前的同步校验)
+    bool checkUserExists(int user_id);
     
     // --- 4. 维护与报表 ---
     bool exportReportToUsb();      // 封装报表导出逻辑
@@ -76,6 +82,9 @@ public:
     
     // 更新摄像头 Buffer 的接口
     void updateCameraFrame(const uint8_t* data, int w, int h);
+
+    //查询系统信息
+    SystemStats getSystemStatistics();
 
 private:
     UiController() = default; // 私有构造

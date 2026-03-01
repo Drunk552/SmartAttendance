@@ -548,42 +548,31 @@ static void background_capture_loop() {
  */
 
 bool business_init() {
-    //加载人脸检测器（Haar级联分类器）
+    // 加载人脸检测器（Haar级联分类器）
     std::string cascade_path = find_cascade();
     if (cascade_path.empty() || !face_cas.load(cascade_path)) {
         std::cerr << "找不到/加载失败: haarcascade_frontalface_default.xml\n";
         return false;
     }
 
-    /*
-    //打开视频输入 (默认尝试打开 SDP)
-    std::string sdp = "/tmp/yuyv.sdp"; 
-    
-    // 先检查文件是否存在，防止 GStreamer 内部错误
-    if (std::filesystem::exists(sdp)) {
-        std::cout << "[Business] 正在尝试连接 SDP 推流: " << sdp << " ...\n";
-        cap = open_sdp_stream(sdp);
-    } else {
-        std::cerr << "[WARN] 找不到 " << sdp << " 文件 (脚本可能未运行)\n";
-    }
+    std::cout << ">>> [Business] 摄像头初始化已移交至后台线程，主界面立即启动。" << std::endl;
 
-    if (cap.isOpened()) {
-        std::cout << "[Business] SDP 流初始化成功！\n";
-    } else {
-        //失败了也不要 open(0)，只是打印警告
-        std::cerr << "[WARN] SDP 流暂未就绪，将在后台线程自动重试。\n";
-    }
-    */
-
-    std::cout << ">>> [Business] 摄像头初始化已移交至后台线程，主界面立即启动。" << std::endl;// 摄像头初始化移至后台线程
-
-    //初始化LBPH人脸识别器
-    recog = LBPHFaceRecognizer::create(1,8,8,8, 500.0);// 参数：半径=1, 邻域=8, 网格X=8, 网格Y=8, 阈值=500.0
+    // 初始化LBPH人脸识别器
+    recog = LBPHFaceRecognizer::create(1, 8, 8, 8, 500.0);
     
     // 确保数据层已初始化 (连接数据库)
     if (!data_init()) {
         std::cerr << "[Business] 数据层初始化失败！" << std::endl;
         return false;
+    }
+
+    // 系统启动时，静默清理 30 天前的旧打卡抓拍图，释放磁盘空间
+    std::cout << ">>> [Business] 正在检查磁盘空间与过期打卡抓拍图..." << std::endl;
+    int cleaned_images = db_cleanup_old_attendance_images(30); // 30天
+    if (cleaned_images > 0) {
+        std::cout << ">>> [Business] 自动清理完毕！共删除 " << cleaned_images << " 张过期图片。" << std::endl;
+    } else {
+        std::cout << ">>> [Business] 磁盘状态良好，暂无过期打卡图片需清理。" << std::endl;
     }
 
     // 准备全局变量
@@ -597,17 +586,13 @@ bool business_init() {
     // A. 尝试加载本地模型文件
     std::ifstream f(MODEL_FILE);
     if (f.good()) {
-        f.close(); // 文件存在，关闭流
+        f.close(); 
         try {
             std::cout << ">>> [Business] 发现本地模型 " << MODEL_FILE << "，正在快速加载..." << std::endl;
-            recog->read(MODEL_FILE); // 直接读取 XML
+            recog->read(MODEL_FILE); 
             
-            // 虽然不用读图片，但必须从数据库加载 ID->姓名的映射关系
-            // 使用 lightweight 接口 (不读 BLOB，速度快)
             std::vector<UserData> users_info = db_get_all_users_light();
-            
             for (const auto& u : users_info) {
-                // 确保 names 向量够长
                 if (names.size() <= u.id) {
                     names.resize(u.id + 1, "Unknown");
                 }
@@ -624,17 +609,22 @@ bool business_init() {
         }
     }
 
-    // B. 如果模型加载失败（或文件不存在），执行全量训练并保存
+    // B. 如果模型加载失败，执行全量训练并保存
     if (!model_loaded) {
-        std::cout << ">>> [Business] 开始执行全量训练 (读取数据库 BLOB)..." << std::endl;
+        std::cout << ">>> [Business] 开始执行全量训练 (读取本地头像文件)..." << std::endl;
         
-        // 使用 heavyweight 接口 (读取 BLOB 图片)
-        std::vector<UserData> users = db_get_all_users(); // 注意：这里调用的是原有的全量接口
+        std::vector<UserData> users = db_get_all_users(); 
         
         if (!users.empty()) {
             for (const auto& u : users) {
-                // 解码图片
-                cv::Mat sample = cv::imdecode(u.face_feature, cv::IMREAD_GRAYSCALE);
+                cv::Mat sample;
+                
+                // 判断路径是否为空，并用 imread 读取本地图片
+                if (!u.avatar_path.empty()) {
+                    sample = cv::imread(u.avatar_path, cv::IMREAD_GRAYSCALE);
+                }
+
+                // 安全校验：如果图片成功读取，才加入训练集
                 if (!sample.empty()) {
                     face_samples.push_back(sample);
                     labels.push_back(u.id);
@@ -644,6 +634,10 @@ bool business_init() {
                         names.resize(u.id + 1, "Unknown");
                     }
                     names[u.id] = u.name;
+                } else {
+                    // 打印警告，避免某个人没头像导致整个训练卡死
+                    std::cerr << "[Warn] 无法加载用户头像，已跳过。用户ID: " << u.id 
+                              << " 路径: " << (u.avatar_path.empty() ? "空" : u.avatar_path) << std::endl;
                 }
             }
             
@@ -653,15 +647,17 @@ bool business_init() {
                 trained = true;
                 std::cout << ">>> [Business] 训练完成。" << std::endl;
                 
-                // 【保存】训练完成后立即保存模型，下次启动就快了
                 recog->write(MODEL_FILE);
                 std::cout << ">>> [Business] 新模型已保存至: " << MODEL_FILE << std::endl;
+            } else {
+                std::cout << ">>> [Business] 未找到有效的本地头像文件，无法完成训练。" << std::endl;
             }
         } else {
              std::cout << ">>> [Business] 数据库无用户，跳过训练。" << std::endl;
         }
     }
-    // 设置默认预处理配置
+
+    // 启动采集线程 
     if (!g_is_running) {
         g_is_running = true;
         g_worker_thread = std::thread(background_capture_loop);
@@ -673,13 +669,6 @@ bool business_init() {
         g_db_writer_running = true;
         g_db_writer_thread = std::thread(attendance_writer_thread);
         std::cout << ">>> [Business] DB Writer thread started." << std::endl;
-    }
-
-    // 启动采集线程 (原有逻辑)
-    if (!g_is_running) {
-        g_is_running = true;
-        g_worker_thread = std::thread(background_capture_loop);
-        std::cout << ">>> [Business] Background capture thread started." << std::endl;
     }
 
     return true;
@@ -1477,7 +1466,7 @@ void business_set_roi_enhance(bool enable, float contrast, float brightness){
     preprocess_config.roi_contrast = contrast;
     preprocess_config.roi_brightness = brightness;
 
-    std::cout << "[Business] ROI增强： " << (enable ? "启用" : "禁用")
+    std::cout << "[Business] ROI增强: " << (enable ? "启用" : "禁用")
               << ", 对比度: " << contrast
               << ", 亮度: " << brightness << std::endl;
 }

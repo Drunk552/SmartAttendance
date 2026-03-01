@@ -38,36 +38,35 @@ void load_face_photograph_screen();
 void load_user_info_screen(int user_id);
 
 /**
- * @brief 修改姓名界面
+ * @brief 修改员工姓名界面
  */
 void load_user_edit_name_screen();
 
 /**
- * @brief 修改部门界面
+ * @brief 修改员工部门界面
  */
 void load_user_edit_dept_screen();
 
 /**
- * @brief 注册密码界面
+ * @brief 注册员工密码界面
  */
 void load_user_register_password_screen();
 
 /**
- * @brief 修改密码界面
+ * @brief 修改员工密码界面
  */
 void load_user_edit_password_screen();
+
+/**
+ * @brief 修改员工权限码界面
+ */
+void load_user_role_change_screen();
 
 /**
  * @brief 加载删除员工确认页
  */
 void load_user_delete_screen();
 
-/**
- * @brief 加载权限变更页 (Level 3-B)
- * @param user_id 员工ID
- * @param current_role 当前权限
- */
-void load_user_role_change_screen(int user_id, int current_role);
 
 } // namespace user_mgmt
 } // namespace ui

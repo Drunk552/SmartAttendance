@@ -18,11 +18,11 @@ enum class ScreenType {
     REGISTER,// 注册流程屏幕
     REGISTER_CAMERA,// 注册流程拍照屏幕
     RECORD_QUERY,// 记录查询菜单
-    RECORD_RESULT,// 记录查询结果
     SYS_SETTINGS,// 系统设置
     SYS_ADVANCED,// 系统高级设置
     SYS_INFO,// 系统信息
     STORAGE_INFO,// 存储信息
+    FACILITY_INFO,//设备信息
     ATT_STATS,// 考勤统计
     ALL_ATT_STATS,//全员考勤报表下载
     PERSONAGE_ATT_STATS,//个人考勤报表下载
@@ -36,6 +36,13 @@ enum class ScreenType {
     USER_EDIT_DEPT,//修改部门
     USER_EDIT_PASSWORD,//修改密码
     USER_REGISTER_PASSWORD,//注册密码
+    JOB_QUERY,//工号查询
+    BROWSE_JOB_QUERY,//浏览工号查询
+    BROWSE_JOB_QUERY_RESULT,//浏览工号查询结果
+    TIME_QUERY,//时间查询界面
+    DOWNLOAD_JOB_QUERY,//下载工号查询界面
+    BROWSE_TIME_QUERY_RESULT,//浏览时间查询结果
+    DOWNLOAD_TIME_QUERY,//下载时间查询界面
     // ... 其他屏幕类型
     // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑
     // ... 其他屏幕

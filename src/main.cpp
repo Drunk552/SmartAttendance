@@ -121,12 +121,17 @@ void test_epic2_dao_and_seeding() {
 
     int uid = db_add_user(admin, dummy_face);
     if (uid > 0) {
-        // 验证读取
-        UserData stored = db_get_user_info(uid);
-        if (stored.password == "123456" && stored.role == 1) {
-            std::cout << "[OK] 管理员注册并回读成功 (ID=" << uid << ")" << std::endl;
+        // 🌟 验证读取 (修改了这里！)
+        auto stored_opt = db_get_user_info(uid);
+        if (stored_opt.has_value()) {
+            UserData stored = stored_opt.value(); // 拆盒拿数据
+            if (stored.password == "123456" && stored.role == 1) {
+                std::cout << "[OK] 管理员注册并回读成功 (ID=" << uid << ")" << std::endl;
+            } else {
+                std::cerr << "[Failed] 用户信息回读不匹配" << std::endl;
+            }
         } else {
-            std::cerr << "[Failed] 用户信息回读不匹配" << std::endl;
+            std::cerr << "[Failed] 用户信息回读失败，未能在数据库查到该ID" << std::endl;
         }
 
         // 测试考勤记录

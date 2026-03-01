@@ -106,6 +106,36 @@ bool UiController::registerNewUser(const std::string& name, int deptId) {
     return business_register_user(name.c_str(), deptId);
 }
 
+int UiController::getUserRoleById(int userId) {
+    // 1. Controller 层调用数据层，拿到一个 optional "盒子"
+    auto user_opt = db_get_user_info(userId);
+    
+    // 2. 检查盒子是否为空（找不到该用户）
+    if (!user_opt.has_value()) {
+        return -1; // 如果为空，返回 -1
+    }
+    
+    // 3. 拆盒取数据并返回权限值
+    return user_opt.value().role;
+}
+
+// 验证用户密码是否正确（哈希验证）
+bool UiController::verifyUserPassword(int userId, const std::string& inputPassword) {
+    // 1. 获取用户信息
+    UserData user = getUserInfo(userId);
+    
+    // 2. 如果用户不存在或没设密码，直接返回 false
+    if (user.password.empty()) {
+        return false; 
+    }
+
+    // 3. 调用数据层暴露的哈希函数，将输入的明文转为哈希值
+    std::string hashed_input = db_hash_password(inputPassword);
+
+    // 4. 比对结果
+    return (user.password == hashed_input);
+}
+
 std::vector<UserData> UiController::getAllUsers() {
     return db_get_all_users();
 }
@@ -119,7 +149,29 @@ bool UiController::getUserAt(int index, int* id, char* name_buf, int buf_len) {
 }
 
 UserData UiController::getUserInfo(int uid) {
-    return db_get_user_info(uid);
+    auto user_opt = db_get_user_info(uid);
+    
+    // 如果查到了，拆盒把真实数据返回给 UI 层
+    if (user_opt.has_value()) {
+        return user_opt.value();
+    } 
+    
+    // 如果没查到（空盒子），为了兼容原有 UI 逻辑，构造一个 id=0 的空对象
+    UserData empty_user;
+    empty_user.id = 0;
+    //设一个默认名字防止界面显示乱码
+    empty_user.name = "Unknown"; 
+    
+    return empty_user;
+}
+
+// 检查用户是否存在 (用于 UI 导出报表前的同步校验)
+bool UiController::checkUserExists(int user_id) {
+    // 1. 获取 optional "盒子"
+    auto user_opt = db_get_user_info(user_id);
+    
+    // 2. 直接判断盒子是否有值即可，有值代表存在，没值代表不存在
+    return user_opt.has_value();
 }
 
 std::vector<AttendanceRecord> UiController::getRecords(int userId, time_t start, time_t end) {
@@ -179,14 +231,16 @@ bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
 
 // 更新用户名称实现
 bool UiController::updateUserName(int userId, const std::string& newName) {
-    // 1. 先获取当前用户完整信息
-    UserData user = db_get_user_info(userId);
+    // 1. 先获取当前用户的 optional "盒子"
+    auto user_opt = db_get_user_info(userId);
     
-    // 2. 检查用户是否存在 (假设ID为0表示不存在)
-    if (user.id == 0) return false; 
+    // 2. 检查用户是否存在 (盒子为空直接返回失败)
+    if (!user_opt.has_value()) return false; 
 
-    // 3. 调用底层更新接口：
-    //    保留原有的 dept_id, role, card_id 不变，只修改 name
+    // 3. 拆盒取出真实数据
+    UserData user = user_opt.value();
+
+    // 4. 调用底层更新接口：保留原有的 dept_id, role, card_id 不变，只修改 name
     return db_update_user_basic(userId, newName, user.dept_id, user.role, user.card_id);
 }
 
@@ -214,12 +268,16 @@ bool UiController::updateUserPassword(int userId, const std::string& newPassword
 
 // 更新用户权限实现
 bool UiController::updateUserRole(int userId, int newRole) {
-    // 1. 获取当前信息
-    UserData user = db_get_user_info(userId);
-    if (user.id == 0) return false;
+    // 1. 获取当前用户的 optional "盒子"
+    auto user_opt = db_get_user_info(userId);
+    
+    // 2. 检查用户是否存在
+    if (!user_opt.has_value()) return false;
 
-    // 2. 调用底层更新接口：
-    //    保留原有的 name, dept_id, card_id 不变，只修改 role (privilege)
+    // 3. 拆盒取出真实数据
+    UserData user = user_opt.value();
+
+    // 4. 调用底层更新接口：保留原有的 name, dept_id, card_id 不变，只修改 role
     return db_update_user_basic(userId, user.name, user.dept_id, newRole, user.card_id);
 }
 
@@ -270,6 +328,12 @@ void UiController::updateCameraFrame(const uint8_t* data, int w, int h) {
         size_t size = w * h * 3;
         memcpy(disp_buf, data, size);
     }
+}
+
+//查询系统信息
+SystemStats UiController::getSystemStatistics() {
+    // 直接调用数据层接口并返回
+    return db_get_system_stats();
 }
 
 void UiController::clearAllRecords() {
