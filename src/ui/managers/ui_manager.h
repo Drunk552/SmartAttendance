@@ -19,7 +19,22 @@ enum class ScreenType {
     REGISTER_CAMERA,// 注册流程拍照屏幕
     RECORD_QUERY,// 记录查询菜单
     SYS_SETTINGS,// 系统设置
+    SYS_BASIC,//系统基础设置
+    SYS_BASIC_SETTIME,//系统基础-时间设置
+    SYS_BASIC_DATE,//系统基础-日期
+    SYS_BASIC_SETDATE,//系统基础-日期设置
+    SYS_BASIC_DATE_FORMAT,//系统基础-日期格式
+    SYS_BASIC_VOLUME,//系统基础-音量设置
+    SYS_BASIC_LANGUAGE,//系统基础-语言设置
+    SYS_BASIC_SCREENSAFE,//系统基础-屏保时间设置
+    SYS_BASIC_MACHINE_ID,//系统基础-设备号设置
+    SYS_BASIC_RETURN_TIME,//系统基础-返回主界面时间设置
+    SYS_BASIC_ADMIN_COUNT,//系统基础-管理员总数
+    SYS_BASIC_WARN_COUNT,//系统基础-警告数
+
     SYS_ADVANCED,// 系统高级设置
+    SYS_PARAM,//系统参数设置
+    SYS_SELFCHECK,//系统自检功能设置
     SYS_INFO,// 系统信息
     STORAGE_INFO,// 存储信息
     FACILITY_INFO,//设备信息
