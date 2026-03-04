@@ -1427,25 +1427,7 @@ std::optional<ShiftInfo> db_get_user_shift_smart(int user_id, long long timestam
     return std::nullopt;
 }
 
-// ================= 兼容层  =================
-
-int data_registerUser(const std::string& name, const cv::Mat& face_image) {
-    // 适配旧接口：创建一个默认的 UserData 对象
-    UserData info;
-    info.name = name;
-    info.role = 0;      // 默认为普通用户
-    info.dept_id = 0;   // 默认无部门
-    info.password = ""; 
-    info.card_id = "";
-
-    // 调用新接口
-    return db_add_user(info, face_image);
-}
-
-bool data_saveAttendance(int user_id, const cv::Mat& image) {
-    // 适配旧接口：shift_id=0, status=0 (正常)
-    return db_log_attendance(user_id, 0, image, 0);
-}
+// ================= 重新/删除数据  =================
 
 /**
  * @brief 获取最后保存图像的ID
@@ -1483,6 +1465,10 @@ long long data_getLastImageID() {
 
 // =================  系统维护接口 =================
 
+/**
+ * @brief  清空所有考勤记录
+ * @details 删除 attendance 表数据，清空 captured_images 目录
+ */
 bool db_clear_attendance() {
     
     std::unique_lock<std::shared_mutex> lock(g_db_mutex);//排他锁（写锁）
@@ -1504,6 +1490,10 @@ bool db_clear_attendance() {
     return ret;
 }
 
+/**
+ * @brief  清空所有员工数据
+ * @details 删除 users 表数据及其关联的图片文件
+ */
 bool db_clear_users() {
     
     std::unique_lock<std::shared_mutex> lock(g_db_mutex);//排他锁（写锁）
@@ -1532,6 +1522,10 @@ bool db_clear_users() {
     return true;
 }
 
+/**
+ * @brief  恢复出厂设置
+ * @details 清除所有数据库数据和图片，重置系统
+ */
 bool db_factory_reset() {
     std::cout << "[Data] !!! FACTORY RESET !!!" << std::endl;
     

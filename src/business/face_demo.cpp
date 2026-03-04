@@ -705,91 +705,6 @@ cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
     return gray;
 }
 
-/**
- * @brief 处理并保存人脸图像
- * @param inputImage 输入图像（BGR格式）
- * @return true-处理并保存成功，false-失败
- * @note 包括人脸检测、预处理、样本添加和保存
-*/
-
-bool business_processAndSaveImage(const cv::Mat& inputImage) {
-    if (inputImage.empty()) {
-        std::cerr << "[Business] 输入图像为空，无法处理和保存。" << std::endl;
-        return false;
-    }//校验输入图像有效性
-
-    cv::Rect face_roi;  // 存储检测到的人脸区域
-    
-    bool face_detected = detect_face(inputImage, face_roi, face_cas);
-    
-    if (!face_detected) {
-        std::cerr << "[Business] 未检测到人脸，无法保存图像。" << std::endl;
-        return false;
-    }//检测人脸
-
-    //输出人脸位置
-    std::cout << "[Business] 检测到人脸，位置: ("
-              << face_roi.x << "," << face_roi.y << ") "
-              << face_roi.width << "x" << face_roi.height << std::endl;
-    
-     cv::Mat preprocessed_face;// 存储预处理后的人脸图像
-
-    if(preprocess_config.debug_show_steps){
-        preprocessed_face = preprocess_face_complete(inputImage, face_roi, preprocess_config);
-        std::cout << "[Business] 预处理完成，调试模式已启用。" << std::endl;
-    } // 调试模式下显示所有预处理步骤
-
-    // 修改为调用新的注册接口 (BLOB存储)
-    // A.准备用户名
-    // (逻辑：尝试使用 names 列表中现有的名字，或者生成默认名字)
-    std::string reg_name;
-    if (current_id < names.size() && names[current_id] != "Unknown") {
-        reg_name = names[current_id];
-    } else {
-        reg_name = "User_" + std::to_string(current_id);
-    }
-
-    // B. [关键修改] 调用数据层的新接口：注册用户 (存入 DB users 表)
-    // 注意：这里不再调用 data_saveImage，而是 data_registerUser
-    int new_uid = data_registerUser(reg_name, preprocessed_face);
-
-    // C. 判断结果并更新内存状态
-    if (new_uid != -1) {
-        
-        {// 加锁更新 names 映射表
-        std::lock_guard<std::mutex> lock(g_names_mutex);
-        if (names.size() <= new_uid) {
-            names.resize(new_uid + 1, "Unknown");
-        }
-        names[new_uid] = reg_name;
-        }
-
-        // 1. 更新内存中的训练集 (这样不需要重启程序就能训练)
-        face_samples.push_back(preprocessed_face);
-        labels.push_back(new_uid);
-
-        // 2. 更新 names 映射表 (确保向量足够长)
-        if (names.size() <= new_uid) {
-            names.resize(new_uid + 1, "Unknown");
-        }
-        names[new_uid] = reg_name;
-
-        // 3. 实时更新模型 (增量训练，可选)
-        // 这样采集完马上就能识别，不需要按 't' 重新训练所有数据
-        std::vector<cv::Mat> new_samples = {preprocessed_face};
-        std::vector<int> new_labels = {new_uid};
-        recog->update(new_samples, new_labels);
-        trained = true;
-
-        std::cout << "[Business] 用户注册成功! Name: " << reg_name 
-                  << " | DB_ID: " << new_uid << std::endl;
-        return true;
-    } else {
-        std::cerr << "[Business] 数据库注册失败！" << std::endl;
-        return false;
-    }//保存图像结果反馈
-}
-
 // ==========================================
 // Epic 4: 新增控制接口 (供 UI 按钮调用)
 // ==========================================
@@ -1114,11 +1029,11 @@ bool business_get_display_frame(void* buffer, int w, int h) {
 /**
  * @brief 获取用户总数并刷新缓存（供 UI 列表使用）
  * @return 当前用户数量
- * @note 会调用 data_getAllUsers() 刷新 g_user_cache
+ * @note 会调用 db_get_all_users() 刷新 g_user_cache
  */
 int business_get_user_count(void) {
     // 每次进入列表页时，从数据库重新拉取一次数据
-    g_user_cache = data_getAllUsers();
+    g_user_cache = db_get_all_users();
     return (int)g_user_cache.size();
 } 
 
@@ -1345,34 +1260,6 @@ bool business_get_record_at(int index, char *buf, int len) {
     
     return true;
 } 
-
- /* @brief 触发一次采集 (供 UI 按钮调用)
- * @return bool - 采集是否成功
- * @note 使用 current_frame 进行采集，确保所见即所得
- */
-bool business_capture_snapshot(){// 触发拍照函数
-
-    // [Epic 4.4 新增] 加锁保护读取
-    std::lock_guard<std::mutex> lock(g_data_mutex);
-
-    //检查是否有画面
-    if (!current_frame.empty()) {
-        std::cout <<">>> [Business]触发采集..." << endl;
-
-        bool success = business_processAndSaveImage(current_frame);// 使用 current_frame 进行采集
-        
-        if(success){
-            long long last_id = data_getLastImageID();
-            std::cout << "[Business] 采集成功,图像ID: " << last_id << std::endl;   
-        }
-        return success;// 返回采集结果
-    } 
-        else
-        {
-            std::cerr << "[Business] 采集失败：当前没有画面帧" << std::endl;
-            return false;
-        }//采集失败
-}
 
 /**
 * @brief 设置人脸预处理配置 (供 UI 调用)

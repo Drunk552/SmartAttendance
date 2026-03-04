@@ -125,7 +125,6 @@ static void sys_main_event_cb(lv_event_t *e) {
         // 根据按钮的 user_data（tag）来区分功能
         if (strcmp(tag, "BASIC") == 0)      load_sys_settings_basic_screen();// 基础设置
         else if (strcmp(tag, "ADVANCED") == 0)  load_sys_settings_advanced_screen();// 高级设置
-        else if (strcmp(tag, "PARAM") == 0) load_sys_settings_param_screen();//参数设置
         else if (strcmp(tag, "SELFCHECK") == 0) load_sys_settings_selfcheck_screen();//自检功能
     }
 }
@@ -155,10 +154,8 @@ void load_sys_settings_menu_screen() {
     create_sys_list_btn(list, "1. ", "", "基础设置", sys_main_event_cb, "BASIC");
     // 2.高级设置
     create_sys_list_btn(list, "2. ", "", "高级设置", sys_main_event_cb, "ADVANCED");
-    // 3.参数设置
-    create_sys_list_btn(list, "3. ", "", "参数设置", sys_main_event_cb, "PARAM");
-    // 4.自检功能
-    create_sys_list_btn(list, "4. ", "", "自检功能", sys_main_event_cb, "SELFCHECK");
+    // 3.自检功能
+    create_sys_list_btn(list, "3. ", "", "自检功能", sys_main_event_cb, "SELFCHECK");
 
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
@@ -2177,12 +2174,6 @@ void load_sys_basic_machine_id_screen() {
 }
 
 
-
-
-
-
-
-
 // =================基础设置-返回主界面时间设置（三级）================
 // 返回时间选项（单位：秒）
 static const int return_time_options[] = {0, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600};
@@ -2444,17 +2435,6 @@ void load_sys_basic_return_time_screen() {
     lv_screen_load(scr_basic_return_time);
     UiManager::getInstance()->destroyAllScreensExcept(scr_basic_return_time);
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 // =================基础设置-管理员总数设置（三级）================
@@ -2926,84 +2906,6 @@ void load_sys_basic_warn_count_screen() {
     UiManager::getInstance()->destroyAllScreensExcept(scr_basic_warn_count);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // =================高级设置界面（二级）================
 static void sys_advanced_event_cb(lv_event_t *e){
     lv_event_code_t code = lv_event_get_code(e);
@@ -3077,79 +2979,6 @@ void load_sys_settings_advanced_screen(){
     lv_screen_load(scr_advanced);
     UiManager::getInstance()->destroyAllScreensExcept(scr_advanced);
 
-
-}
-
-// =================参数设置界面（二级）================
-static void sys_param_event_cb(lv_event_t *e){
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
-    
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY){
-        key = lv_event_get_key(e);
-    }
-
-    if(code == LV_EVENT_KEY){
-
-        if(key == LV_KEY_ESC){
-          load_sys_settings_menu_screen();
-          lv_indev_wait_release(lv_indev_get_act());
-          return;
-        }
-
-        else if(key == LV_KEY_DOWN || key == LV_KEY_RIGHT){
-          lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
-          return;
-        }
-
-        else if(key == LV_KEY_UP || key == LV_KEY_LEFT){
-          lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
-          return;
-        }
-    }
-
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)){
-        lv_indev_wait_release(lv_indev_get_act());
-        load_sys_settings_param_screen();
-    }
-}
-
-void load_sys_settings_param_screen(){
-        if(scr_param){
-        lv_obj_delete(scr_param);
-        scr_param = nullptr;
-    }
-
-    BaseScreenParts parts = create_base_screen("参数设置");
-    scr_param = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::SYS_PARAM,&scr_param);
-
-    lv_obj_add_event_cb(scr_param, [](lv_event_t *e){
-     scr_param = nullptr;
-    },LV_EVENT_DELETE,NULL);
-
-    UiManager::getInstance()->resetKeypadGroup();
-
-    lv_obj_t* list = create_list_container(parts.content);
-
-    create_sys_list_btn(list, "1. ", "", "灰度调节", sys_param_event_cb, "GRAYSCALE");
-    create_sys_list_btn(list, "2. ", "", "直方图均衡", sys_param_event_cb, "HISTOGRAM");
-    create_sys_list_btn(list, "3. ", "", "ROI裁剪", sys_param_event_cb, "ROI");
-
-    uint32_t child_cnt = lv_obj_get_child_cnt(list);
-    for(uint32_t i=0; i<child_cnt; i++) {
-        lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);
-    }
-
-    if(child_cnt > 0) {
-        lv_group_focus_obj(lv_obj_get_child(list, 0));
-    }
-
-    lv_screen_load(scr_param);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_param);
 
 }
 

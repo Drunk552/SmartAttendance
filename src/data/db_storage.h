@@ -457,40 +457,12 @@ bool db_set_user_special_schedule(int user_id, const std::string& date_str, int 
  */
 std::optional<ShiftInfo> db_get_user_shift_smart(int user_id, long long timestamp);
 
-// ================= 兼容性接口 (Legacy Support) =================
-
-
-/**
- * @brief [已弃用] 简单注册接口
- * @note 仅用于兼容旧测试代码，建议使用 db_add_user
- * @brief 注册新用户（混合存储：数据存DB）
- * @param name 用户名
- * @param face_image 人脸图像（将转换为二进制存入BLOB）
- * @return int 返回新用户的ID，失败返回 -1
- */
-int data_registerUser(const std::string& name, const cv::Mat& face_image);
+// ================= 更新/删除数据 =================
 
 /**
- * @brief [已弃用] 简单考勤接口
- * @note 仅用于兼容旧测试代码，建议使用 db_log_attendance
- * @brief 保存考勤记录（混合存储：图片存磁盘，路径存DB）
- * @param user_id 识别到的用户ID
- * @param image 当前抓拍的现场图
- * @return true 保存成功
+ * @brief 获取最后保存图像的ID
+ * @return 最后保存图像的ID，失败返回 -1
  */
-bool data_saveAttendance(int user_id, const cv::Mat& image);
-
-/**
- * @brief 获取所有用户数据（用于系统启动时训练模型）
- */
-// data_getAllUsers 已被 db_get_all_users 替代，但在 business_init 中被调用，保留声明
-// 注意：Phase 1 的代码使用的是 std::vector<UserData> data_getAllUsers()
-// 既然 UserData 已经改回来了，我们可以直接复用上面的 db_get_all_users
-// 或者保留别名：
-inline std::vector<UserData> data_getAllUsers() {
-    return db_get_all_users();
-}
-
 long long data_getLastImageID();// 获取最后保存图像的ID
 
 /**

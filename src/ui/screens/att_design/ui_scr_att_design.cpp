@@ -116,7 +116,7 @@ void load_att_design_menu_screen() {
 // ==================== 部门设置子界面 ====================
 
 // 部门设置子界面按钮事件回调
-    static void dept_btn_event_cb(lv_event_t *e) {
+static void dept_btn_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
     lv_obj_t *list = lv_obj_get_parent(btn);
@@ -249,6 +249,7 @@ static void shift_btn_event_cb(lv_event_t *e) {
         }
     }
 }
+
 void load_shift_screen() {
     // 删除旧屏幕（如果存在）
     if (scr_shift) {
@@ -343,6 +344,7 @@ static void rule_btn_event_cb(lv_event_t *e) {
         }
     }
 }
+
 void load_rule_screen() {
     // 删除旧屏幕（如果存在）
     if (scr_rule) {
@@ -437,6 +439,7 @@ static void schedule_btn_event_cb(lv_event_t *e) {
         }
     }
 }
+
 void load_schedule_screen() {
     // 删除旧屏幕（如果存在）
     if (scr_schedule) {
