@@ -1,10 +1,7 @@
 #include "auth_service.h"
-#include "../data/db_storage.h" // 引用数据层
+#include "../data/db_storage.h"
 #include <iostream>
 #include <cstring>
-
-// 引入考勤记录相关的业务逻辑
-#include "attendance_rule.h" 
 
 // ==========================================
 // 密码验证实现
@@ -65,8 +62,6 @@ AuthResult AuthService::verifyFingerprint(int user_id, const std::vector<uint8_t
 
     // 6. 判断得分是否通过 (假设阈值为 80 分)
     if (score >= 80) {
-        // [可选] 验证成功后，自动记录考勤
-        // db_add_attendance(user.id, ...);
         return AuthResult::SUCCESS;
     } else {
         return AuthResult::WRONG_FINGERPRINT;

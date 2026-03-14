@@ -56,6 +56,10 @@ public:
     void clearAllEmployees();
     void factoryReset();
     void clearAllData();
+    bool exportEmployeeSettings();// 导出员工设置表
+    // 上传员工设置表（从U盘读取xlsx并导入数据库）
+    // invalid_time_count: 若非空，写入解析过程中时间格式非法的字段数
+    bool importEmployeeSettings(int* invalid_time_count = nullptr);
 
     // --- 5. 摄像头图像获取  ---
     bool getDisplayFrame(uint8_t* buffer, int width, int height);

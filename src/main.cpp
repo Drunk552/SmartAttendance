@@ -232,9 +232,9 @@ int main() {
         if (time_till_next < 5) time_till_next = 5;// 限制最小休眠，防止过快循环
         if (time_till_next > 30) time_till_next = 30; // 限制最大休眠，保证响应速度
 
-    lv_timer_handler();
-    usleep(5000);   // 固定休眠 5ms
-    lv_tick_inc(5); // 告诉 LVGL 过去了 5ms
+        usleep(time_till_next * 1000);   // 毫秒转微秒
+        
+        lv_tick_inc(time_till_next);// 告诉 LVGL 实际流逝的时间
     }
 
     std::cout << ">>> 系统安全退出 (Main Loop Ended)" << std::endl;

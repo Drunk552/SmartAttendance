@@ -122,12 +122,76 @@ static void ui_on_export_complete(void* data) {
     
     // 显示结果弹窗
     if (ctx->success) {
-        show_popup_msg("导出全员考勤报表失败", "全员报表导出成功!\n报表已下载至U盘!", nullptr, "我知道了");
+        show_popup_msg("导出全员考勤报表成功", "全员报表导出成功!\n报表已下载至U盘!", nullptr, "我知道了");
     } else {
-        show_popup_msg("导出全员考勤报表成功", "全员报表导出失败!\n请检查设备!", nullptr, "我知道了");
+        show_popup_msg("导出全员考勤报表失败", "全员报表导出失败!\n请检查设备!", nullptr, "我知道了");
     }
     
     // 释放堆内存
+    delete ctx;
+}
+
+// 定义专门给下载员工设置表使用的上下文结构体
+struct AsyncSettingsExportCtx {
+    lv_obj_t* spinner; // 加载圈指针
+    bool success;      // 导出结果
+};
+
+// UI线程回调函数：下载结束后触发，调用 show_popup_msg 弹窗
+static void ui_on_settings_export_complete(void* data) {
+    AsyncSettingsExportCtx* ctx = (AsyncSettingsExportCtx*)data;
+    
+    // 移除加载圈
+    if (ctx->spinner && lv_obj_is_valid(ctx->spinner)) {
+        lv_obj_delete(ctx->spinner);
+    }
+    
+    if (ctx->success) {
+        show_popup_msg("导出成功", "员工设置表导出成功!\n文件已保存至U盘!", nullptr, "确认");
+    } else {
+        show_popup_msg("导出失败", "员工设置表导出失败!\n请检查U盘是否插入或存储已满!", nullptr, "确认");
+    }
+    
+    // 释放内存
+    delete ctx;
+}
+
+// 定义上传员工设置表使用的上下文结构体
+struct AsyncImportCtx {
+    lv_obj_t* spinner;      // 加载圈指针
+    bool success;           // 导入结果
+    int  count;             // 预留
+    int  invalid_time_count; // 时间格式非法的字段数
+};
+
+// UI线程回调：上传结束后弹窗提示
+static void ui_on_import_complete(void* data) {
+    AsyncImportCtx* ctx = (AsyncImportCtx*)data;
+
+    // 移除加载圈
+    if (ctx->spinner && lv_obj_is_valid(ctx->spinner)) {
+        lv_obj_delete(ctx->spinner);
+    }
+
+    if (ctx->success) {
+        if (ctx->invalid_time_count > 0) {
+            // 上传成功，但有时间格式错误被自动跳过
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "员工设置表上传成功!\n员工信息已同步到设备!\n\n"
+                     "警告: %d 个时间字段格式非法\n"
+                     "(已自动跳过，请检查表格中的班次时间)",
+                     ctx->invalid_time_count);
+            show_popup_msg("上传成功(含异常)", msg, nullptr, "确认");
+        } else {
+            show_popup_msg("上传成功", "员工设置表上传成功!\n员工信息已同步到设备!", nullptr, "确认");
+        }
+    } else {
+        show_popup_msg("上传失败",
+                       "员工设置表上传失败!\n请确认:\n1. U盘已插入\n2. 文件名为\"员工设置表.xlsx\"\n3. 文件格式正确",
+                       nullptr, "确认");
+    }
+
     delete ctx;
 }
 
@@ -182,6 +246,43 @@ static void stats_menu_btn_cb(lv_event_t *e) {
             // B：下载个人报表
             load_download_personal_screen();// 跳转到下载个人报表界面
         }
+        else if (index == 2) {
+            // C: 下载员工设置表
+            
+            // 1. 创建并显示居中的加载圈 (Spinner) 阻塞屏幕交互
+            lv_obj_t* spin = lv_spinner_create(lv_screen_active());
+            lv_obj_center(spin);
+            
+            // 2. 启动后台线程执行耗时的 Excel 生成与写入，防止 UI 卡死
+            std::thread([spin]() {
+                // 调用 Controller 执行实际的底层下载
+                bool ret = UiController::getInstance()->exportEmployeeSettings();
+                
+                // 将执行结果与加载圈指针打包
+                AsyncSettingsExportCtx* ctx = new AsyncSettingsExportCtx{spin, ret};
+                
+                // 3. 线程安全地切回主 UI 线程，执行弹窗提示
+                lv_async_call(ui_on_settings_export_complete, ctx);
+            }).detach();
+        }
+        else if (index == 3) {
+            // D: 上传员工设置表
+            // 流程：从 output/usb_settings/员工设置表.xlsx 解析员工信息并导入数据库
+
+            // 1. 显示加载圈，告知用户正在处理
+            lv_obj_t* spin = lv_spinner_create(lv_screen_active());
+            lv_obj_center(spin);
+
+            // 2. 启动后台线程执行解压和数据库写入，防止 UI 卡死
+            std::thread([spin]() {
+                int bad_time = 0;
+                bool ret = UiController::getInstance()->importEmployeeSettings(&bad_time);
+
+                // 将结果打包回主 UI 线程弹窗
+                AsyncImportCtx* ctx = new AsyncImportCtx{spin, ret, 0, bad_time};
+                lv_async_call(ui_on_import_complete, ctx);
+            }).detach();
+        }
         else {
             show_popup_msg ("hello!", "该功能暂未开放!", nullptr, nullptr);//其他功能占位
         }
@@ -219,7 +320,7 @@ void load_att_stats_menu_screen() {
     // 按钮 1: 下载个人考勤报表
     create_sys_list_btn(list, "2. ", "", "下载个人考勤报表", stats_menu_btn_cb, (const char*)(intptr_t)1);
 
-    // 按钮 2: 下载员工设置 (占位)
+    // 按钮 2: 下载员工设置 
     create_sys_list_btn(list, "3. ", "", "下载员工设置", stats_menu_btn_cb, (const char*)(intptr_t)2);
 
     // 按钮 3: 上传员工设置 (占位)
@@ -380,7 +481,7 @@ void load_download_all_screen() {
 
     // 2. 结束时间输入框
     g_ta_dl_all_end = create_form_input(form_cont, "结束时间:", "如: 2026-01-31", "", false);
-    lv_textarea_set_accepted_chars(g_ta_dl_all_start, "0123456789-"); // 只允许输入数字和横杠
+    lv_textarea_set_accepted_chars(g_ta_dl_all_end, "0123456789-"); // 只允许输入数字和横杠
     lv_obj_add_event_cb(g_ta_dl_all_end, download_all_event_cb, LV_EVENT_ALL, nullptr);
     UiManager::getInstance()->addObjToGroup(g_ta_dl_all_end);
 

@@ -12,7 +12,9 @@ enum class EventType {
     TIME_UPDATE,       // 时间刷新 (每秒) data: std::string*
     DISK_FULL,         // 磁盘已满 warning
     DISK_NORMAL,       // 磁盘恢复正常
-    CAMERA_FRAME_READY // 摄像头新帧就绪
+    CAMERA_FRAME_READY, // 摄像头新帧就绪
+    ENTER_HOME_SCREEN,  // 进入主页（摄像头画面）
+    LEAVE_HOME_SCREEN   // 离开主页
 };
 
 // 回调函数定义

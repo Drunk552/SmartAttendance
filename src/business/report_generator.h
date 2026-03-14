@@ -12,21 +12,20 @@
 #include "data/db_storage.h"
 #include <xlsxwriter.h>
 
-// 报表类型定义
+// 报表文件输出类型定义
 enum class ReportType {
-    SUMMARY,        // 考勤汇总表 (目前主要实现这个)
-    ABNORMAL,       // 异常记录表
-    EMPLOYEE_INFO,  // 员工信息表
-    WEEKLY,         // 周报表
-    DEPARTMENT      // 部门报表
+    ATTENDANCE_ALL,         // 考勤报表（全员）.xls
+    ATTENDANCE_INDIVIDUAL,  // 考勤报表（个人）.xls
+    EMPLOYEE_SETTINGS       // 员工设置表.xls
 };
 
 // 考勤状态定义
 enum AttendanceStatus {
-    STATUS_NORMAL = 0,
-    STATUS_LATE = 1,
-    STATUS_EARLY = 2,
-    STATUS_ABSENT = 3
+    STATUS_NORMAL   = 0, // 正常
+    STATUS_LATE     = 1, // 迟到
+    STATUS_EARLY    = 2, // 早退
+    STATUS_ABSENT   = 3, // 旷工（有排班但无打卡）
+    STATUS_NO_SHIFT = 4  // 未排班（根据规则 Q3 第一阶段：无排班直接终止，不应判为旷工）
 };
 
 class ReportGenerator {
@@ -61,7 +60,15 @@ struct DailyCellData {
     int status;
     int late_minutes;
     int early_minutes;
-    };
+
+    int check_in_status = 3;  // 记录上班打卡状态 (默认 3: ABSENT)
+    int check_out_status = 3; // 记录下班打卡状态 (默认 3: ABSENT)
+    long long check_in_timestamp = 0; // 记录上班打卡时间戳，用于比对早晚
+    long long check_out_timestamp = 0; // 记录下班打卡时间戳，用于比对早晚
+
+    int final_status; // 最终综合状态
+    bool is_abnormal;
+};
 
 // 月度汇总数据
  struct MonthlySummary {
@@ -74,87 +81,20 @@ struct DailyCellData {
     int early_count = 0;
     int total_early_minutes = 0;
     int absent_days = 0;
+    int no_shift_days = 0; // 未排班天数（规则 Q3：无排班 -> 未排班，独立于旷工统计）
     };
 
     ReportGenerator();
     ~ReportGenerator();
 
-    /**
-     * @brief 导出报表到指定路径
-     * @param type 报表类型
-     * @param start_date 查询起始日期 "YYYY-MM-DD"
-     * @param end_date 查询结束日期 "YYYY-MM-DD"
-     * @param output_path 输出文件路径 (e.g. "output/usb_sim/report.xlsx")
-     * @return true 导出成功, false 失败
-     */
-    bool exportReport(ReportType type, 
-                      const std::string& start_date, 
-                      const std::string& end_date, 
-                      const std::string& output_path);
+    // 1. 导出全员考勤报表（包含5个Sheet）
+    bool exportAllAttendanceReport(const std::string& start_date, const std::string& end_date, const std::string& output_path);
 
-    /**
-     * @brief 导出精细化月度报表
-     * @param month_str 月份字符串 "YYYY-MM"
-     * @param output_path 输出文件路径
-     * @return true 导出成功, false 失败
-     */ 
-    bool exportDetailedReport(const std::string& month_str, 
-                              const std::string& output_path);
+    // 2. 导出个人考勤报表（包含5个Sheet）
+    bool exportIndividualAttendanceReport(int user_id, const std::string& start_date, const std::string& end_date, const std::string& output_path);
 
-    /**
-     * @brief 导出周报表
-     * @param week_start_date 查询起始日期 "YYYY-MM-DD"（该周的第一天）
-     * @param output_path 输出文件路径
-     * @return true 导出成功, false 失败
-     */
-    bool exportWeeklyReport(const std::string& week_start_date, 
-                            const std::string& output_path);
-
-    /**
-     * @brief 导出部门报表
-     * @param department_name 部门名称
-     * @param start_date 查询起始日期 "YYYY-MM-DD"
-     * @param end_date 查询结束日期 "YYYY-MM-DD"
-     * @param output_path 输出文件路径
-     * @return true 导出成功, false 失败
-     */
-    bool exportDepartmentReport(const std::string& department_name, 
-                                const std::string& start_date, 
-                                const std::string& end_date, 
-                                const std::string& output_path);
-
-    //Excel工作表写入函数
-    /**
-     * @brief 写入排班信息表
-     */
-    void writeShiftSheet(lxw_workbook* workbook, const std::vector<UserData>& users, int year, int month);
-   
-    /**
-     * @brief 写入原始记录表
-     */
-    void writeRecordSheet(lxw_workbook* workbook, const std::vector<AttendanceRecord>& records);
-  
-    /**
-     * @brief 写入异常统计表
-     */
-    void writeExceptionSheet(lxw_workbook* workbook, 
-                             const std::vector<AttendanceRecord>& records,
-                             const std::map<int, MonthlySummary>& summaries,
-                             const std::map<int, std::map<int, DailyCellData>>& detail_data,
-                             int year, int month);
-
-
-    /**
-     * @brief导出自定义时间段的详细报表 (支持按工号筛选)
-     * @param start_date 开始日期 "YYYY-MM-DD"
-     * @param end_date 结束日期 "YYYY-MM-DD"
-     * @param user_id_filter 工号筛选 (-1 表示全员)
-     * @param output_path 输出路径
-     */
-    bool exportCustomRangeDetailedReport(const std::string& start_date, 
-                                         const std::string& end_date, 
-                                         int user_id_filter, 
-                                         const std::string& output_path);
+    // 3. 导出员工及考勤设置表（包含2个Sheet）
+    bool exportSettingsReport(const std::string& output_path);
                                          
 private:
 
@@ -200,12 +140,53 @@ private:
         std::map<int, std::map<int, DailyCellData>>& detail_data,
         std::map<int, MonthlySummary>& summaries);
 
-    // Excel工作表写入函数
+    // ==== 考勤报表相关的 5 个 Sheet 写入函数 ====
+    // 1. 写入【排班信息表】
+    void writeShiftInfoSheet(lxw_workbook* workbook, 
+                         const std::vector<UserData>& users, 
+                         const std::vector<DeptInfo>& depts,
+                         const std::vector<ShiftInfo>& shifts,
+                         const std::string& start_date,
+                         const std::string& end_date,
+                         int year, int month, int days_in_month);
+    
+    // 2. 写入【考勤汇总表】
     void writeSummarySheet(lxw_workbook* workbook, 
-                           const std::map<int, MonthlySummary>& summaries);
-    void writeDetailSheet(lxw_workbook* workbook,
-                          const std::map<int, std::map<int, DailyCellData>>& detail_data,
-                          int days_in_month);
+                        const std::map<int, MonthlySummary>& summaries, 
+                        const std::string& start_date, 
+                        const std::string& end_date);
+    
+    // 3. 写入【考勤记录表】
+    void writeRecordSheet(lxw_workbook* workbook, 
+                        const std::vector<AttendanceRecord>& records);
+    
+    // 4. 写入【考勤异常统计表】
+    void writeAbnormalSheet(lxw_workbook* workbook, 
+                        const std::vector<AttendanceRecord>& abnormal_records, 
+                        const std::string& start_date, 
+                        const std::string& end_date);
+
+    // 5. 写入【考勤明细表】
+    void writeDetailSheet(lxw_workbook* workbook, 
+                        const std::map<int, std::map<int, DailyCellData>>& detail_data, 
+                        const std::map<int, MonthlySummary>& summaries,
+                        const std::string& start_date, 
+                        const std::string& end_date,
+                        int year, int month, int days_in_month);
+
+    // ==== 设置表相关的 2 个 Sheet 写入函数 ====
+
+    // 6. 写入【员工设置表】
+    void writeEmployeeSettingsSheet(lxw_workbook* workbook, 
+                        const std::vector<UserData>& users,
+                        const std::string& start_date,
+                        int year, int month, int days_in_month);
+    
+    // 7. 写入【考勤设置表】
+    void writeAttendanceSettingsSheet(lxw_workbook* workbook, 
+                        const RuleConfig& config, 
+                        const std::vector<DeptInfo>& depts, 
+                        const std::vector<ShiftInfo>& shifts);
 };
 
 #endif // REPORT_GENERATOR_H

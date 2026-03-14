@@ -89,6 +89,31 @@ static cv::Mat bytesToMat(const std::vector<uchar>& bytes) {
 }
 
 /**
+ * @brief 检查时间字符串是否表示空值（无考勤要求）
+ * @param time_str 时间字符串
+ * @return true 表示空值（"--:--"或空字符串）
+ * @note 业务文档规定："--:--"代表无考勤要求
+ */
+bool is_time_empty(const std::string& time_str) {
+    return time_str.empty() || time_str == "--:--";
+}
+
+/**
+ * @brief 标准化时间字符串
+ * @param time_str 原始时间字符串
+ * @return 标准化后的时间字符串，空值返回"--:--"
+ * @note 用于数据持久化前的格式化
+ */
+std::string normalize_time_string(const std::string& time_str) {
+    if (time_str.empty() || time_str == "--:--") {
+        return "--:--";
+    }
+    // 验证格式是否为HH:MM，这里简单返回原值
+    // 业务层应进行更严格的验证
+    return time_str;
+}
+
+/**
  * @brief 执行无返回值的 SQL 语句
  * @param sql SQL 命令字符串
  * @param tag用于日志报错的标签
@@ -159,14 +184,24 @@ bool data_init() {
         "company_name TEXT, "
         "late_threshold INTEGER DEFAULT 15, "
         "early_leave_threshold INTEGER DEFAULT 0, "
-        // 新增字段
         "device_id INTEGER DEFAULT 1, "
         "volume INTEGER DEFAULT 70, "
         "screensaver_time INTEGER DEFAULT 0, " // 0=关闭
         "max_admins INTEGER DEFAULT 10, "
+        "duplicate_punch_limit INTEGER DEFAULT 3, " // 默认3分钟防重复
+        "language TEXT DEFAULT 'zh-CN', "           // 默认中文
+        "date_format TEXT DEFAULT 'YYYY-MM-DD', "   // 默认日期格式
+        "return_home_delay INTEGER DEFAULT 30, "    // 默认30秒退回主界面
+        "warning_record_count INTEGER DEFAULT 99, "   // 默认警告阈值99条
         "relay_delay INTEGER DEFAULT 5, "      // 默认开门5秒
-        "wiegand_fmt INTEGER DEFAULT 26 "      // 默认韦根26
+        "wiegand_fmt INTEGER DEFAULT 26, "     // 默认韦戩26
+        // 【流程图节点K】周末上班规则：0=不上班，1=上班
+        "sat_work INTEGER DEFAULT 0, "        // 星期六是否上班 (默认不上班)
+        "sun_work INTEGER DEFAULT 0 "         // 星期日是否上班 (默认不上班)
         ");";
+    // 兼容旧数据库：如果列不存在则自动添加
+    exec_sql("ALTER TABLE attendance_rules ADD COLUMN sat_work INTEGER DEFAULT 0;", nullptr);
+    exec_sql("ALTER TABLE attendance_rules ADD COLUMN sun_work INTEGER DEFAULT 0;", nullptr);
     
     // (D) 用户表 (包含权限、密码、关联部门、人脸BLOB)
     const char* sql_users = 
@@ -226,6 +261,20 @@ bool data_init() {
         "enabled INTEGER "            // 0/1
         ");";
 
+    // (I) 系统全局配置表：采用简单的 Key-Value 结构
+    const char* sql_system_config = 
+        "CREATE TABLE IF NOT EXISTS system_config ("
+        "config_key TEXT PRIMARY KEY, "
+        "config_value TEXT"
+        ");";
+
+    // (J) 全局节假日表：以日期为主键
+    const char* sql_holidays = 
+        "CREATE TABLE IF NOT EXISTS holidays ("
+        "date_str TEXT PRIMARY KEY, "
+        "name TEXT NOT NULL"
+        ");";
+
     // 创建联合索引：加速 "查某人最近打卡" 和 "查某段时间记录"
     // 索引命名为 idx_att_user_time
     const char* sql_index = 
@@ -234,6 +283,8 @@ bool data_init() {
     bool ret = exec_sql(sql_dept, "Create Dept") && 
                exec_sql(sql_shifts, "Create Shifts V2") &&
                exec_sql(sql_bells, "Create Bells") &&
+               exec_sql(sql_system_config, "Create System Config") && 
+               exec_sql(sql_holidays, "Create Holidays") &&
                exec_sql(sql_rules, "Create Rules") && 
                exec_sql(sql_users, "Create Users") &&
                exec_sql(sql_dept_sch, "Create Dept Schedule") && 
@@ -318,10 +369,10 @@ bool data_seed() {
 
     //  3. 播种默认考勤规则
     if (is_table_empty("attendance_rules")) {
-        // 默认允许迟到 15 分钟
-        const char* sql = "INSERT INTO attendance_rules (company_name, late_threshold, early_leave_threshold) VALUES ('Smart Co.', 15, 0);";
+        // 默认允许迟到 15 分钟；周六/周日默认不上班（流程图节点K缺省安全封闭）
+        const char* sql = "INSERT INTO attendance_rules (company_name, late_threshold, early_leave_threshold, sat_work, sun_work) VALUES ('Smart Co.', 15, 0, 0, 0);";
         exec_sql(sql, "Seed Rules");
-        std::cout << "   [Seed] Created default rules (Late Threshold: 15m)." << std::endl;
+        std::cout << "   [Seed] Created default rules (Late Threshold: 15m, Sat/Sun off)." << std::endl;
     }
 
     // 4. 播种默认管理员 (如果用户表为空)
@@ -499,6 +550,52 @@ std::vector<ShiftInfo> db_get_shifts() {
     return list;
 }
 
+// 根据班次 ID 获取班次详细信息
+std::optional<ShiftInfo> db_get_shift_info(int shift_id) {
+    // 加上你的共享读锁，确保并发安全
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+
+    // 查询 shifts 表中该 ID 对应的四个时间段
+    const char* sql = "SELECT id, name, s1_start, s1_end, s2_start, s2_end FROM shifts WHERE id = ?;";
+    
+    // 使用你封装的语句管理对象
+    ScopedSqliteStmt stmt;
+
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Get Shift Info Failed: " << sqlite3_errmsg(db) << std::endl;
+        return std::nullopt;
+    }
+
+    // 绑定参数
+    sqlite3_bind_int(stmt.get(), 1, shift_id);
+
+    // 执行查询
+    if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        ShiftInfo shift;
+        shift.id = sqlite3_column_int(stmt.get(), 0);
+        
+        const char* name = (const char*)sqlite3_column_text(stmt.get(), 1);
+        shift.name = name ? name : "";
+        
+        const char* s1_start = (const char*)sqlite3_column_text(stmt.get(), 2);
+        shift.s1_start = s1_start ? s1_start : "";
+        
+        const char* s1_end = (const char*)sqlite3_column_text(stmt.get(), 3);
+        shift.s1_end = s1_end ? s1_end : "";
+        
+        const char* s2_start = (const char*)sqlite3_column_text(stmt.get(), 4);
+        shift.s2_start = s2_start ? s2_start : "";
+        
+        const char* s2_end = (const char*)sqlite3_column_text(stmt.get(), 5);
+        shift.s2_end = s2_end ? s2_end : "";
+        
+        return shift; // 找到数据，自动打包进 optional
+    }
+
+    // 没有这一行数据，返回空
+    return std::nullopt;
+}
+
 RuleConfig db_get_global_rules() {
     
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
@@ -517,26 +614,42 @@ RuleConfig db_get_global_rules() {
 
     // 2. 查询所有字段
     const char* sql = "SELECT company_name, late_threshold, early_leave_threshold, "
-                      "device_id, volume, screensaver_time, max_admins, relay_delay, wiegand_fmt "
-                      "FROM attendance_rules LIMIT 1;";
+                  "device_id, volume, screensaver_time, max_admins, relay_delay, wiegand_fmt, "
+                  "duplicate_punch_limit, language, date_format, return_home_delay, warning_record_count, "
+                  "sat_work, sun_work " // 【流程图节点K】周末上班规则
+                  "FROM attendance_rules LIMIT 1;";
     
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) == SQLITE_OK) {
         if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-            // 读取原有字段
+            // 读取字段
             const char* name = (const char*)sqlite3_column_text(stmt.get(), 0);
             config.company_name = name ? name : "Smart Co.";
             config.late_threshold = sqlite3_column_int(stmt.get(), 1);
             config.early_leave_threshold = sqlite3_column_int(stmt.get(), 2);
-
-            // 读取新字段
             config.device_id = sqlite3_column_int(stmt.get(), 3);
             config.volume = sqlite3_column_int(stmt.get(), 4);
             config.screensaver_time = sqlite3_column_int(stmt.get(), 5);
             config.max_admins = sqlite3_column_int(stmt.get(), 6);
-            config.relay_delay = sqlite3_column_int(stmt.get(), 7);
-            config.wiegand_fmt = sqlite3_column_int(stmt.get(), 8);
+            
+            config.relay_delay = sqlite3_column_int(stmt.get(), 7); 
+            config.wiegand_fmt = sqlite3_column_int(stmt.get(), 8); 
+
+            config.duplicate_punch_limit = sqlite3_column_int(stmt.get(), 9);
+            
+            const char* lang = (const char*)sqlite3_column_text(stmt.get(), 10);
+            config.language = lang ? lang : "zh-CN";
+            
+            const char* df = (const char*)sqlite3_column_text(stmt.get(), 11);
+            config.date_format = df ? df : "YYYY-MM-DD";
+            
+            config.return_home_delay = sqlite3_column_int(stmt.get(), 12);
+            config.warning_record_count = sqlite3_column_int(stmt.get(), 13);
+
+            // 【流程图节点K】读取周六/周日是否上班的规则开关
+            config.sat_work = sqlite3_column_int(stmt.get(), 14);
+            config.sun_work = sqlite3_column_int(stmt.get(), 15);
         }
     }
 
@@ -612,10 +725,12 @@ bool db_update_global_rules(const RuleConfig& config) {
 
     // 强制更新 id=1 的记录
     const char* sql = "UPDATE attendance_rules SET "
-                      "company_name=?, late_threshold=?, early_leave_threshold=?, "
-                      "device_id=?, volume=?, screensaver_time=?, max_admins=?, "
-                      "relay_delay=?, wiegand_fmt=? "
-                      "WHERE id=1;";
+                  "company_name=?, late_threshold=?, early_leave_threshold=?, "
+                  "device_id=?, volume=?, screensaver_time=?, max_admins=?, "
+                  "relay_delay=?, wiegand_fmt=?, "
+                  "duplicate_punch_limit=?, language=?, date_format=?, "
+                  "return_home_delay=?, warning_record_count=? "
+                  "WHERE id=1;";
     
     ScopedSqliteStmt stmt;
 
@@ -630,12 +745,20 @@ bool db_update_global_rules(const RuleConfig& config) {
     sqlite3_bind_int(stmt.get(), 3, config.early_leave_threshold);
 
     //  绑定新参数
+    sqlite3_bind_text(stmt.get(), 1, config.company_name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt.get(), 2, config.late_threshold);
+    sqlite3_bind_int(stmt.get(), 3, config.early_leave_threshold);
     sqlite3_bind_int(stmt.get(), 4, config.device_id);
     sqlite3_bind_int(stmt.get(), 5, config.volume);
     sqlite3_bind_int(stmt.get(), 6, config.screensaver_time);
     sqlite3_bind_int(stmt.get(), 7, config.max_admins);
     sqlite3_bind_int(stmt.get(), 8, config.relay_delay);
     sqlite3_bind_int(stmt.get(), 9, config.wiegand_fmt);
+    sqlite3_bind_int(stmt.get(), 10, config.duplicate_punch_limit);
+    sqlite3_bind_text(stmt.get(), 11, config.language.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 12, config.date_format.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt.get(), 13, config.return_home_delay);
+    sqlite3_bind_int(stmt.get(), 14, config.warning_record_count);
     
     bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
 
@@ -702,6 +825,107 @@ int db_add_user(const UserData& user, const cv::Mat& face_image) {
     }
     
     return -1;
+}
+
+//批量导入/同步员工数据 (用于 U盘/网络批量同步)
+bool db_batch_add_users(const std::vector<UserData>& users_list) {
+    if (users_list.empty()) return true;
+
+    // 1. 获取排他锁，防止批量写入时与其他线程的读写操作冲突
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+
+    // 2. 开启事务 (BEGIN TRANSACTION)，极大地加速批量插入
+    char* zErrMsg = 0;
+    if (sqlite3_exec(db, "BEGIN TRANSACTION;", 0, 0, &zErrMsg) != SQLITE_OK) {
+        std::cerr << "[Data] Begin Transaction Failed: " << zErrMsg << std::endl;
+        sqlite3_free(zErrMsg);
+        return false;
+    }
+
+    // 3. 准备 SQL 语句 
+    // 使用 INSERT OR REPLACE：如果 id 已存在，则覆盖更新；如果不存在，则新增。
+    // 这里包含你 sql_users 表中除了自增ID外的所有关键业务字段
+    const char* sql = "INSERT OR REPLACE INTO users "
+                      "(id, name, password, card_id, privilege, face_data, avatar_path, fingerprint_data, dept_id, default_shift_id) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+    
+    ScopedSqliteStmt stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Batch Add Users Failed: " << sqlite3_errmsg(db) << std::endl;
+        sqlite3_exec(db, "ROLLBACK;", 0, 0, 0); // 发生错误，回滚
+        return false;
+    }
+
+    bool success = true;
+
+    // 4. 循环绑定数据并执行
+    for (const auto& user : users_list) {
+        // 绑定 1: id (工号)
+        sqlite3_bind_int(stmt.get(), 1, user.id);
+        
+        // 绑定 2: name (姓名)
+        sqlite3_bind_text(stmt.get(), 2, user.name.c_str(), -1, SQLITE_STATIC);
+        
+        // 绑定 3: password (登录密码)
+        if (user.password.empty()) sqlite3_bind_null(stmt.get(), 3);
+        else sqlite3_bind_text(stmt.get(), 3, user.password.c_str(), -1, SQLITE_STATIC);
+        
+        // 绑定 4: card_id (IC/ID卡号)
+        if (user.card_id.empty()) sqlite3_bind_null(stmt.get(), 4);
+        else sqlite3_bind_text(stmt.get(), 4, user.card_id.c_str(), -1, SQLITE_STATIC);
+        
+        // 绑定 5: privilege (对应 UserData 里的 role)
+        sqlite3_bind_int(stmt.get(), 5, user.role);
+
+        // 绑定 6: face_data (对应 UserData 里的 face_feature 二进制流)
+        if (user.face_feature.empty()) {
+            sqlite3_bind_null(stmt.get(), 6);
+        } else {
+            sqlite3_bind_blob(stmt.get(), 6, user.face_feature.data(), user.face_feature.size(), SQLITE_STATIC);
+        }
+
+        // 绑定 7: avatar_path (人脸图片路径)
+        if (user.avatar_path.empty()) sqlite3_bind_null(stmt.get(), 7);
+        else sqlite3_bind_text(stmt.get(), 7, user.avatar_path.c_str(), -1, SQLITE_STATIC);
+
+        // 绑定 8: fingerprint_data (对应 UserData 里的 fingerprint_feature 二进制流)
+        if (user.fingerprint_feature.empty()) {
+            sqlite3_bind_null(stmt.get(), 8);
+        } else {
+            sqlite3_bind_blob(stmt.get(), 8, user.fingerprint_feature.data(), user.fingerprint_feature.size(), SQLITE_STATIC);
+        }
+
+        // 绑定 9: dept_id (部门ID)
+        if (user.dept_id <= 0) sqlite3_bind_null(stmt.get(), 9); 
+        else sqlite3_bind_int(stmt.get(), 9, user.dept_id);
+
+        // 绑定 10: default_shift_id (默认班次ID)
+        if (user.default_shift_id <= 0) sqlite3_bind_null(stmt.get(), 10);
+        else sqlite3_bind_int(stmt.get(), 10, user.default_shift_id);
+
+        // 执行单条语句
+        if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+            std::cerr << "[Data] Batch Insert Error on User ID " << user.id 
+                      << ": " << sqlite3_errmsg(db) << std::endl;
+            success = false;
+            break; // 出现错误，跳出循环
+        }
+
+        // 重置语句状态，以便下一次循环可以重新绑定新数据！
+        sqlite3_clear_bindings(stmt.get());
+        sqlite3_reset(stmt.get());
+    }
+
+    // 5. 根据执行结果提交或回滚
+    if (success) {
+        sqlite3_exec(db, "COMMIT;", 0, 0, 0); // 正式写入磁盘
+        std::cout << "[Data] Successfully batch synced " << users_list.size() << " users." << std::endl;
+    } else {
+        sqlite3_exec(db, "ROLLBACK;", 0, 0, 0); // 放弃之前的所有更改
+        std::cerr << "[Data] Batch sync failed, all changes rolled back." << std::endl;
+    }
+
+    return success;
 }
 
 std::optional<UserData> db_get_user_info(int user_id) {
@@ -1016,6 +1240,52 @@ bool db_update_user_password(int user_id, const std::string& new_raw_password) {
     return ok;
 }
 
+//单独修改/录入用户指纹特征
+bool db_update_user_fingerprint(int user_id, const std::vector<uint8_t>& fingerprint_data) {
+    // 写入操作，需要获取排他锁(写锁)
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+
+    // 准备 SQL 更新语句
+    const char* sql = "UPDATE users SET fingerprint_data = ? WHERE id = ?;";
+    ScopedSqliteStmt stmt;
+
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Update Fingerprint Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    // 1. 绑定第 1 个参数：fingerprint_data (BLOB类型)
+    if (fingerprint_data.empty()) {
+        // 如果传入空数组，意味着清空/删除该员工的指纹
+        sqlite3_bind_null(stmt.get(), 1);
+    } else {
+        // 绑定二进制数据：使用 sqlite3_bind_blob
+        // 参数解释: (语句句柄, 占位符索引, 数据指针, 数据大小, 内存管理策略)
+        sqlite3_bind_blob(stmt.get(), 1, fingerprint_data.data(), fingerprint_data.size(), SQLITE_STATIC);
+    }
+
+    // 2. 绑定第 2 个参数：user_id (INTEGER类型)
+    sqlite3_bind_int(stmt.get(), 2, user_id);
+
+    // 执行 SQL 语句
+    bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
+
+    if (ok) {
+        // 检查是否有行被真正修改（防止传入了不存在的 user_id）
+        if (sqlite3_changes(db) > 0) {
+            std::cout << "[Data] Fingerprint updated successfully for user_id: " << user_id << std::endl;
+        } else {
+            std::cerr << "[Data] Warning: Fingerprint update affected 0 rows (user_id " << user_id << " might not exist)." << std::endl;
+            ok = false;
+        }
+    } else {
+        std::cerr << "[Data] Failed to update fingerprint for user_id: " << user_id 
+                  << " Error: " << sqlite3_errmsg(db) << std::endl;
+    }
+
+    return ok;
+}
+
 // 轻量级用户列表加载 (仅 ID 和 Name)
 std::vector<UserData> db_get_all_users_light() {
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
@@ -1094,7 +1364,7 @@ bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int stat
     
     if(ok) {
         std::cout << "[Data] Attendance Logged -> User: " << user_id 
-                  << " Time: " << now << " Status: " << status << std::endl;
+                  << " Time: " << now << " Status: " << static_cast<int>(status) << std::endl;
     } else {
         std::cerr << "[Data] Attendance Logged Failed: " << sqlite3_errmsg(db) << std::endl;
     }
@@ -1233,6 +1503,61 @@ std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_t
     }
 
     return list;
+}
+
+//按工号和时间段查询个人的考勤记录
+std::vector<AttendanceRecord> db_get_records_by_user(int user_id, long long start_ts, long long end_ts) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex); // 读操作使用共享锁
+    std::vector<AttendanceRecord> records;
+
+    // 联表查询
+    const char* sql = 
+        "SELECT a.id, a.user_id, u.name, d.name, a.timestamp, a.status, a.image_path "
+        "FROM attendance a "
+        "LEFT JOIN users u ON a.user_id = u.id "
+        "LEFT JOIN departments d ON u.dept_id = d.id "
+        "WHERE a.user_id = ? AND a.timestamp >= ? AND a.timestamp <= ? "
+        "ORDER BY a.timestamp ASC;";
+
+    ScopedSqliteStmt stmt; 
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Get Records By User Failed: " << sqlite3_errmsg(db) << std::endl;
+        return records;
+    }
+
+    // 绑定三个参数
+    sqlite3_bind_int(stmt.get(), 1, user_id);
+    sqlite3_bind_int64(stmt.get(), 2, start_ts);
+    sqlite3_bind_int64(stmt.get(), 3, end_ts);
+
+    // 循环提取每一行记录
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        AttendanceRecord rec;
+        
+        rec.id = sqlite3_column_int(stmt.get(), 0);
+        rec.user_id = sqlite3_column_int(stmt.get(), 1);
+        
+        // 提取姓名，防空指针处理
+        const char* u_name = (const char*)sqlite3_column_text(stmt.get(), 2);
+        rec.user_name = u_name ? u_name : "";
+        
+        // 提取部门名称，防空指针处理
+        const char* d_name = (const char*)sqlite3_column_text(stmt.get(), 3);
+        rec.dept_name = d_name ? d_name : "";
+        
+        rec.timestamp = sqlite3_column_int64(stmt.get(), 4);
+        rec.status = sqlite3_column_int(stmt.get(), 5);
+        
+        // 提取抓拍图片路径
+        const char* img = (const char*)sqlite3_column_text(stmt.get(), 6);
+        rec.image_path = img ? img : "";
+        rec.minutes_late = 0;
+        rec.minutes_early = 0;
+        
+        records.push_back(rec);
+    }
+
+    return records;
 }
 
 // ================= 5.数据库事务接口 =================
@@ -1391,6 +1716,41 @@ std::optional<ShiftInfo> db_get_user_shift_smart(int user_id, long long timestam
     // 4. 判断经过三轮查找后，有没有排班？
     if (final_shift_id <= 0) {
         return std::nullopt; // 确实没排班，今天是休息日
+    }
+
+    // =====================================================================
+    // 【流程图节点 K】读取星期六/星期日是否上班的规则
+    // 对应流程图：无论通过个人、部门还是默认班次路径，进入考勤计算前都必须经过此节点
+    // weekday: 0=周日, 6=周六
+    // 注意：个人特殊排班（user_schedule）由管理员手动指定，已明确表达“当天要上班”的意图，
+    // 因此节点K的周末开关只对部门排班和默认班次起效。
+    // 如果是个人特殊排班，跳过周末检查（管理员明确安排了就尊重其意图）。
+    // =====================================================================
+    bool from_personal_special = false;
+    {
+        // 利用局部块重新查询一次，确认 final_shift_id 是否来自个人特殊排班
+        const char* sql_chk = "SELECT COUNT(*) FROM user_schedule WHERE user_id=? AND date_str=?;";
+        ScopedSqliteStmt stmt_chk;
+        if (sqlite3_prepare_v2(db, sql_chk, -1, stmt_chk.ptr(), 0) == SQLITE_OK) {
+            sqlite3_bind_int(stmt_chk.get(), 1, user_id);
+            sqlite3_bind_text(stmt_chk.get(), 2, date_str.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt_chk.get()) == SQLITE_ROW) {
+                from_personal_special = (sqlite3_column_int(stmt_chk.get(), 0) > 0);
+            }
+        }
+    }
+
+    if (!from_personal_special) {
+        // 不是个人特殊排班，则需过节点K的周末规则判断
+        RuleConfig rules = db_get_global_rules();
+        if (weekday == 6 && rules.sat_work == 0) {
+            // 星期六且规则配置为不上班 -> 返回无排班
+            return std::nullopt;
+        }
+        if (weekday == 0 && rules.sun_work == 0) {
+            // 星期日且规则配置为不上班 -> 返回无排班
+            return std::nullopt;
+        }
     }
 
     // 5. 拿着查到的 final_shift_id，去 shifts 表获取真正的班次详细时间
@@ -1625,4 +1985,369 @@ SystemStats db_get_system_stats() {
     }
 
     return stats;
+}
+
+
+// ================= 系统全局配置接口 =================
+
+//获取系统全局配置值
+std::string db_get_system_config(const std::string& key, const std::string& default_value) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex); // 读操作使用共享锁
+
+    const char* sql = "SELECT config_value FROM system_config WHERE config_key = ?;";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Get System Config Failed: " << sqlite3_errmsg(db) << std::endl;
+        return default_value;
+    }
+
+    sqlite3_bind_text(stmt.get(), 1, key.c_str(), -1, SQLITE_STATIC);
+
+    if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        const char* val = (const char*)sqlite3_column_text(stmt.get(), 0);
+        return val ? std::string(val) : default_value;
+    }
+
+    return default_value; // 没查到则返回默认值
+}
+
+//设置系统全局配置值 (存在则更新，不存在则插入)
+bool db_set_system_config(const std::string& key, const std::string& value) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex); // 写操作使用排他锁
+
+    // 使用 INSERT OR REPLACE，键存在就覆盖，不存在就新增
+    const char* sql = "INSERT OR REPLACE INTO system_config (config_key, config_value) VALUES (?, ?);";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Set System Config Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    sqlite3_bind_text(stmt.get(), 1, key.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 2, value.c_str(), -1, SQLITE_STATIC);
+
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        std::cerr << "[Data] Set System Config Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+
+// ================= 全局节假日管理接口 =================
+
+//设置全局节假日 (新增或修改)
+bool db_set_holiday(const std::string& date_str, const std::string& holiday_name) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex); // 写操作使用排他锁
+
+    const char* sql = "INSERT OR REPLACE INTO holidays (date_str, name) VALUES (?, ?);";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Set Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    sqlite3_bind_text(stmt.get(), 1, date_str.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 2, holiday_name.c_str(), -1, SQLITE_STATIC);
+
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        std::cerr << "[Data] Set Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+//删除指定的全局节假日 (例如取消放假)
+bool db_delete_holiday(const std::string& date_str) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex); // 写操作使用排他锁
+
+    const char* sql = "DELETE FROM holidays WHERE date_str = ?;";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Delete Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    sqlite3_bind_text(stmt.get(), 1, date_str.c_str(), -1, SQLITE_STATIC);
+
+    return (sqlite3_step(stmt.get()) == SQLITE_DONE);
+}
+
+//检查某天是否为全局节假日
+std::optional<std::string> db_get_holiday(const std::string& date_str) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex); // 读操作使用共享锁
+
+    const char* sql = "SELECT name FROM holidays WHERE date_str = ?;";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Get Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        return std::nullopt;
+    }
+
+    sqlite3_bind_text(stmt.get(), 1, date_str.c_str(), -1, SQLITE_STATIC);
+
+    if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        const char* name = (const char*)sqlite3_column_text(stmt.get(), 0);
+        if (name) {
+            return std::string(name);
+        }
+    }
+
+    return std::nullopt; // 没查到，说明今天不是节假日
+}
+
+
+// ================= 考勤设置与排班管理接口 =================
+
+//批量导入部门排班数据
+int db_import_dept_schedules(const std::vector<DeptScheduleEntry>& schedules) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex); // 写操作使用排他锁
+    
+    if (schedules.empty()) {
+        return 0;
+    }
+    
+    // 开启事务
+    if (!exec_sql("BEGIN TRANSACTION;", "Begin transaction for import schedules")) {
+        return 0;
+    }
+    
+    int success_count = 0;
+    
+    for (const auto& entry : schedules) {
+        // 验证数据：shift_id为0表示节假日，不插入记录
+        if (entry.shift_id == ScheduleConstants::HOLIDAY) {
+            continue;
+        }
+        
+        // 验证班次ID范围：1-10
+        if (entry.shift_id < ScheduleConstants::MIN_SHIFT_ID ||
+            entry.shift_id > ScheduleConstants::MAX_SHIFT_ID) {
+            std::cerr << "[Data] Invalid shift_id: " << entry.shift_id
+                      << " for dept_id: " << entry.dept_id
+                      << ", day: " << entry.day_of_week << std::endl;
+            continue;
+        }
+        
+        // 使用INSERT OR REPLACE确保一个部门一天只有一条记录
+        const char* sql = "INSERT OR REPLACE INTO dept_schedule (dept_id, day_of_week, shift_id) VALUES (?, ?, ?);";
+        ScopedSqliteStmt stmt;
+        
+        if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+            std::cerr << "[Data] Prepare import schedule failed: " << sqlite3_errmsg(db) << std::endl;
+            continue;
+        }
+        
+        sqlite3_bind_int(stmt.get(), 1, entry.dept_id);
+        sqlite3_bind_int(stmt.get(), 2, entry.day_of_week);
+        sqlite3_bind_int(stmt.get(), 3, entry.shift_id);
+        
+        if (sqlite3_step(stmt.get()) == SQLITE_DONE) {
+            success_count++;
+        } else {
+            std::cerr << "[Data] Execute import schedule failed: " << sqlite3_errmsg(db) << std::endl;
+        }
+    }
+    
+    // 提交事务
+    if (!exec_sql("COMMIT;", "Commit transaction for import schedules")) {
+        // 回滚
+        exec_sql("ROLLBACK;", "Rollback transaction for import schedules");
+        return 0;
+    }
+    
+    std::cout << "[Data] Imported " << success_count << " department schedule entries." << std::endl;
+    return success_count;
+}
+
+//获取部门完整排班视图
+DeptScheduleView db_get_dept_schedule_view(int dept_id) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex); // 读操作使用共享锁
+    DeptScheduleView view;
+    view.dept_id = dept_id;
+    
+    // 初始化数组为节假日（0）
+    for (int i = 0; i < 7; i++) {
+        view.shifts[i] = ScheduleConstants::HOLIDAY;
+    }
+    
+    // 获取部门名称
+    const char* sql_dept = "SELECT name FROM departments WHERE id = ?;";
+    ScopedSqliteStmt stmt_dept;
+    
+    if (sqlite3_prepare_v2(db, sql_dept, -1, stmt_dept.ptr(), 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt_dept.get(), 1, dept_id);
+        if (sqlite3_step(stmt_dept.get()) == SQLITE_ROW) {
+            const char* name = (const char*)sqlite3_column_text(stmt_dept.get(), 0);
+            if (name) {
+                view.dept_name = name;
+            }
+        }
+    }
+    
+    // 获取排班数据
+    const char* sql = "SELECT day_of_week, shift_id FROM dept_schedule WHERE dept_id = ? ORDER BY day_of_week;";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare get dept schedule failed: " << sqlite3_errmsg(db) << std::endl;
+        return view;
+    }
+    
+    sqlite3_bind_int(stmt.get(), 1, dept_id);
+    
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        int day_of_week = sqlite3_column_int(stmt.get(), 0);
+        int shift_id = sqlite3_column_int(stmt.get(), 1);
+        
+        if (day_of_week >= 0 && day_of_week < 7) {
+            view.shifts[day_of_week] = shift_id;
+        }
+    }
+    
+    return view;
+}
+
+//获取所有班次（限制最多10个）
+std::vector<ShiftInfo> db_get_all_shifts_limited() {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex); // 读操作使用共享锁
+    std::vector<ShiftInfo> shifts;
+    
+    const char* sql = "SELECT id, name, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, cross_day FROM shifts ORDER BY id LIMIT 10;";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare get all shifts limited failed: " << sqlite3_errmsg(db) << std::endl;
+        return shifts;
+    }
+    
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        ShiftInfo shift;
+        shift.id = sqlite3_column_int(stmt.get(), 0);
+        
+        const char* name = (const char*)sqlite3_column_text(stmt.get(), 1);
+        shift.name = name ? name : "";
+        
+        const char* s1_start = (const char*)sqlite3_column_text(stmt.get(), 2);
+        shift.s1_start = s1_start ? s1_start : "";
+        
+        const char* s1_end = (const char*)sqlite3_column_text(stmt.get(), 3);
+        shift.s1_end = s1_end ? s1_end : "";
+        
+        const char* s2_start = (const char*)sqlite3_column_text(stmt.get(), 4);
+        shift.s2_start = s2_start ? s2_start : "";
+        
+        const char* s2_end = (const char*)sqlite3_column_text(stmt.get(), 5);
+        shift.s2_end = s2_end ? s2_end : "";
+        
+        const char* s3_start = (const char*)sqlite3_column_text(stmt.get(), 6);
+        shift.s3_start = s3_start ? s3_start : "";
+        
+        const char* s3_end = (const char*)sqlite3_column_text(stmt.get(), 7);
+        shift.s3_end = s3_end ? s3_end : "";
+        
+        shift.cross_day = sqlite3_column_int(stmt.get(), 8);
+        
+        shifts.push_back(shift);
+    }
+    
+    return shifts;
+}
+
+// ================= 报表辅助批量查询接口 =================
+
+//根据时间段批量获取全公司的打卡记录 (用于生成月度总表)
+std::vector<AttendanceRecord> db_get_all_records_by_time(long long start_ts, long long end_ts) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex); // 读操作使用共享锁
+    std::vector<AttendanceRecord> records;
+
+    // 三表联查，一次性把所有报表需要的“人名”、“部门名”、“打卡信息”全捞出来
+    // 并且按照 部门 -> 用户ID -> 打卡时间 排序，方便业务层直接按顺序输出到 Excel
+    const char* sql = 
+        "SELECT a.id, a.user_id, u.name, d.name, a.timestamp, a.status, a.image_path "
+        "FROM attendance a "
+        "LEFT JOIN users u ON a.user_id = u.id "
+        "LEFT JOIN departments d ON u.dept_id = d.id "
+        "WHERE a.timestamp >= ? AND a.timestamp <= ? "
+        "ORDER BY d.id ASC, a.user_id ASC, a.timestamp ASC;";
+
+    ScopedSqliteStmt stmt; 
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Get All Records Failed: " << sqlite3_errmsg(db) << std::endl;
+        return records;
+    }
+
+    // 绑定时间参数
+    sqlite3_bind_int64(stmt.get(), 1, start_ts);
+    sqlite3_bind_int64(stmt.get(), 2, end_ts);
+
+    // 循环提取每一行记录
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        AttendanceRecord rec;
+        
+        rec.id = sqlite3_column_int(stmt.get(), 0);
+        rec.user_id = sqlite3_column_int(stmt.get(), 1);
+        
+        // 提取姓名，防空指针处理
+        const char* u_name = (const char*)sqlite3_column_text(stmt.get(), 2);
+        rec.user_name = u_name ? u_name : "";
+        
+        // 提取部门名称，防空指针处理
+        const char* d_name = (const char*)sqlite3_column_text(stmt.get(), 3);
+        rec.dept_name = d_name ? d_name : "";
+        
+        rec.timestamp = sqlite3_column_int64(stmt.get(), 4);
+        
+        rec.status = sqlite3_column_int(stmt.get(), 5);
+        
+        // 提取抓拍图片路径
+        const char* img = (const char*)sqlite3_column_text(stmt.get(), 6);
+        rec.image_path = img ? img : "";
+        
+        rec.minutes_late = 0;
+        rec.minutes_early = 0;
+        
+        records.push_back(rec);
+    }
+
+    return records;
+}
+
+//获取某部门下的所有用户列表 (用于按部门导出报表)
+std::vector<UserData> db_get_users_by_dept(int dept_id) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+    std::vector<UserData> users;
+
+    const char* sql = "SELECT id, name, privilege, dept_id, default_shift_id FROM users WHERE dept_id = ?;";
+    ScopedSqliteStmt stmt;
+
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Get Users By Dept Failed: " << sqlite3_errmsg(db) << std::endl;
+        return users;
+    }
+
+    sqlite3_bind_int(stmt.get(), 1, dept_id);
+
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        UserData u;
+        u.id = sqlite3_column_int(stmt.get(), 0);
+        
+        const char* name = (const char*)sqlite3_column_text(stmt.get(), 1);
+        u.name = name ? name : "";
+        
+        u.role = sqlite3_column_int(stmt.get(), 2);
+        u.dept_id = sqlite3_column_int(stmt.get(), 3);
+        u.default_shift_id = sqlite3_column_int(stmt.get(), 4);
+        
+        users.push_back(u);
+    }
+
+    return users;
 }

@@ -166,6 +166,22 @@ int business_get_record_count(void);
 bool business_get_record_at(int index, char *buf, int len);
 
 // ==========================================
+// 识别控制接口
+// ==========================================
+
+/**
+ * @brief 设置人脸识别开关状态
+ * @param enable true开启识别，false关闭识别
+ */
+void business_set_recognition_enabled(bool enable);
+
+/**
+ * @brief 获取当前人脸识别开关状态
+ * @return true识别已开启，false识别已关闭
+ */
+bool business_get_recognition_enabled(void);
+
+// ==========================================
 // C++ 专用接口 (C 文件不可见)
 // ==========================================
 

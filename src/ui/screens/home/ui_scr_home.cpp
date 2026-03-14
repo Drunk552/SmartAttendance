@@ -1,6 +1,6 @@
 /**
  * @file ui_scr_home.cpp
- * @brief 主页/摄像头预览界面 - 严格复刻 1.0 布局
+ * @brief 主页/摄像头预览界面 
  */
 
 #include "ui_scr_home.h"
@@ -76,6 +76,9 @@ static void screen_cleanup_cb(lv_event_t * e) {
     // screen 指针由 UiManager 管理，但在这里置空也无妨
     screen = nullptr;
 
+    // 通知业务层：主页被销毁，关闭人脸识别打卡
+    EventBus::getInstance().publish(EventType::LEAVE_HOME_SCREEN, nullptr);
+
     printf("[Home] Resources cleaned up safely.\n");
 }
 
@@ -89,8 +92,10 @@ static void screen_event_cb(lv_event_t * e) {
         if (key == LV_KEY_ENTER) {
             // 等待按键释放以防连跳
             lv_indev_wait_release(lv_indev_get_act());
-            // 跳转到菜单页逻辑 (假设已实现)
-            ui::menu::load_menu_screen(); 
+            // 通知业务层：离开主页，关闭人脸识别打卡
+            EventBus::getInstance().publish(EventType::LEAVE_HOME_SCREEN, nullptr);
+            // 跳转到菜单页逻辑
+            ui::menu::load_menu_screen();
         }
         if (key == LV_KEY_ESC) {
             // 退出程序请求
@@ -232,7 +237,7 @@ void load_screen(void) {
     UiManager::getInstance()->addObjToGroup(screen);
     lv_group_focus_obj(screen);
 
-    // 页面订阅逻辑 (保持 2.0 异步更新)
+    // 页面订阅逻辑 (异步更新)
     auto& bus = EventBus::getInstance();
     bus.subscribe(EventType::TIME_UPDATE, [](void* data) {
         std::string* t = static_cast<std::string*>(data);
@@ -250,8 +255,11 @@ void load_screen(void) {
 
     // 启动定时器刷新摄像头
     if (!timer_cam) {
-        timer_cam = lv_timer_create(timer_cam_cb, 33, nullptr);
+        timer_cam = lv_timer_create(timer_cam_cb, 16, nullptr);// 16ms (1000/16 ≈ 60 FPS)
     }
+
+    // 通知业务层：进入主页，开启人脸识别打卡
+    EventBus::getInstance().publish(EventType::ENTER_HOME_SCREEN, nullptr);
 
     lv_screen_load(screen);
     UiManager::getInstance()->destroyAllScreensExcept(screen);

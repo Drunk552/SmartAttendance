@@ -1,0 +1,68 @@
+SmartAttendance/
+├── .gitignore                  # Git 忽略文件配置
+├── CMakeLists.txt              # CMake 构建脚本，管理依赖与编译选项
+├── libs/                       # 第三方库文件
+│   └── lvgl/                   # LVGL第三方库
+├── lv_conf.h                   # LVGL 图形库配置文件
+├── env/                        # 环境配置目录
+│   └── env.sh                  # Linux/WSL2 环境变量配置脚本
+├── src/                        # 源代码主目录
+│   ├── main.cpp                # 程序入口，负责系统初始化与主循环
+│   ├── business/               # [业务层] 核心业务逻辑
+│   │   ├── attendance_rule.cpp # 考勤规则实现 (状态判定、迟到早退计算)
+│   │   ├── attendance_rule.h   # 考勤规则接口定义
+│   │   ├── auth_service.cpp    # 认证服务实现 (登录、权限校验)
+│   │   ├── auth_service.h      # 认证服务接口定义
+│   │   ├── event_bus.cpp       # 事件总线实现 (组件间解耦通信)
+│   │   ├── event_bus.h         # 事件总线接口定义
+│   │   ├── face_demo.cpp       # 人脸识别流程控制 (采集->检测->识别)
+│   │   ├── face_demo.h         # 人脸识别接口定义
+│   │   ├── report_generator.cpp# Excel 报表生成器实现
+│   │   └── report_generator.h  # 报表生成器接口定义
+│   ├── data/                   # [数据层] 数据持久化
+│   │   ├── db_storage.cpp      # SQLite 数据库操作封装 (DAO模式)
+│   │   └── db_storage.h        # 数据库操作接口与数据结构定义
+│   └── ui/
+│		├── common/                     # [通用组件层] 样式、公共控件
+│		│   ├── ui_style.cpp            # 颜色、字体 (style_focus_red, font_noto_16)
+│		│   ├── ui_style.h
+│		│   ├── ui_widgets.cpp          # 封装好的控件
+│		│   └── ui_widgets.h
+│		├── managers/                   # [核心管理层] 负责页面跳转、按键组管理
+│		│   ├── ui_manager.cpp          # 屏幕切换逻辑、全局 Keypad Group
+│		│   └── ui_manager.h
+│		├── screens/                    # [页面层] 按照业务模块重构 (参考业务架构图)
+│		│   ├── home/                   # 待机/主页
+│		│   │   ├── ui_scr_home.cpp     # 摄像头预览、时间显示
+│		│   │   └── ui_scr_home.h
+│		│   ├── menu/                   # 系统主菜单
+│		│   │   ├── ui_scr_menu.cpp     # 九宫格菜单
+│		│   │   └── ui_scr_menu.h
+│		│   ├── user_mgmt/              # 1. 员工管理模块 
+│		│   |   ├── ui_user_mgmt.cpp    # 包含: 菜单, 列表, 注册, 删除, 详情 (所有员工相关)
+│		│   |   └── ui_user_mgmt.h   
+│		│   ├── record_query/           # 2. 记录查询模块 
+│		│   │   ├── ui_record_query.cpp # 包含: 查询输入, 结果列表
+│		│   │   └── ui_record_query.h  
+│		│   ├── att_stats/              # 3. 考勤统计模块
+│		│   │   ├── ui_att_stats.cpp    # 包含: 统计菜单, 报表下载逻辑
+│		│   │   └── ui_att_stats.h 
+│		│   ├── system/                 # 4. 系统设置模块 
+│		│   │   ├── ui_sys_settings.cpp # 包含: 基础设置, 高级设置
+│		│   │   └── ui_sys_settings.h 
+│		│   ├── sys_info/               # 5. 系统信息模块 
+│		│   │   ├── ui_sys_info.cpp     # 包含: 信息菜单, 存储详情
+│		│   │   └── ui_sys_info.h                 
+│		│   └── att_design/             # 6. 考勤设计模块 
+│		│       ├── ui_att_design.cpp   # 包含: 菜单, 部门, 班次, 规则等所有逻辑
+│		│       └── ui_att_design.h     
+│		├── font_noto_16.c              # 字体文件
+│		├── ui_app.cpp                  # 入口
+│		├── ui_app.h
+│		├── ui_controller.cpp           # 业务桥接
+│		└── ui_controller.h
+└── tools/                      # 辅助工具脚本
+    ├── stress_test.sh          # 压力测试脚本 (模拟高频打卡)
+    └── stream/                 # 视频推流模拟工具
+        ├── run.bat             # Windows 下的一键运行脚本
+        └── stream.ps1          # PowerShell 推流脚本

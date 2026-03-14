@@ -1,21 +1,141 @@
 #include "attendance_rule.h"
+#include "../data/db_storage.h" // 考勤记录入库接口
 #include <sstream>
 #include <iomanip>
 #include <ctime>
-#include <cmath> // 用于数学计算
+#include <cmath>    // 用于数学计算
+#include <cctype>   // 用于 isdigit
+#include <algorithm>// 用于 trim
+
+// 判断状态优先级 (状态值越小优先级越高：NORMAL=0，LATE=1，EARLY=2，ABSENT=3)
+bool AttendanceRule::isStatusBetter(int new_status, int old_status) {
+    return new_status < old_status; 
+}
 
 /**
  * @brief 辅助工具：将 "HH:MM" 字符串转换为当天的第 N 分钟 (0-1439)
- * 优化建议：避免重复的 sscanf/stringstream 解析，提高复用性 (参考任务书 4.2)
+ * 根据规则 Q5：解析前须完成容错清洗，处理以下异常格式：
+ *   - 字符串前后空格 (如 " 09:00 ")
+ *   - 全角中文冒号 (如 "9：00"，UTF-8 编码 0xEF 0xBC 0x9A)
+ *   - 超出合法范围 (如 "24:00", "25:30")
+ *   - 非法数字 (如 "_9:00", "09:-1")
+ * @return 分钟数(0~1439)，解析失败返回 -1
  */
 int AttendanceRule::timeStringToMinutes(const std::string& time_str) {
-    int hour = 0, min = 0;
-    char sep;
-    std::istringstream ss(time_str);
-    if (ss >> hour >> sep >> min) {
-        return hour * 60 + min;
+    if (time_str.empty()) return -1;
+
+    // [Q5 容错1] 去除首尾空格（含全角空格 0xE3 0x80 0x80）
+    std::string s = time_str;
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char c){ return !std::isspace(c); }));
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char c){ return !std::isspace(c); }).base(), s.end());
+
+    if (s.empty()) return -1;
+
+    // [Q5 容错2] 将全角中文冒号（UTF-8: 0xEF 0xBC 0x9A）替换为半角冒号
+    // 同时处理全角句号（0xE3 0x80 0x82）、中文点（0xC2 0xB7）等常见混淆字符
+    std::string cleaned;
+    for (size_t i = 0; i < s.size(); ) {
+        unsigned char c0 = (unsigned char)s[i];
+        // 全角冒号 ：(EF BC 9A)
+        if (i + 2 < s.size() &&
+            c0 == 0xEF && (unsigned char)s[i+1] == 0xBC && (unsigned char)s[i+2] == 0x9A) {
+            cleaned += ':';
+            i += 3;
+        }
+        // 全角句号 。(E3 80 82)
+        else if (i + 2 < s.size() &&
+            c0 == 0xE3 && (unsigned char)s[i+1] == 0x80 && (unsigned char)s[i+2] == 0x82) {
+            cleaned += ':';
+            i += 3;
+        }
+        // 中文间隔号 · (C2 B7)
+        else if (i + 1 < s.size() &&
+            c0 == 0xC2 && (unsigned char)s[i+1] == 0xB7) {
+            cleaned += ':';
+            i += 2;
+        }
+        else {
+            cleaned += s[i];
+            ++i;
+        }
     }
-    return 0; // 解析失败默认返回0
+    s = cleaned;
+
+    // [Q5 容错3-ext] 去除首尾残留的非数字、非冒号字符
+    // 处理 "_9:00"、"#09:00"、"09:00." 等前后缀污染字符
+    {
+        size_t start = s.find_first_of("0123456789");
+        size_t end   = s.find_last_of("0123456789");
+        if (start == std::string::npos) return -1;
+        s = s.substr(start, end - start + 1);
+    }
+
+    // [Q5 容错4-ext] 将点号(.)、横杠(-)、空格( ) 等常见分隔符替换为冒号
+    // 处理 "09.00"、"09-00"、"9 00" 等
+    for (char& c : s) {
+        if (c == '.' || c == '-' || c == ' ') {
+            c = ':';
+        }
+    }
+
+    // [Q5 容错5-ext] 处理无分隔符的纯数字格式（3~4位）
+    // "0900" → "09:00"，"900" → "09:00"，"9" → "09:00"
+    {
+        size_t colon_pos = s.find(':');
+        if (colon_pos == std::string::npos) {
+            // 纯数字，尝试按位数解析
+            bool all_digit = true;
+            for (unsigned char c : s) {
+                if (!std::isdigit(c)) { all_digit = false; break; }
+            }
+            if (all_digit) {
+                if (s.size() == 4) {
+                    // "0900" → "09:00"
+                    s = s.substr(0, 2) + ":" + s.substr(2, 2);
+                } else if (s.size() == 3) {
+                    // "900" → "09:00"（首位为小时，后两位为分钟）
+                    s = "0" + s.substr(0, 1) + ":" + s.substr(1, 2);
+                } else if (s.size() <= 2) {
+                    // "9" 或 "09" → "09:00"（只有小时，分钟默认00）
+                    s = s + ":00";
+                } else {
+                    return -1; // 5位以上纯数字，无法识别
+                }
+            } else {
+                return -1; // 含非数字字符且无分隔符，无法识别
+            }
+        }
+    }
+
+    // [Q5 容错6] 查找冒号分隔符，提取小时和分钟
+    size_t colon_pos = s.find(':');
+    if (colon_pos == std::string::npos) return -1;
+
+    std::string hour_str = s.substr(0, colon_pos);
+    std::string min_str  = s.substr(colon_pos + 1);
+
+    // 去除小时/分钟字段内残留空格（防止 " 9 : 0 0 " 这类极端输入）
+    hour_str.erase(std::remove_if(hour_str.begin(), hour_str.end(), ::isspace), hour_str.end());
+    min_str.erase(std::remove_if(min_str.begin(), min_str.end(), ::isspace), min_str.end());
+
+    // 校验每个字符必须是数字（拦截 "_9:00", "09:-1" 等无法转换的非法符号）
+    auto isAllDigit = [](const std::string& str) -> bool {
+        if (str.empty()) return false;
+        for (unsigned char c : str) {
+            if (!std::isdigit(c)) return false;
+        }
+        return true;
+    };
+    if (!isAllDigit(hour_str) || !isAllDigit(min_str)) return -1;
+
+    int hour = std::stoi(hour_str);
+    int min  = std::stoi(min_str);
+
+    // [Q5 容错7] 校验时间数值范围（拦截 "24:00", "25:30", "09:61" 等真正越界值）
+    // 注意：24:00 这类确实无法转换，直接拒绝
+    if (hour > 23 || min > 59) return -1;
+
+    return hour * 60 + min;
 }
 
 /**
@@ -133,4 +253,90 @@ PunchResult AttendanceRule::calculatePunchStatus(time_t punch_timestamp, const S
     }
 
     return result;
+}
+
+// ======================================================
+// 考勤记录入口（验证成功后由 UI 层调用）
+// 时序对应流程图：获取排班 -> 节点K -> 考勤计算 -> 入库
+// ======================================================
+
+RecordResult AttendanceRule::recordAttendance(int user_id, const cv::Mat& image) {
+    // ======================================================
+    // 第一阶段：初始化 - 获取当天排班
+    // db_get_user_shift_smart 内部包含完整优先级链：
+    //   Excel个人排班 > 部门周排班 > 默认班次
+    //   + 【节点K】周六/周日是否上班规则检查
+    // ======================================================
+    long long now_ts = static_cast<long long>(std::time(nullptr));
+    auto shift_opt   = db_get_user_shift_smart(user_id, now_ts);
+
+    // 无排班（含周末不上班），不记录，结束
+    if (!shift_opt.has_value() || shift_opt.value().id == 0) {
+        return RecordResult::NO_SHIFT;
+    }
+
+    const ShiftInfo& shift = shift_opt.value();
+
+    // ======================================================
+    // 防重复打卡检查
+    // ======================================================
+    RuleConfig rules    = db_get_global_rules();
+    int dup_limit_sec   = rules.duplicate_punch_limit * 60;
+    if (dup_limit_sec > 0) {
+        auto recent = db_get_records_by_user(user_id, now_ts - dup_limit_sec, now_ts);
+        if (!recent.empty()) {
+            return RecordResult::DUPLICATE_PUNCH;
+        }
+    }
+
+    // ======================================================
+    // 第二阶段：打卡归属判断（折中原则）
+    // ======================================================
+    ShiftConfig shift_am;
+    shift_am.start_time         = shift.s1_start;
+    shift_am.end_time           = shift.s1_end;
+    shift_am.late_threshold_min = rules.late_threshold;
+
+    ShiftConfig shift_pm;
+    shift_pm.start_time         = shift.s2_start;
+    shift_pm.end_time           = shift.s2_end;
+    shift_pm.late_threshold_min = rules.late_threshold;
+
+    // 折中原则：判断打卡归属上班还是下班
+    int  shift_owner = determineShiftOwner(static_cast<time_t>(now_ts), shift_am, shift_pm);
+    bool is_check_in = (shift_owner == 1);
+
+    // ======================================================
+    // 第三阶段：状态判定（正常/迟到/早退/旷工）
+    // ======================================================
+    PunchResult pr = calculatePunchStatus(
+        static_cast<time_t>(now_ts),
+        is_check_in ? shift_am : shift_pm,
+        is_check_in);
+
+    // PunchStatus -> DB 存储的 int 状态码
+    int db_status = 0;
+    switch (pr.status) {
+        case PunchStatus::NORMAL: db_status = 0; break;
+        case PunchStatus::LATE:   db_status = 1; break;
+        case PunchStatus::EARLY:  db_status = 2; break;
+        case PunchStatus::ABSENT: db_status = 3; break;
+    }
+
+    // ======================================================
+    // 写入数据库
+    // ======================================================
+    bool ok = db_log_attendance(user_id, shift.id, image, db_status);
+    if (!ok) {
+        return RecordResult::DB_ERROR;
+    }
+
+    // 返回考勤语义结果，供 UI 层显示对应提示
+    switch (pr.status) {
+        case PunchStatus::NORMAL: return RecordResult::RECORDED_NORMAL;
+        case PunchStatus::LATE:   return RecordResult::RECORDED_LATE;
+        case PunchStatus::EARLY:  return RecordResult::RECORDED_EARLY;
+        case PunchStatus::ABSENT: return RecordResult::RECORDED_ABSENT;
+        default:                  return RecordResult::RECORDED_NORMAL;
+    }
 }

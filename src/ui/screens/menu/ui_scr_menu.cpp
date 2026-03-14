@@ -49,32 +49,21 @@ static void menu_btn_event_cb(lv_event_t *e) {
             return; // 处理完返回后直接返回，避免继续执行下面的导航逻辑
         }
         
-        // 获取当前按钮在 Grid 中的索引 (0, 1, 2, 3)
-        // 0:左上, 1:右上, 2:左下, 3:右下
+        // 获取当前按钮在父容器中的索引
         lv_obj_t *grid = lv_obj_get_parent(btn);
         uint32_t index = lv_obj_get_index(btn); 
         uint32_t total = lv_obj_get_child_cnt(grid);
         int next_index = -1; // 目标索引
 
-        // --- 核心导航逻辑 ---
-        if (key == LV_KEY_RIGHT) {
-            // 向右：+1，循环
+        // --- 核心导航逻辑 (仅使用上下键) ---
+        if (key == LV_KEY_DOWN) {
+            // 向下：下一个，循环 (+1)
             next_index = (index + 1) % total;
-            std::printf("[UI] Nav: RIGHT (%d -> %d)\n", index, next_index);
-        }
-        else if (key == LV_KEY_LEFT) {
-            // 向左：-1，循环 (加 total 防止负数)
-            next_index = (index + total - 1) % total;
-            std::printf("[UI] Nav: LEFT (%d -> %d)\n", index, next_index);
-        }
-        else if (key == LV_KEY_DOWN) {
-            // 向下：+2 (因为是2列布局)，循环
-            next_index = (index + 2) % total;
             std::printf("[UI] Nav: DOWN (%d -> %d)\n", index, next_index);
         }
         else if (key == LV_KEY_UP) {
-            // 向上：-2，循环
-            next_index = (index + total - 2) % total;
+            // 向上：上一个，循环 (-1，加 total 防止负数)
+            next_index = (index + total - 1) % total;
             std::printf("[UI] Nav: UP (%d -> %d)\n", index, next_index);
         }
 

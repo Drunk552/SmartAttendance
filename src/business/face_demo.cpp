@@ -37,7 +37,7 @@ static CascadeClassifier face_cas;// Haar级联分类器，用于人脸检测
 static Ptr<LBPHFaceRecognizer> recog; // LBPH人脸识别器对象
 static std::vector<Mat> face_samples;// 存储所有人脸训练样本（预处理后的灰度图像）
 static std::vector<int> labels;// 对应的标签ID（与face_samples一一对应）
-static std::vector<std::string> names = {"user1","user2","user3","user4","user5"};// 用户名映射
+static std::vector<std::string> names = {"Unknown"}; // ID 0 为 Unknown，其余从数据库加载
 static int current_id = 0;// 当前选中的用户ID（用于采集样本）
 static bool trained = false;// 标识是否已完成训练
 static bool show_recognition = true;// 控制是否显示识别结果
@@ -343,161 +343,169 @@ static void background_capture_loop() {
                 
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
-            }
+            }// 锁在这里立即释放，UI 线程随时可以拿 current_frame 去渲染！
 
-            // 2. 核心业务处理 (加锁保护)
+            // 2. 核心业务处理 (缩小锁范围，防止阻塞 UI)
+            cv::Mat process_frame;
             {
                 std::lock_guard<std::mutex> lock(g_data_mutex);
                 frame.copyTo(current_frame);// 更新共享的当前帧 
+                process_frame = current_frame.clone(); // 克隆一份交给本线程进行耗时计算
+            }
 
-                // -------------------- [ 跳帧检测] ----------------
-                bool perform_detection = (frame_counter % (SKIP_FRAMES + 1) == 0);
-                frame_counter++;
+            // -------------------- [ 跳帧检测] ----------------
+            bool perform_detection = (frame_counter % (SKIP_FRAMES + 1) == 0);
+            frame_counter++;
 
-                bool has_face = false;
-                cv::Rect face;
+            bool has_face = false;
+            cv::Rect face;
 
-                if (perform_detection) {
-                    // 执行真正的耗时检测
-                    has_face = detect_face(current_frame, face, face_cas);
+            if (perform_detection) {
+                // 执行真正的耗时检测
+                has_face = detect_face(process_frame, face, face_cas);
                     
-                    if (has_face) {
-                        last_face_rect = face; // 更新缓存
-                        is_tracking = true;
-                    } else {
-                        is_tracking = false;   // 丢失目标
-                    }
+                if (has_face) {
+                    last_face_rect = face; // 更新缓存
+                    is_tracking = true;
                 } else {
-                    // 跳帧期间：直接沿用上一帧的结果 (假定人脸移动不快)
-                    // 只有当之前处于跟踪状态时，才认为有脸
-                    if (is_tracking) {
-                        face = last_face_rect;
-                        has_face = true;
+                    is_tracking = false;   // 丢失目标
+                }
+            } else {
+                // 跳帧期间：直接沿用上一帧的结果 (假定人脸移动不快)
+                // 只有当之前处于跟踪状态时，才认为有脸
+                if (is_tracking) {
+                    face = last_face_rect;
+                    has_face = true;
+                }
+            }
+            // ------------------------------------------------------
+
+            if (has_face) {
+                // 绘制人脸框 (视觉反馈)
+                // 如果是跳帧期间画的框，可以用不同颜色(例如黄色)来区分调试，或者统一用绿色
+                cv::Scalar color = perform_detection ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 255, 200);
+                cv::rectangle(process_frame, face, color, 2);
+
+                // -------------------- [ 识别冷却] ----------------
+                if (perform_detection && show_recognition && trained) {
+                        
+                    cv::Mat f = preprocess_face(process_frame, face);
+                    int label = -1; double conf = 0.0;
+                    recog->predict(f, label, conf);
+                        
+                    if (label != -1 && conf < 100.0) { // 阈值
+                            
+                        std::string name;
+                        {
+                        // 加锁读取，防止崩坏
+                        std::lock_guard<std::mutex> lock(g_names_mutex);
+                        name = (label < names.size()) ? names[label] : "Unknown";
+                        }
+                            
+                        //  先定义 text 变量，用于后续追加状态
+                        std::string text = name; 
+                            
+                        // 检查该用户的独立冷却时间
+                        auto now = std::chrono::steady_clock::now();
+                        bool in_cooldown = false;
+                            
+                        if (user_cooldowns.find(label) != user_cooldowns.end()) {
+                            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - user_cooldowns[label]).count();
+                            if (elapsed < RECOG_COOLDOWN_MS) {
+                                in_cooldown = true;
+                            }
+                        }
+
+                        // 只有不在冷却中，才执行打卡逻辑
+                        if (!in_cooldown) {
+                                
+                            // =====================  1. 业务防抖检查 =================
+                            // 获取当前系统时间 (秒)
+                            time_t now_sec = std::time(nullptr);
+                            time_t last_p = 0;
+
+                            // 先查内存缓存 (最快)
+                            if (last_punch_cache.find(label) != last_punch_cache.end()) {
+                                last_p = last_punch_cache[label];
+                            } 
+                            // 内存没有查数据库 (兜底)
+                            else {
+                                // 确保 db_storage.h 中声明了此函数，如果没有请添加
+                                last_p = db_getLastPunchTime(label);
+                                last_punch_cache[label] = last_p;
+                            }
+
+                            // 判断时间间隔 (例如 60秒 内禁止重复打卡)
+                            if (now_sec - last_p < 60) {
+                                // --- 情况 A: 重复打卡 ---
+                                // 仅在界面显示提示，不执行任何写库操作
+                                text += " [Repeat]"; 
+                            }
+                            else {
+                                // --- 情况 B: 有效打卡  ---
+                                    
+                                // ===== 考勤规则计算 =====
+                                    
+                                // 1. 构建班次配置
+                                ShiftConfig default_shift;
+                                default_shift.start_time = "09:00";
+                                default_shift.end_time = "18:00";
+                                default_shift.late_threshold_min = g_rule_cfg.late_threshold; 
+                                    
+                                // 2. 计算状态
+                                PunchResult result = AttendanceRule::calculatePunchStatus(now_sec, default_shift, true); 
+                                    
+                                // 3. 准备数据
+                                cv::Mat snapshot = process_frame.clone();
+                                int uid = label;
+                                int sid = 0; 
+                                int sts = 0; 
+                                if (result.status == PunchStatus::LATE) sts = 1;
+                                else if (result.status == PunchStatus::EARLY) sts = 2;
+                                else if (result.status == PunchStatus::ABSENT) sts = 4;
+                                    
+                                int diff = result.minutes_diff;
+                                std::string user_n = name;
+
+                                // 4. 异步队列推送
+                                {
+                                    std::lock_guard<std::mutex> lock(g_queue_mutex);
+                                    // 控制队列长度，防止内存占用过高
+                                    if (g_punch_queue.size() > 10) { 
+                                        std::cerr << "[Warn] DB Queue Full! Drop." << std::endl;
+                                    } else {
+                                        g_punch_queue.push({uid, sid, snapshot, sts, user_n, diff});
+                                        g_queue_cv.notify_one(); 
+                                    }
+                                }
+
+                                // 5. UI 反馈
+                                text += " [OK]";
+
+                                //  打卡成功后，立即更新内存缓存
+                                last_punch_cache[label] = now_sec;
+                            }
+
+                            // 更新视觉冷却时间 (保证提示语显示 2秒)
+                            user_cooldowns[label] = now;
+                        }
+                        else {
+                            // 可选：显示冷却中，比如 text += " (Wait)";
+                        }
+
+                        // 统一在最后绘制文字，这样才能显示出 "User [OK]"
+                        cv::putText(process_frame, text, cv::Point(face.x, face.y - 10), 
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
                     }
                 }
                 // ------------------------------------------------------
+            }
 
-                if (has_face) {
-                    // 绘制人脸框 (视觉反馈)
-                    // 如果是跳帧期间画的框，可以用不同颜色(例如黄色)来区分调试，或者统一用绿色
-                    cv::Scalar color = perform_detection ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 255, 200);
-                    cv::rectangle(current_frame, face, color, 2);
-
-                    // -------------------- [ 识别冷却] ----------------
-                    if (perform_detection && show_recognition && trained) {
-                        
-                        cv::Mat f = preprocess_face(current_frame, face);
-                        int label = -1; double conf = 0.0;
-                        recog->predict(f, label, conf);
-                        
-                        if (label != -1 && conf < 100.0) { // 阈值
-                            
-                            std::string name;
-                            {
-                            // 加锁读取，防止崩坏
-                            std::lock_guard<std::mutex> lock(g_names_mutex);
-                            name = (label < names.size()) ? names[label] : "Unknown";
-                            }
-                            
-                            //  先定义 text 变量，用于后续追加状态
-                            std::string text = name; 
-                            
-                            // 检查该用户的独立冷却时间
-                            auto now = std::chrono::steady_clock::now();
-                            bool in_cooldown = false;
-                            
-                            if (user_cooldowns.find(label) != user_cooldowns.end()) {
-                                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - user_cooldowns[label]).count();
-                                if (elapsed < RECOG_COOLDOWN_MS) {
-                                    in_cooldown = true;
-                                }
-                            }
-
-                            // 只有不在冷却中，才执行打卡逻辑
-                            if (!in_cooldown) {
-                                
-                                // =====================  1. 业务防抖检查 =================
-                                // 获取当前系统时间 (秒)
-                                time_t now_sec = std::time(nullptr);
-                                time_t last_p = 0;
-
-                                // 先查内存缓存 (最快)
-                                if (last_punch_cache.find(label) != last_punch_cache.end()) {
-                                    last_p = last_punch_cache[label];
-                                } 
-                                // 内存没有查数据库 (兜底)
-                                else {
-                                    // 确保 db_storage.h 中声明了此函数，如果没有请添加
-                                    last_p = db_getLastPunchTime(label);
-                                    last_punch_cache[label] = last_p;
-                                }
-
-                                // 判断时间间隔 (例如 60秒 内禁止重复打卡)
-                                if (now_sec - last_p < 60) {
-                                    // --- 情况 A: 重复打卡 ---
-                                    // 仅在界面显示提示，不执行任何写库操作
-                                    text += " [Repeat]"; 
-                                }
-                                else {
-                                    // --- 情况 B: 有效打卡  ---
-                                    
-                                    // ===== 考勤规则计算 =====
-                                    
-                                    // 1. 构建班次配置
-                                    ShiftConfig default_shift;
-                                    default_shift.start_time = "09:00";
-                                    default_shift.end_time = "18:00";
-                                    default_shift.late_threshold_min = g_rule_cfg.late_threshold; 
-                                    
-                                    // 2. 计算状态
-                                    PunchResult result = AttendanceRule::calculatePunchStatus(now_sec, default_shift, true); 
-                                    
-                                    // 3. 准备数据
-                                    cv::Mat snapshot = current_frame.clone();
-                                    int uid = label;
-                                    int sid = 0; 
-                                    int sts = 0; 
-                                    if (result.status == PunchStatus::LATE) sts = 1;
-                                    else if (result.status == PunchStatus::EARLY) sts = 2;
-                                    else if (result.status == PunchStatus::ABSENT) sts = 4;
-                                    
-                                    int diff = result.minutes_diff;
-                                    std::string user_n = name;
-
-                                    // 4. 异步队列推送
-                                    {
-                                        std::lock_guard<std::mutex> lock(g_queue_mutex);
-                                        // 控制队列长度，防止内存占用过高
-                                        if (g_punch_queue.size() > 10) { 
-                                            std::cerr << "[Warn] DB Queue Full! Drop." << std::endl;
-                                        } else {
-                                            g_punch_queue.push({uid, sid, snapshot, sts, user_n, diff});
-                                            g_queue_cv.notify_one(); 
-                                        }
-                                    }
-
-                                    // 5. UI 反馈
-                                    text += " [OK]";
-
-                                    //  打卡成功后，立即更新内存缓存
-                                    last_punch_cache[label] = now_sec;
-                                }
-
-                                // 更新视觉冷却时间 (保证提示语显示 2秒)
-                                user_cooldowns[label] = now;
-                            }
-                            else {
-                                // 可选：显示冷却中，比如 text += " (Wait)";
-                            }
-
-                            // 统一在最后绘制文字，这样才能显示出 "User [OK]"
-                            cv::putText(current_frame, text, cv::Point(face.x, face.y - 10), 
-                                        cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
-                        }
-                    }
-                    // ------------------------------------------------------
-                }
-            } // g_data_mutex 结束
+            // 耗时计算和画框全部结束后，短暂加锁将画面同步回共享区
+            {
+                std::lock_guard<std::mutex> lock(g_data_mutex);
+                process_frame.copyTo(current_frame);
+            }
 
             // 3. 更新 UI 显示缓存(带限流保护)
             auto now = std::chrono::steady_clock::now();
@@ -506,7 +514,8 @@ static void background_capture_loop() {
 
             //  只有距离上次刷新超过 40ms (约 25 FPS) 才通知 UI
             // 这样既保证了识别是 60 FPS (高精度)，又防止了 UI 队列爆炸
-            if (elapsed_ms >= 40) {
+            // 将限制从 40ms 改为 16ms (约 60 FPS)，让预览画面丝滑顺畅
+            if (elapsed_ms >= 16) {
                 {
                     std::lock_guard<std::mutex> lock(g_display_mutex);
                     current_frame.copyTo(g_display_frame_buffer);
@@ -524,7 +533,7 @@ static void background_capture_loop() {
             // [优化] 为了达到 60FPS，理论间隔应为 16ms。
             // 但考虑到 cap.read() 本身可能是阻塞的（等待硬件数据），这里只休眠极短时间释放 CPU 即可。
             // 如果你的 CPU 占用率过高，可以改为 10ms-15ms；如果追求极致流畅，改为 1ms。
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
         }
         //   捕获所有异常，防止程序崩溃
         catch (const cv::Exception& e) {
@@ -548,6 +557,18 @@ static void background_capture_loop() {
  */
 
 bool business_init() {
+    // 订阅屏幕切换事件，控制识别状态
+    auto& bus = EventBus::getInstance();
+    bus.subscribe(EventType::ENTER_HOME_SCREEN, [](void*){
+        show_recognition = true;
+        std::cout << "[Business] 进入主页，开启人脸识别打卡" << std::endl;
+    });
+    
+    bus.subscribe(EventType::LEAVE_HOME_SCREEN, [](void*){
+        show_recognition = false;
+        std::cout << "[Business] 离开主页，关闭人脸识别打卡" << std::endl;
+    });
+
     // 加载人脸检测器（Haar级联分类器）
     std::string cascade_path = find_cascade();
     if (cascade_path.empty() || !face_cas.load(cascade_path)) {
@@ -748,7 +769,29 @@ void business_toggle_recognition() {
         show_recognition = !show_recognition;
         cout << "[Business] 识别功能: " << (show_recognition ? "开启" : "关闭") << endl;
     }
-} 
+}
+
+/**
+ * @brief 设置人脸识别开关状态
+ * @param enable true开启识别，false关闭识别
+ */
+void business_set_recognition_enabled(bool enable) {
+    if (!trained && enable) {
+        cout << "[Business] 尚未训练，无法开启识别。\n";
+        show_recognition = false;
+    } else {
+        show_recognition = enable;
+        cout << "[Business] 识别功能: " << (show_recognition ? "开启" : "关闭") << endl;
+    }
+}
+
+/**
+ * @brief 获取当前人脸识别开关状态
+ * @return true识别已开启，false识别已关闭
+ */
+bool business_get_recognition_enabled(void) {
+    return show_recognition;
+}
 
 // ==========================================
 // Epic 4: 改造后的运行函数
