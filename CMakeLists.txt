@@ -81,11 +81,15 @@ endif()
 # 4. 主程序配置
 # ==========================================
 # 自动查找 src 下的源文件 (实际开发建议显式列出以避免遗漏)
-file(GLOB_RECURSE SRC_FILES 
+file(GLOB_RECURSE SRC_FILES
     "src/main.cpp"
     
-    # UI 层
-    "src/ui/common/*.cpp"
+    # UI 层 - 显式列出需要的文件
+    "src/ui/common/ui_style.cpp"
+    "src/ui/common/ui_widgets.cpp"
+    "src/ui/common/t9_keyboard.cpp"
+    "src/ui/common/t9_keymap.cpp"
+    "src/ui/common/matrix_t9_keyboard.cpp"
     "src/ui/managers/*.cpp"
     "src/ui/screens/home/*.cpp"
     "src/ui/screens/menu/*.cpp"
@@ -97,9 +101,7 @@ file(GLOB_RECURSE SRC_FILES
     "src/ui/screens/sys_info/*.cpp"
     "src/ui/ui_app.cpp"
     "src/ui/ui_controller.cpp"
-    "src/ui/ui_controller.cpp"     
-    "src/ui/*.c"               
-    "src/ui/*.cpp"              
+    "src/ui/*.c"
 
     # 业务层
     "src/business/event_bus.cpp"

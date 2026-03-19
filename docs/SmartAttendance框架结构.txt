@@ -23,11 +23,17 @@ SmartAttendance/
 │   │   ├── db_storage.cpp      # SQLite 数据库操作封装 (DAO模式)
 │   │   └── db_storage.h        # 数据库操作接口与数据结构定义
 │   └── ui/
-│		├── common/                     # [通用组件层] 样式、公共控件
+│		├── common/                     # [通用组件层] 样式、公共控件、T9键盘
 │		│   ├── ui_style.cpp            # 颜色、字体 (style_focus_red, font_noto_16)
 │		│   ├── ui_style.h
 │		│   ├── ui_widgets.cpp          # 封装好的控件
-│		│   └── ui_widgets.h
+│		│   ├── ui_widgets.h
+│		│   ├── t9_keyboard.h           # T9键盘逻辑与输入法头文件
+│		│   ├── t9_keyboard.cpp         # T9键盘逻辑与输入法实现
+│		│   ├── t9_keymap.h             # T9键盘到PC键盘映射表头文件
+│		│   ├── t9_keymap.cpp           # T9键盘映射表实现
+│		│   ├── matrix_t9_keyboard.h    # 矩阵键盘T9映射头文件（硬件键盘专用）
+│		│   └── matrix_t9_keyboard.cpp  # 矩阵键盘T9映射实现
 │		├── managers/                   # [核心管理层] 负责页面跳转、按键组管理
 │		│   ├── ui_manager.cpp          # 屏幕切换逻辑、全局 Keypad Group
 │		│   └── ui_manager.h
@@ -61,6 +67,11 @@ SmartAttendance/
 │		├── ui_app.h
 │		├── ui_controller.cpp           # 业务桥接
 │		└── ui_controller.h
+├── docs/                       # 项目文档
+│   ├── SmartAttendance框架结构.txt    # 项目框架结构文档
+│   ├── T9键盘集成指南.md               # T9键盘集成指南
+│   ├── 考勤打卡软件开发课题书.pdf      # 项目需求文档
+│   └── FA03H产品资料/                 # 硬件产品资料
 └── tools/                      # 辅助工具脚本
     ├── stress_test.sh          # 压力测试脚本 (模拟高频打卡)
     └── stream/                 # 视频推流模拟工具

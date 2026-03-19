@@ -28,9 +28,7 @@ using namespace cv;
 using namespace cv::face;
 using std::cout; using std::endl;
 
-// ==========================================
-//全局静态变量 原本在 main 中的局部变量)
-// ==========================================
+// ==================== 全局静态变量 ======================
 
 static VideoCapture cap;// 视频捕获对象，用于读取摄像头或视频流
 static CascadeClassifier face_cas;// Haar级联分类器，用于人脸检测
@@ -1061,8 +1059,8 @@ bool business_get_display_frame(void* buffer, int w, int h) {
         // 兜底逻辑：如果计算出的宽度不够（极少情况），则强制缩放
         cv::resize(frame, frame, cv::Size(w, h));
     }
-    cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
-
+    //cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
+    frame.copyTo(rgb);
     // 3. 填入 buffer
     memcpy(buffer, rgb.data, w * h * 3);
     
