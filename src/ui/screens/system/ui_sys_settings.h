@@ -74,6 +74,12 @@ void load_sys_basic_warn_count_screen();
  */
 void load_sys_settings_advanced_screen();
 
+void load_sys_advanced_clean_records_sreen();
+void load_sys_advanced_clean_employee_sreen();
+void load_sys_advanced_clean_data_sreen();
+void load_sys_advanced_factory_reset_sreen();
+void load_sys_advanced_system_update_sreen();
+
 /**
  * @brief 加载参数设置屏幕
  */
