@@ -209,6 +209,15 @@ std::vector<DeptInfo> db_get_departments();
  */
 bool db_delete_department(int dept_id);
 
+/**
+ * @brief 更新部门名称
+ * @param dept_id 要修改的部门ID（必须存在）
+ * @param new_name 新的部门名称（必须唯一，不能与其他部门重名）
+ * @return true 更新成功
+ *         false 失败（ID不存在 / 名称重复 / 数据库错误）
+ */
+bool db_update_department(int dept_id, const std::string& new_name);
+
 // ================= 2. 班次管理接口 (Shift DAO) =================
 
 /**
@@ -278,7 +287,8 @@ std::vector<BellSchedule> db_get_all_bells();
  * @return true 更新成功
  */
 bool db_update_bell(const BellSchedule& bell);
-
+bool db_save_company_name(const std::string& name);
+bool db_load_company_name(std::string& name);
 // ================= 3. 用户管理接口 (User DAO) =================
 
 /**

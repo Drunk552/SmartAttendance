@@ -11,35 +11,38 @@
 
 // 定义屏幕类型枚举，用于管理
 enum class ScreenType {
-    MAIN,//home屏幕
-    MENU,//主菜单
-    USER_MGMT,//员工管理主菜单
-    USER_LIST,//员工列表子屏幕
-    REGISTER,// 注册流程屏幕
-    REGISTER_CAMERA,// 注册流程拍照屏幕
-    RECORD_QUERY,// 记录查询菜单
-    RECORD_RESULT,// 记录查询结果
-    SYS_SETTINGS,// 系统设置
-    SYS_ADVANCED,// 系统高级设置
-    SYS_INFO,// 系统信息
-    STORAGE_INFO,// 存储信息
-    ATT_STATS,// 考勤统计
-    ALL_ATT_STATS,//全员考勤报表下载
-    PERSONAGE_ATT_STATS,//个人考勤报表下载
-    ATT_DESIGN,// 考勤设计
-    DEPT_SETTING, //部门设置子界面
-    SHIFT_SETTING,//班次设置子界面
-    RULE_SETTING,//考勤规则设置
-    SCHEDULE_SETTING,//排班设置
-    USER_INFO, // 员工详情
-    PWD_CHANGE,// 密码修改
-    ROLE_AUTH,// 权限变更
-    DELETE_USER,//删除用户
-    SYS_SELF_CHECK, // 自检功能屏幕
-    USER_EDIT_NAME,//修改姓名
-    USER_EDIT_DEPT,//修改部门
-    USER_EDIT_PASSWORD,//修改密码
-    USER_REGISTER_PASSWORD,//注册密码
+    ALL_ATT_STATS,          // 全员考勤报表下载
+    ATT_DESIGN,             // 考勤设计
+    ATT_STATS,              // 考勤统计
+    BELL_SETTING,           // 定时响铃子界面
+    COMPANY_SETTING,        // 公司设置子界面
+    DELETE_USER,            // 删除用户
+    DEPT_SETTING,           // 部门设置子界面
+    DEPT_DETAIL,            // 部门详情子界面
+    MAIN,                   // home 屏幕
+    MENU,                   // 主菜单
+    PERSONAGE_ATT_STATS,    // 个人考勤报表下载
+    PWD_CHANGE,             // 密码修改
+    RECORD_QUERY,           // 记录查询菜单
+    RECORD_RESULT,          // 记录查询结果
+    REGISTER,               // 注册流程屏幕
+    REGISTER_CAMERA,        // 注册流程拍照屏幕
+    ROLE_AUTH,              // 权限变更
+    RULE_SETTING,           // 考勤规则设置
+    SCHEDULE_SETTING,       // 排班设置
+    SHIFT_SETTING,          // 班次设置子界面
+    SYS_ADVANCED,           // 系统高级设置
+    SYS_INFO,               // 系统信息
+    SYS_SELF_CHECK,         // 自检功能屏幕
+    SYS_SETTINGS,           // 系统设置
+    STORAGE_INFO,           // 存储信息
+    USER_EDIT_DEPT,         // 修改部门
+    USER_EDIT_NAME,         // 修改姓名
+    USER_EDIT_PASSWORD,     // 修改密码
+    USER_INFO,              // 员工详情
+    USER_LIST,              // 员工列表子屏幕
+    USER_MGMT,              // 员工管理主菜单
+    USER_REGISTER_PASSWORD, // 注册密码
     // ... 其他屏幕类型
     // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑
     // ... 其他屏幕

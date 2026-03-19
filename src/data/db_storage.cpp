@@ -178,6 +178,14 @@ bool data_init() {
         "days_mask INTEGER, "         // 位掩码
         "enabled INTEGER "            // 0/1
         ");";
+    // ==================== [新增] (I) 公司设置表 ====================
+    const char* sql_company = 
+        "CREATE TABLE IF NOT EXISTS company_settings ("
+        "id INTEGER PRIMARY KEY, "          // 固定为 1，只有一条记录
+        "name TEXT DEFAULT '',"            // 公司名称
+        "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"  // 最后更新时间
+        ");";
+    // ===========================================================
 
     // 创建联合索引：加速 "查某人最近打卡" 和 "查某段时间记录"
     // 索引命名为 idx_att_user_time
@@ -192,7 +200,8 @@ bool data_init() {
                exec_sql(sql_dept_sch, "Create Dept Schedule") && 
                exec_sql(sql_user_sch, "Create User Schedule") && 
                exec_sql(sql_att, "Create Attendance")&&
-               exec_sql(sql_index, "Create Index");
+               exec_sql(sql_index, "Create Index") &&
+               exec_sql(sql_company, "Create Company");
 
     if(ret) std::cout << "[Data] DAO Layer Initialized (Phase 2)." << std::endl;
     
@@ -203,6 +212,7 @@ bool data_init() {
     }
     
     return ret;
+    
 }
 
 // [新增辅助函数] 检查表中是否有数据
@@ -369,6 +379,31 @@ bool db_delete_department(int dept_id) {
     sqlite3_bind_int(stmt, 1, dept_id);
     bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
+    return ok;
+}
+
+// 更新部门名称 [新增]
+bool db_update_department(int dept_id, const std::string& new_name) {
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);
+    
+    const char* sql = "UPDATE departments SET name=? WHERE id=?;";
+    sqlite3_stmt* stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Update Dept Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+    
+    sqlite3_bind_text(stmt, 1, new_name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, dept_id);
+    
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    
+    if (ok) {
+        std::cout << "[Data] Department " << dept_id << " updated to: " << new_name << std::endl;
+    }
+    
     return ok;
 }
 
@@ -1371,4 +1406,53 @@ bool db_update_bell(const BellSchedule& bell) {
     bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
     return ok;
+}
+
+// =================  公司设置管理接口 [新增] ================= 
+
+/**
+ * @brief 保存公司名称到数据库
+ * @param name 公司名称
+ * @return true 保存成功；false 保存失败
+ */
+
+bool db_save_company_name(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);
+    
+    const char* sql = 
+        "INSERT OR REPLACE INTO company_settings (id, name, updated_at) "
+        "VALUES (1, ?, datetime('now'))";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
+        int rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return (rc == SQLITE_DONE);
+    }
+    return false;
+}
+
+/**
+ * @brief 从数据库加载公司名称
+ * @param name 输出：公司名称
+ * @return true 加载成功；false 加载失败
+ */
+bool db_load_company_name(std::string& name) {
+    std::lock_guard<std::recursive_mutex> lock(g_db_mutex);
+    
+    const char* sql = "SELECT name FROM company_settings WHERE id = 1";
+    sqlite3_stmt* stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* db_name = (const char*)sqlite3_column_text(stmt, 0);
+            name = db_name ? db_name : "";
+            sqlite3_finalize(stmt);
+            return true;
+        }
+        sqlite3_finalize(stmt);
+    }
+    name = "未设置";
+    return true;
 }
