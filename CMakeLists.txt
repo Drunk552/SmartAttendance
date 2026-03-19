@@ -153,3 +153,55 @@ message(STATUS "  OpenCV Dir: ${OpenCV_DIR}")
 message(STATUS "  SQLite3 Lib: ${SQLite3_LIBRARIES}")
 message(STATUS "  LVGL Conf: ${CMAKE_SOURCE_DIR}/lv_conf.h")
 message(STATUS "Compile Commands Export: ${CMAKE_EXPORT_COMPILE_COMMANDS}")
+
+# ==========================================
+# 5. 测试目标配置
+# ==========================================
+message(STATUS "添加稳定性测试支持...")
+
+# 创建测试目录
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/test_reports)
+
+# 添加自定义目标：运行稳定性测试
+add_custom_target(stability_test
+    COMMAND chmod +x ${CMAKE_SOURCE_DIR}/tools/stability_test.sh
+    COMMAND cd ${CMAKE_BINARY_DIR} && ${CMAKE_SOURCE_DIR}/tools/stability_test.sh
+    COMMENT "运行1小时稳定性测试 (内存监控 + 崩溃检测)"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# 添加自定义目标：运行快速稳定性测试
+add_custom_target(quick_stability_test
+    COMMAND chmod +x ${CMAKE_SOURCE_DIR}/tools/quick_stability_test.sh
+    COMMAND cd ${CMAKE_BINARY_DIR} && ${CMAKE_SOURCE_DIR}/tools/quick_stability_test.sh
+    COMMENT "运行10分钟快速稳定性测试"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# 添加自定义目标：分析测试结果
+add_custom_target(analyze_stability
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/analyze_stability.py ${CMAKE_BINARY_DIR}/memory_usage.csv ${CMAKE_BINARY_DIR}/test_reports
+    COMMENT "分析稳定性测试结果并生成报告"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    DEPENDS attendance_app
+)
+
+# 添加自定义目标：运行完整测试套件
+add_custom_target(test_all
+    COMMAND echo "开始完整测试套件..."
+    COMMAND make quick_stability_test || true
+    COMMAND echo "快速测试完成，开始完整稳定性测试..."
+    COMMAND make stability_test || true
+    COMMAND echo "稳定性测试完成，开始分析结果..."
+    COMMAND make analyze_stability || true
+    COMMAND echo "测试套件执行完成！"
+    COMMENT "执行完整测试套件 (快速测试 + 完整测试 + 分析)"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    DEPENDS attendance_app
+)
+
+message(STATUS "测试目标已添加:")
+message(STATUS "  make stability_test      - 运行1小时稳定性测试")
+message(STATUS "  make quick_stability_test - 运行10分钟快速测试")
+message(STATUS "  make analyze_stability   - 分析测试结果")
+message(STATUS "  make test_all            - 运行完整测试套件")

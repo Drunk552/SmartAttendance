@@ -31,7 +31,6 @@ enum class ScreenType {
     SYS_BASIC_RETURN_TIME,//系统基础-返回主界面时间设置
     SYS_BASIC_ADMIN_COUNT,//系统基础-管理员总数
     SYS_BASIC_WARN_COUNT,//系统基础-警告数
-
     SYS_ADVANCED,// 系统高级设置
     SYS_PARAM,//系统参数设置
     SYS_SELFCHECK,//系统自检功能设置
@@ -62,6 +61,10 @@ enum class ScreenType {
     DOWNLOAD_JOB_QUERY,//下载工号查询界面
     BROWSE_TIME_QUERY_RESULT,//浏览时间查询结果
     DOWNLOAD_TIME_QUERY,//下载时间查询界面
+    BELL_SETTING,           // 定时响铃子界面
+    COMPANY_SETTING,        // 公司设置子界面
+    DEPT_DETAIL,            // 部门详情子界面
+    RECORD_RESULT,          // 记录查询结果
     // ... 其他屏幕类型
     // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑
     // ... 其他屏幕

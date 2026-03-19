@@ -25,6 +25,15 @@ struct DeptInfo {
 
     /// @brief 部门名称 (e.g. "研发部")
     std::string name;
+
+    /// @brief 所属公司ID
+    int company_id;
+
+    /// @brief 公司名称（查询时关联获取）
+    std::string company_name;
+
+    /// @brief 默认构造函数
+    DeptInfo() : id(0), company_id(0) {}
 };
 
 /**
@@ -210,6 +219,23 @@ struct SystemStats {
     int total_cards;        // 卡号注册数
 };
 
+/**
+ * @brief 公司信息结构体
+ */
+struct CompanyInfo {
+    int id;                     // 公司ID
+    std::string name;           // 公司名称
+    std::string code;           // 公司代码/简称
+    std::string address;        // 公司地址
+    std::string contact_phone;  // 联系电话
+    std::string contact_email;  // 联系邮箱
+    std::string created_at;     // 创建时间
+    std::string updated_at;     // 更新时间
+    
+    CompanyInfo() : id(0) {}
+};
+
+
 // ================= 核心接口声明 =================
 
 /**
@@ -238,20 +264,42 @@ bool data_seed();
  */
 void data_close();
 
+
 // ================= 1. 部门管理接口 (Department DAO) =================
 
 /**
- * @brief 添加新部门
- * @param dept_name 部门名称 (需唯一)
+ * @brief 添加新部门（默认公司ID=1）
+ * @param dept_name 部门名称
  * @return true 添加成功
  */
 bool db_add_department(const std::string& dept_name);
 
 /**
- * @brief 获取所有部门列表
+ * @brief 添加新部门并指定公司
+ * @param dept_name 部门名称
+ * @param company_id 公司ID
+ * @return true 添加成功
+ */
+bool db_add_department_with_company(const std::string& dept_name, int company_id);
+
+/**
+ * @brief 获取所有部门列表（默认公司ID=1）
  * @return std::vector<DeptInfo> 部门列表数组
  */
 std::vector<DeptInfo> db_get_departments();
+
+/**
+ * @brief 获取指定公司的部门列表
+ * @param company_id 公司ID
+ * @return std::vector<DeptInfo> 部门列表数组
+ */
+std::vector<DeptInfo> db_get_departments_by_company(int company_id);
+
+/**
+ * @brief 获取所有部门及其公司信息
+ * @return std::vector<DeptInfo> 包含公司信息的部门列表
+ */
+std::vector<DeptInfo> db_get_all_departments_with_company();
 
 /**
  * @brief 删除指定部门
@@ -260,6 +308,24 @@ std::vector<DeptInfo> db_get_departments();
  * @return true 删除成功
  */
 bool db_delete_department(int dept_id);
+
+/**
+ * @brief 更新部门名称
+ * @param dept_id 要修改的部门ID（必须存在）
+ * @param new_name 新的部门名称（必须唯一，不能与其他部门重名）
+ * @return true 更新成功
+ *         false 失败（ID不存在 / 名称重复 / 数据库错误）
+ */
+bool db_update_department(int dept_id, const std::string& new_name);
+
+/**
+ * @brief 更新部门所属公司
+ * @param dept_id 部门ID
+ * @param company_id 新的公司ID
+ * @return true 更新成功
+ */
+bool db_update_department_company(int dept_id, int company_id);
+
 
 // ================= 2. 班次管理接口 (Shift DAO) =================
 
@@ -337,6 +403,9 @@ std::vector<BellSchedule> db_get_all_bells();
  * @return true 更新成功
  */
 bool db_update_bell(const BellSchedule& bell);
+bool db_save_company_name(const std::string& name);
+bool db_load_company_name(std::string& name);
+
 
 // ================= 3. 用户管理接口 (User DAO) =================
 
@@ -444,6 +513,7 @@ bool db_update_user_fingerprint(int user_id, const std::vector<uint8_t>& fingerp
  */
 std::vector<UserData> db_get_all_users_light();
 
+
 // ================= 4. 考勤记录接口 (Attendance DAO) =================
 
 /**
@@ -498,6 +568,7 @@ bool db_begin_transaction();
  */
 bool db_commit_transaction();
 
+
 // ================= 6. 排班管理接口 (Schedule DAO) =================
 
 /**
@@ -527,6 +598,65 @@ bool db_set_user_special_schedule(int user_id, const std::string& date_str, int 
  * @return ShiftInfo 班次信息 (若当天休息或未排班，返回ID=0的空对象)
  */
 std::optional<ShiftInfo> db_get_user_shift_smart(int user_id, long long timestamp);
+
+
+// ================= 7. 公司管理接口 (Company DAO) =================
+
+/**
+ * @brief 添加新公司
+ * @param company 公司信息
+ * @return 新公司ID，失败返回-1
+ */
+int db_add_company(const CompanyInfo& company);
+
+/**
+ * @brief 获取所有公司列表
+ * @return 公司列表
+ */
+std::vector<CompanyInfo> db_get_all_companies();
+
+/**
+ * @brief 获取公司信息
+ * @param company_id 公司ID
+ * @return 公司信息，如果不存在返回nullopt
+ */
+std::optional<CompanyInfo> db_get_company_info(int company_id);
+
+/**
+ * @brief 更新公司信息
+ * @param company 公司信息（必须包含有效的id）
+ * @return true 更新成功
+ */
+bool db_update_company(const CompanyInfo& company);
+
+/**
+ * @brief 删除公司
+ * @param company_id 公司ID
+ * @return true 删除成功
+ * @note 会级联删除关联的部门和员工
+ */
+bool db_delete_company(int company_id);
+
+/**
+ * @brief 获取默认公司ID（通常是第一个公司）
+ * @return 默认公司ID，如果没有公司返回1
+ */
+int db_get_default_company_id();
+
+/**
+ * @brief 保存公司名称（兼容旧接口）
+ * @param name 公司名称
+ * @return true 保存成功
+ */
+bool db_save_company_name(const std::string& name);
+
+/**
+ * @brief 加载公司名称（兼容旧接口）
+ * @param name 输出：公司名称
+ * @return true 加载成功
+ */
+bool db_load_company_name(std::string& name);
+
 
 // ================= 更新/删除数据 =================
 
@@ -559,6 +689,7 @@ bool db_factory_reset();
  */
 SystemStats db_get_system_stats();
 
+
 // ================= 系统全局配置接口 =================
 
 /**
@@ -576,6 +707,7 @@ std::string db_get_system_config(const std::string& key, const std::string& defa
  * @return 是否设置成功
  */
 bool db_set_system_config(const std::string& key, const std::string& value);
+
 
 // ================= 全局节假日管理接口 =================
 
@@ -600,6 +732,7 @@ bool db_delete_holiday(const std::string& date_str);
  * @return 如果是，返回节日名称(如"中秋节")；如果不是，返回 std::nullopt
  */
 std::optional<std::string> db_get_holiday(const std::string& date_str);
+
 
 // ================= 考勤设置与排班管理接口 =================
 
@@ -662,6 +795,7 @@ DeptScheduleView db_get_dept_schedule_view(int dept_id);
  */
 std::vector<ShiftInfo> db_get_all_shifts_limited();
 
+
 // ================= 报表辅助批量查询接口 =================
 
 /**
@@ -679,5 +813,6 @@ std::vector<AttendanceRecord> db_get_all_records_by_time(long long start_ts, lon
  * @return 属于该部门的用户列表
  */
 std::vector<UserData> db_get_users_by_dept(int dept_id);
+
 
 #endif // DB_STORAGE_H

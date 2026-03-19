@@ -90,6 +90,16 @@ public:
     //查询系统信息
     SystemStats getSystemStatistics();
 
+     // --- 6. 公司设置类  ---
+    bool saveCompanyName(const std::string& name);     // 保存公司名称
+    bool loadCompanyName(std::string& name);           // 加载公司名称
+
+    // --- 7. 部门管理类  ---
+    bool addDepartment(const std::string& deptName);
+    bool updateDepartment(int deptId, const std::string& newName);
+    bool deleteDepartment(int deptId);
+    int getDepartmentEmployeeCount(int deptId);
+    
 private:
     UiController() = default; // 私有构造
     ~UiController() = default;
@@ -105,6 +115,8 @@ private:
     // 线程安全相关的成员
     std::mutex m_frame_mutex;            // 保护图像数据的锁
     std::vector<uint8_t> m_cached_frame; // 缓存最新的一帧图像
+    std::string m_company_name;          // 公司名称缓存
+    std::mutex m_company_mutex;          // 保护公司数据的锁
 };
 
 #endif // UI_CONTROLLER_H

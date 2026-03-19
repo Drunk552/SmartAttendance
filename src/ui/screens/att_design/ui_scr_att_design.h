@@ -17,6 +17,12 @@ void load_att_design_menu_screen();
 void load_dept_screen();
 
 /**
+ * @brief 加载部门详情子界面 [新增]
+ * @param dept_id 部门 ID
+ */
+void load_dept_detail_screen(int dept_id);
+
+/**
  * @brief 加载班次设置子界面
  */
 void load_shift_screen();
@@ -27,10 +33,19 @@ void load_shift_screen();
 void load_rule_screen();
 
 /**
- * @brief 加载人员排班子界面
+ * @brief 加载排班设置子界面
  */
 void load_schedule_screen();
 
+/**
+ * @brief 加载公司设置子界面
+ */
+void load_company_screen();
+
+/**
+ * @brief 加载定时响铃子界面 [新增]
+ */
+void load_bell_screen();
 } // namespace att_design
 } // namespace ui
 

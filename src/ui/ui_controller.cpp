@@ -22,6 +22,7 @@
 #include <sstream>
 #include <fstream>
 #include <regex>
+#include <iostream> 
 
 namespace fs = std::filesystem;// C++17 引入的文件系统库
 
@@ -66,6 +67,56 @@ std::string UiController::getCurrentWeekdayStr() {
     return std::string(buf);
 }
 
+// ==================== 公司设置功能实现  ====================
+
+/**
+ * @brief 保存公司名称到数据库
+ * @param name 公司名称
+ * @return true 保存成功；false 保存失败
+ */
+bool UiController::saveCompanyName(const std::string& name) {
+    std::lock_guard<std::mutex> lock(m_company_mutex);  // 线程安全
+    
+    bool success = db_save_company_name(name);
+    
+    if (success) {
+        // 更新缓存
+        m_company_name = name;
+        std::cout << "[UiController] 公司名称保存成功：" << name << std::endl;
+        return true;
+    }
+    
+    std::cerr << "[UiController] 公司名称保存失败！" << std::endl;
+    return false;
+}
+
+/**
+ * @brief 从数据库加载公司名称
+ * @param name 输出：公司名称
+ * @return true 加载成功；false 加载失败
+ */
+bool UiController::loadCompanyName(std::string& name) {
+    std::lock_guard<std::mutex> lock(m_company_mutex);  // 线程安全
+    
+    // 1. 先尝试从缓存读取 (减少数据库查询)
+    if (!m_company_name.empty()) {
+        name = m_company_name;
+        std::cout << "[UiController] 从缓存加载公司名称：" << name << std::endl;
+        return true;
+    }
+    
+    // 2. 调用 DAO 接口从数据库读取
+    bool success = db_load_company_name(name);
+    
+    if (success) {
+        // 更新缓存
+        m_company_name = name;
+        std::cout << "[UiController] 从数据库加载公司名称成功：" << name << std::endl;
+    }
+    
+    return success;
+}
+
 // 移入原 get_next_available_id 逻辑
 int UiController::generateNextUserId() {
     std::vector<UserData> users = db_get_all_users();
@@ -105,6 +156,67 @@ std::string UiController::getDeptNameById(int deptId) {
     return "未知部门"; // 没找到时的默认返回值
 }
 
+// ==================== 部门管理功能实现  ====================
+
+bool UiController::addDepartment(const std::string& deptName) {
+    if (deptName.empty()) {
+        std::cerr << "[UiController] 部门名称不能为空！" << std::endl;
+        return false;
+    }
+    
+    bool success = db_add_department(deptName);
+    
+    if (success) {
+        std::cout << "[UiController] 部门添加成功：" << deptName << std::endl;
+    }
+    
+    return success;
+}
+
+bool UiController::updateDepartment(int deptId, const std::string& newName) {
+    if (newName.empty()) {
+        std::cerr << "[UiController] 部门名称不能为空！" << std::endl;
+        return false;
+    }
+    
+    bool success = db_update_department(deptId, newName);
+    
+    if (success) {
+        std::cout << "[UiController] 部门更新成功：ID=" << deptId << ", Name=" << newName << std::endl;
+    }
+    
+    return success;
+}
+
+bool UiController::deleteDepartment(int deptId) {
+    // 1. 检查部门是否有员工
+    int empCount = getDepartmentEmployeeCount(deptId);
+    if (empCount > 0) {
+        std::cerr << "[UiController] 部门下有 " << empCount << " 名员工，无法删除！" << std::endl;
+        return false;
+    }
+    
+    bool success = db_delete_department(deptId);
+    
+    if (success) {
+        std::cout << "[UiController] 部门删除成功：ID=" << deptId << std::endl;
+    }
+    
+    return success;
+}
+
+int UiController::getDepartmentEmployeeCount(int deptId) {
+    std::vector<UserData> users = db_get_all_users();
+    int count = 0;
+    
+    for (const auto& user : users) {
+        if (user.dept_id == deptId) {
+            count++;
+        }
+    }
+    
+    return count;
+}
 bool UiController::registerNewUser(const std::string& name, int deptId) {
     // 调用业务层接口
     return business_register_user(name.c_str(), deptId);

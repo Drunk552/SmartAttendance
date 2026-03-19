@@ -64,6 +64,7 @@ public:
     ScopedSqliteStmt& operator=(const ScopedSqliteStmt&) = delete;
 };
 
+
 // ================= 辅助函数 (Helpers)将 Mat 序列化为 vector<uchar> (用于存 BLOB) =================
 
 /**
@@ -128,6 +129,7 @@ static bool exec_sql(const char* sql, const char* tag) {
     return true;
 }
 
+
 // ================= 核心生命周期 (Lifecycle) =================
 
 bool data_init() {
@@ -161,14 +163,31 @@ bool data_init() {
 
     // 创建/更新表结构
     
-    // (A) 部门表
-    const char* sql_dept = 
+    // (A) 公司表 - 支持多公司架构
+    const char* sql_companies =
+        "CREATE TABLE IF NOT EXISTS companies ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "name TEXT NOT NULL UNIQUE, "          // 公司名称
+        "code TEXT, "                          // 公司代码/简称
+        "address TEXT, "                       // 公司地址
+        "contact_phone TEXT, "                 // 联系电话
+        "contact_email TEXT, "                 // 联系邮箱
+        "created_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+        ");";
+
+    // (B) 部门表 - 添加 company_id 外键
+    const char* sql_dept =
         "CREATE TABLE IF NOT EXISTS departments ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "name TEXT NOT NULL UNIQUE);";
+        "name TEXT NOT NULL, "
+        "company_id INTEGER NOT NULL, "        // 所属公司ID
+        "FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE, "
+        "UNIQUE(company_id, name)"             // 同一公司内部门名称唯一
+        ");";
 
-    // (B) 班次表
-    const char* sql_shifts = 
+    // (C) 班次表
+    const char* sql_shifts =
         "CREATE TABLE IF NOT EXISTS shifts ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "name TEXT, "
@@ -204,14 +223,14 @@ bool data_init() {
     exec_sql("ALTER TABLE attendance_rules ADD COLUMN sun_work INTEGER DEFAULT 0;", nullptr);
     
     // (D) 用户表 (包含权限、密码、关联部门、人脸BLOB)
-    const char* sql_users = 
+    const char* sql_users =
         "CREATE TABLE IF NOT EXISTS users ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "name TEXT NOT NULL, "
         "password TEXT, "
         "card_id TEXT, "
         "privilege INTEGER DEFAULT 0, " // 0:User, 1:Admin
-        "face_data BLOB, "              // 人脸二进制数据
+        "face_feature BLOB, "           // 人脸二进制数据，对应UserData.face_feature
         "avatar_path TEXT, "            // 用来存用户人脸照的本地文件路径
         "fingerprint_data BLOB, "
         "dept_id INTEGER, "
@@ -277,20 +296,26 @@ bool data_init() {
 
     // 创建联合索引：加速 "查某人最近打卡" 和 "查某段时间记录"
     // 索引命名为 idx_att_user_time
-    const char* sql_index = 
+    const char* sql_index =
         "CREATE INDEX IF NOT EXISTS idx_att_user_time ON attendance(user_id, timestamp DESC);";
 
-    bool ret = exec_sql(sql_dept, "Create Dept") && 
+    // 创建部门-公司联合索引：加速按公司查询部门
+    const char* sql_dept_company_idx =
+        "CREATE INDEX IF NOT EXISTS idx_dept_company ON departments(company_id);";
+
+    bool ret = exec_sql(sql_companies, "Create Companies") &&
+               exec_sql(sql_dept, "Create Dept") &&
                exec_sql(sql_shifts, "Create Shifts V2") &&
                exec_sql(sql_bells, "Create Bells") &&
-               exec_sql(sql_system_config, "Create System Config") && 
+               exec_sql(sql_system_config, "Create System Config") &&
                exec_sql(sql_holidays, "Create Holidays") &&
-               exec_sql(sql_rules, "Create Rules") && 
+               exec_sql(sql_rules, "Create Rules") &&
                exec_sql(sql_users, "Create Users") &&
-               exec_sql(sql_dept_sch, "Create Dept Schedule") && 
-               exec_sql(sql_user_sch, "Create User Schedule") && 
+               exec_sql(sql_dept_sch, "Create Dept Schedule") &&
+               exec_sql(sql_user_sch, "Create User Schedule") &&
                exec_sql(sql_att, "Create Attendance")&&
-               exec_sql(sql_index, "Create Index");
+               exec_sql(sql_index, "Create Index") &&
+               exec_sql(sql_dept_company_idx, "Create Dept Company Index");
     
     if (ret) {
         std::cout << "[Data] DAO Layer Initialized." << std::endl;
@@ -307,6 +332,7 @@ bool data_init() {
     }
     
     return ret;
+    
 }
 
 // [辅助函数] 检查表中是否有数据
@@ -338,21 +364,34 @@ std::string db_hash_password(const std::string& raw_pwd) {
     return ss.str();
 }
 
+
 // =================  数据播种 =================
 
 bool data_seed() {
 
     std::cout << ">>> [Data] Checking for data seeding..." << std::endl;
 
-    // 1. 播种默认部门 (如果为空)
-    if (is_table_empty("departments")) {
-        // 对应手册中的 "Not Set" [cite: 1242]
-        if (db_add_department("Not Set")) {
-            std::cout << "   [Seed] Created default department: 'Not Set'" << std::endl;
+    // 0. 播种默认公司 (如果为空)
+    int default_company_id = 1;
+    if (is_table_empty("companies")) {
+        const char* sql = "INSERT INTO companies (id, name, code, address) VALUES (1, '777', 'SmartAtt', '中国');";
+        if (exec_sql(sql, "Seed Company")) {
+            std::cout << "   [Seed] Created default company: '777'" << std::endl;
         }
-        // 可选：添加常用部门
-        db_add_department("R&D");
-        db_add_department("HR");
+    }
+
+    // 1. 播种默认部门 (如果为空) 
+    if (is_table_empty("departments")) {
+        // 临时方案：先插入部门，稍后更新company_id
+        const char* sql_dept1 = "INSERT INTO departments (name, company_id) VALUES ('Not Set', 1);";
+        const char* sql_dept2 = "INSERT INTO departments (name, company_id) VALUES ('R&D', 1);";
+        const char* sql_dept3 = "INSERT INTO departments (name, company_id) VALUES ('HR', 1);";
+        
+        exec_sql(sql_dept1, "Seed Dept Not Set");
+        exec_sql(sql_dept2, "Seed Dept R&D");
+        exec_sql(sql_dept3, "Seed Dept HR");
+        
+        std::cout << "   [Seed] Created default departments for company ID: 1" << std::endl;
     }
 
     // 2. 播种默认班次 
@@ -429,19 +468,26 @@ void data_close() {
     }
 }
 
+
 // ================= 1. 部门管理 DAO =================
 
 bool db_add_department(const std::string& dept_name) {
+    // 默认使用公司ID=1
+    return db_add_department_with_company(dept_name, 1);
+}
+
+bool db_add_department_with_company(const std::string& dept_name, int company_id) {
     
     std::unique_lock<std::shared_mutex> lock(g_db_mutex);//排他锁（写锁）
 
     ScopedSqliteStmt stmt;
 
-    const char* sql = "INSERT INTO departments (name) VALUES (?);";
+    const char* sql = "INSERT INTO departments (name, company_id) VALUES (?, ?);";
     
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) return false;
     
     sqlite3_bind_text(stmt.get(), 1, dept_name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt.get(), 2, company_id);
     
     bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
 
@@ -449,13 +495,44 @@ bool db_add_department(const std::string& dept_name) {
 }
 
 std::vector<DeptInfo> db_get_departments() {
+    // 获取所有部门（默认公司ID=1）
+    return db_get_departments_by_company(1);
+}
+
+std::vector<DeptInfo> db_get_departments_by_company(int company_id) {
     
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
 
     std::vector<DeptInfo> list;
     ScopedSqliteStmt stmt;
 
-    const char* sql = "SELECT id, name FROM departments;";
+    const char* sql = "SELECT id, name, company_id FROM departments WHERE company_id = ? ORDER BY name;";
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt.get(), 1, company_id);
+        while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+            DeptInfo d;
+            d.id = sqlite3_column_int(stmt.get(), 0);
+            const char* txt = (const char*)sqlite3_column_text(stmt.get(), 1);
+            d.name = txt ? txt : "";
+            d.company_id = sqlite3_column_int(stmt.get(), 2);
+            list.push_back(d);
+        }
+    }
+
+    return list;
+}
+
+std::vector<DeptInfo> db_get_all_departments_with_company() {
+    
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
+
+    std::vector<DeptInfo> list;
+    ScopedSqliteStmt stmt;
+
+    const char* sql = "SELECT d.id, d.name, d.company_id, c.name FROM departments d "
+                      "LEFT JOIN companies c ON d.company_id = c.id "
+                      "ORDER BY c.name, d.name;";
     
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) == SQLITE_OK) {
         while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
@@ -463,6 +540,9 @@ std::vector<DeptInfo> db_get_departments() {
             d.id = sqlite3_column_int(stmt.get(), 0);
             const char* txt = (const char*)sqlite3_column_text(stmt.get(), 1);
             d.name = txt ? txt : "";
+            d.company_id = sqlite3_column_int(stmt.get(), 2);
+            const char* company_name = (const char*)sqlite3_column_text(stmt.get(), 3);
+            d.company_name = company_name ? company_name : "";
             list.push_back(d);
         }
     }
@@ -484,6 +564,33 @@ bool db_delete_department(int dept_id) {
 
     return ok;
 }
+
+// 更新部门名称 
+bool db_update_department(int dept_id, const std::string& new_name) {
+
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);//排他锁（写锁）
+    
+    const char* sql = "UPDATE departments SET name=? WHERE id=?;";
+    sqlite3_stmt* stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Update Dept Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+    
+    sqlite3_bind_text(stmt, 1, new_name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, dept_id);
+    
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    
+    if (ok) {
+        std::cout << "[Data] Department " << dept_id << " updated to: " << new_name << std::endl;
+    }
+    
+    return ok;
+}
+
 
 // ================= 2. 班次管理 DAO =================
 
@@ -768,6 +875,7 @@ bool db_update_global_rules(const RuleConfig& config) {
     return ok;
 }
 
+
 // ================= 3. 用户管理 DAO  =================
 
 int db_add_user(const UserData& user, const cv::Mat& face_image) {
@@ -842,11 +950,11 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
         return false;
     }
 
-    // 3. 准备 SQL 语句 
+    // 3. 准备 SQL 语句
     // 使用 INSERT OR REPLACE：如果 id 已存在，则覆盖更新；如果不存在，则新增。
     // 这里包含你 sql_users 表中除了自增ID外的所有关键业务字段
     const char* sql = "INSERT OR REPLACE INTO users "
-                      "(id, name, password, card_id, privilege, face_data, avatar_path, fingerprint_data, dept_id, default_shift_id) "
+                      "(id, name, password, card_id, privilege, face_feature, avatar_path, fingerprint_data, dept_id, default_shift_id) "
                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
     
     ScopedSqliteStmt stmt;
@@ -877,7 +985,7 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
         // 绑定 5: privilege (对应 UserData 里的 role)
         sqlite3_bind_int(stmt.get(), 5, user.role);
 
-        // 绑定 6: face_data (对应 UserData 里的 face_feature 二进制流)
+        // 绑定 6: face_feature (对应 UserData 里的 face_feature 二进制流)
         if (user.face_feature.empty()) {
             sqlite3_bind_null(stmt.get(), 6);
         } else {
@@ -931,9 +1039,9 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
 std::optional<UserData> db_get_user_info(int user_id) {
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
 
-    const char* sql = 
+    const char* sql =
         "SELECT u.id, u.name, u.password, u.card_id, u.privilege, u.dept_id, "
-        "u.face_data, u.fingerprint_data, d.name, u.avatar_path "
+        "u.face_feature, u.fingerprint_data, d.name, u.avatar_path "
         "FROM users u "
         "LEFT JOIN departments d ON u.dept_id = d.id "
         "WHERE u.id=?;";
@@ -1021,7 +1129,7 @@ std::vector<UserData> db_get_all_users() {
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
 
     std::vector<UserData> users;
-    const char* sql = "SELECT u.id, u.name, u.dept_id, u.privilege, u.password, u.card_id, u.face_data, d.name, u.avatar_path "
+    const char* sql = "SELECT u.id, u.name, u.dept_id, u.privilege, u.password, u.card_id, u.face_feature, d.name, u.avatar_path "
                   "FROM users u "
                   "LEFT JOIN departments d ON u.dept_id = d.id";
                       
@@ -1291,7 +1399,7 @@ std::vector<UserData> db_get_all_users_light() {
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
     std::vector<UserData> users;
     
-    // SQL 仅查询 id 和 name，绝对不查 face_data (BLOB)
+    // SQL 仅查询 id 和 name，绝对不查 face_feature (BLOB)
     const char* sql = "SELECT id, name FROM users;"; 
     
     ScopedSqliteStmt stmt;
@@ -1315,6 +1423,7 @@ std::vector<UserData> db_get_all_users_light() {
     std::cout << "[Data] Light-loaded " << users.size() << " users (ID/Name only)." << std::endl;
     return users;
 }
+
 
 // ================= 4. 考勤记录 DAO =================
 
@@ -1460,7 +1569,6 @@ int db_cleanup_old_attendance_images(int days_old) {
     return deleted_count;
 }
 
-
 std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_ts) {
     
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
@@ -1560,6 +1668,7 @@ std::vector<AttendanceRecord> db_get_records_by_user(int user_id, long long star
     return records;
 }
 
+
 // ================= 5.数据库事务接口 =================
 
 bool db_begin_transaction() {
@@ -1575,6 +1684,7 @@ bool db_commit_transaction() {
 
     return exec_sql("COMMIT;", "Tx Commit");
 }
+
 
 // ================= 6. 排班管理接口实现 =================
 
@@ -1787,6 +1897,220 @@ std::optional<ShiftInfo> db_get_user_shift_smart(int user_id, long long timestam
     return std::nullopt;
 }
 
+
+// ================= 7. 公司管理接口 (Company DAO) =================
+
+/**
+ * @brief 获取默认公司ID（通常是第一个公司）
+ * @return 默认公司ID，如果没有公司返回1
+ */
+int db_get_default_company_id() {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql = "SELECT id FROM companies ORDER BY id LIMIT 1";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+            return sqlite3_column_int(stmt.get(), 0);
+        }
+    }
+    return 1; // 默认返回1
+}
+
+/**
+ * @brief 保存公司名称到数据库
+ * @param name 公司名称
+ * @return true 保存成功；false 保存失败
+ */
+bool db_save_company_name(const std::string& name) {
+    // 更新默认公司（ID=1）的名称
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql =
+        "INSERT OR REPLACE INTO companies (id, name, updated_at) "
+        "VALUES (1, ?, datetime('now'))";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
+        int rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return (rc == SQLITE_DONE);
+    }
+    return false;
+}
+
+//从数据库加载公司名称
+bool db_load_company_name(std::string& name) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql = "SELECT name FROM companies WHERE id = 1";
+    sqlite3_stmt* stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* db_name = (const char*)sqlite3_column_text(stmt, 0);
+            name = db_name ? db_name : "";
+            sqlite3_finalize(stmt);
+            return true;
+        }
+        sqlite3_finalize(stmt);
+    }
+    name = "未设置";
+    return true;
+}
+
+//添加新公司
+int db_add_company(const CompanyInfo& company) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql =
+        "INSERT INTO companies (name, code, address, contact_phone, contact_email) "
+        "VALUES (?, ?, ?, ?, ?)";
+    
+    ScopedSqliteStmt stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
+        return -1;
+    }
+    
+    sqlite3_bind_text(stmt.get(), 1, company.name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 2, company.code.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 3, company.address.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 4, company.contact_phone.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 5, company.contact_email.c_str(), -1, SQLITE_STATIC);
+    
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        return -1;
+    }
+    
+    return sqlite3_last_insert_rowid(db);
+}
+
+//获取所有公司列表
+std::vector<CompanyInfo> db_get_all_companies() {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+    std::vector<CompanyInfo> companies;
+    
+    const char* sql = "SELECT id, name, code, address, contact_phone, contact_email, created_at, updated_at FROM companies ORDER BY name";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+            CompanyInfo company;
+            company.id = sqlite3_column_int(stmt.get(), 0);
+            
+            auto get_text = [&](int col) -> std::string {
+                const char* txt = (const char*)sqlite3_column_text(stmt.get(), col);
+                return txt ? txt : "";
+            };
+            
+            company.name = get_text(1);
+            company.code = get_text(2);
+            company.address = get_text(3);
+            company.contact_phone = get_text(4);
+            company.contact_email = get_text(5);
+            company.created_at = get_text(6);
+            company.updated_at = get_text(7);
+            
+            companies.push_back(company);
+        }
+    }
+    
+    return companies;
+}
+
+//获取公司信息
+std::optional<CompanyInfo> db_get_company_info(int company_id) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql = "SELECT id, name, code, address, contact_phone, contact_email, created_at, updated_at FROM companies WHERE id = ?";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
+        return std::nullopt;
+    }
+    
+    sqlite3_bind_int(stmt.get(), 1, company_id);
+    
+    if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+        return std::nullopt;
+    }
+    
+    CompanyInfo company;
+    company.id = sqlite3_column_int(stmt.get(), 0);
+    
+    auto get_text = [&](int col) -> std::string {
+        const char* txt = (const char*)sqlite3_column_text(stmt.get(), col);
+        return txt ? txt : "";
+    };
+    
+    company.name = get_text(1);
+    company.code = get_text(2);
+    company.address = get_text(3);
+    company.contact_phone = get_text(4);
+    company.contact_email = get_text(5);
+    company.created_at = get_text(6);
+    company.updated_at = get_text(7);
+    
+    return company;
+}
+
+//更新公司信息
+bool db_update_company(const CompanyInfo& company) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql =
+        "UPDATE companies SET name = ?, code = ?, address = ?, contact_phone = ?, contact_email = ?, updated_at = datetime('now') "
+        "WHERE id = ?";
+    
+    ScopedSqliteStmt stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
+        return false;
+    }
+    
+    sqlite3_bind_text(stmt.get(), 1, company.name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 2, company.code.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 3, company.address.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 4, company.contact_phone.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 5, company.contact_email.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt.get(), 6, company.id);
+    
+    return sqlite3_step(stmt.get()) == SQLITE_DONE;
+}
+
+//删除公司
+bool db_delete_company(int company_id) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql = "DELETE FROM companies WHERE id = ?";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
+        return false;
+    }
+    
+    sqlite3_bind_int(stmt.get(), 1, company_id);
+    return sqlite3_step(stmt.get()) == SQLITE_DONE;
+}
+
+//更新部门所属公司
+bool db_update_department_company(int dept_id, int company_id) {
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+    
+    const char* sql = "UPDATE departments SET company_id = ? WHERE id = ?";
+    ScopedSqliteStmt stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
+        return false;
+    }
+    
+    sqlite3_bind_int(stmt.get(), 1, company_id);
+    sqlite3_bind_int(stmt.get(), 2, dept_id);
+    return sqlite3_step(stmt.get()) == SQLITE_DONE;
+}
+
+
 // ================= 重新/删除数据  =================
 
 /**
@@ -1822,6 +2146,7 @@ long long data_getLastImageID() {
 
     return last_id;// 返回最后保存的ID
 }
+
 
 // =================  系统维护接口 =================
 
@@ -1907,6 +2232,7 @@ bool db_factory_reset() {
     return data_init();
 }
 
+
 // =================  铃声管理接口 =================
 
 std::vector<BellSchedule> db_get_all_bells() {
@@ -1954,6 +2280,7 @@ bool db_update_bell(const BellSchedule& bell) {
     return ok;
 }
 
+
 // =================  查询系统信息接口 =================
 
 //查询系统信息（员工注册数，管理员注册数，人脸注册数，指纹注册数，卡号注册数）
@@ -1966,7 +2293,7 @@ SystemStats db_get_system_stats() {
         "SELECT "
         "  COUNT(*), "                                                         // 0: 总人数
         "  SUM(CASE WHEN privilege = 1 THEN 1 ELSE 0 END), "                   // 1: 管理员数
-        "  SUM(CASE WHEN face_data IS NOT NULL THEN 1 ELSE 0 END), "           // 2: 录入人脸数
+        "  SUM(CASE WHEN face_feature IS NOT NULL THEN 1 ELSE 0 END), "        // 2: 录入人脸数
         "  SUM(CASE WHEN fingerprint_data IS NOT NULL THEN 1 ELSE 0 END), "    // 3: 录入指纹数
         "  SUM(CASE WHEN card_id IS NOT NULL AND card_id != '' THEN 1 ELSE 0 END) " // 4: 录入卡号数
         "FROM users;";
@@ -2261,6 +2588,7 @@ std::vector<ShiftInfo> db_get_all_shifts_limited() {
     return shifts;
 }
 
+
 // ================= 报表辅助批量查询接口 =================
 
 //根据时间段批量获取全公司的打卡记录 (用于生成月度总表)
@@ -2351,3 +2679,4 @@ std::vector<UserData> db_get_users_by_dept(int dept_id) {
 
     return users;
 }
+
