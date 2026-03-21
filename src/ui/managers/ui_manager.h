@@ -31,17 +31,12 @@ enum class ScreenType {
     SYS_BASIC_RETURN_TIME,//系统基础-返回主界面时间设置
     SYS_BASIC_ADMIN_COUNT,//系统基础-管理员总数
     SYS_BASIC_WARN_COUNT,//系统基础-警告数
-
- 
     SYS_ADVANCED,// 系统高级设置
     SYS_ADV_CLEAR_RECORDS,    // 清空记录界面
     SYS_ADV_CLEAR_EMPLOYEES,  // 清空员工界面
     SYS_ADV_CLEAR_ALL_DATA,   // 清空所有数据界面
     SYS_ADV_FACTORY_RESET,    // 恢复出厂设置界面
     SYS_ADV_UPGRADE,           // 系统升级界面
-
-
-
     SYS_PARAM,//系统参数设置
     SYS_SELFCHECK,//系统自检功能设置
     SYS_INFO,// 系统信息
@@ -53,6 +48,7 @@ enum class ScreenType {
     ATT_DESIGN,// 考勤设计
     DEPT_SETTING, //部门设置子界面
     SHIFT_SETTING,//班次设置子界面
+    SHIFT_INFO,//班次详细信息界面
     RULE_SETTING,//考勤规则设置
     SCHEDULE_SETTING,//排班设置
     USER_INFO, // 员工详情

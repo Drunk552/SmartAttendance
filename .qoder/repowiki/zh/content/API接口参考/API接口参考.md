@@ -6,6 +6,7 @@
 - [src/ui/ui_app.h](file://src/ui/ui_app.h)
 - [src/ui/ui_controller.h](file://src/ui/ui_controller.h)
 - [src/ui/ui_controller.cpp](file://src/ui/ui_controller.cpp)
+- [src/ui/managers/ui_manager.h](file://src/ui/managers/ui_manager.h)
 - [src/business/auth_service.h](file://src/business/auth_service.h)
 - [src/business/auth_service.cpp](file://src/business/auth_service.cpp)
 - [src/business/attendance_rule.h](file://src/business/attendance_rule.h)
@@ -44,6 +45,7 @@ graph TB
 subgraph "UI层"
 UIApp["ui_app.h<br/>UI入口初始化"]
 UIController["ui_controller.h/.cpp<br/>UI控制器API"]
+UiManager["ui_managers.h<br/>屏幕与缓冲管理"]
 end
 subgraph "业务层"
 AuthService["auth_service.h/.cpp<br/>认证服务"]
@@ -56,6 +58,7 @@ subgraph "数据层"
 DBStorage["db_storage.h/.cpp<br/>DAO接口"]
 end
 UIApp --> UIController
+UIController --> UiManager
 UIController --> AuthService
 UIController --> AttendanceRule
 UIController --> FaceDemo
@@ -69,13 +72,14 @@ EventBus --> UIController
 
 **图表来源**
 - [src/ui/ui_app.h:1-18](file://src/ui/ui_app.h#L1-L18)
-- [src/ui/ui_controller.h:1-110](file://src/ui/ui_controller.h#L1-L110)
+- [src/ui/ui_controller.h:1-122](file://src/ui/ui_controller.h#L1-L122)
+- [src/ui/managers/ui_manager.h:1-169](file://src/ui/managers/ui_manager.h#L1-L169)
 - [src/business/auth_service.h:1-46](file://src/business/auth_service.h#L1-L46)
 - [src/business/attendance_rule.h:1-92](file://src/business/attendance_rule.h#L1-L92)
 - [src/business/face_demo.h:1-212](file://src/business/face_demo.h#L1-L212)
 - [src/business/event_bus.h:1-43](file://src/business/event_bus.h#L1-L43)
 - [src/business/report_generator.h:1-192](file://src/business/report_generator.h#L1-L192)
-- [src/data/db_storage.h:1-683](file://src/data/db_storage.h#L1-L683)
+- [src/data/db_storage.h:1-800](file://src/data/db_storage.h#L1-L800)
 
 **章节来源**
 - [src/main.cpp:187-246](file://src/main.cpp#L187-L246)
@@ -89,11 +93,11 @@ EventBus --> UIController
 - 数据层API：提供部门、班次、用户、考勤记录、排班与节假日、系统配置等DAO接口，内置线程安全与事务支持。
 
 **章节来源**
-- [src/ui/ui_controller.h:21-110](file://src/ui/ui_controller.h#L21-L110)
+- [src/ui/ui_controller.h:21-122](file://src/ui/ui_controller.h#L21-L122)
 - [src/business/auth_service.h:23-46](file://src/business/auth_service.h#L23-L46)
 - [src/business/attendance_rule.h:43-92](file://src/business/attendance_rule.h#L43-L92)
 - [src/business/face_demo.h:34-212](file://src/business/face_demo.h#L34-L212)
-- [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
+- [src/data/db_storage.h:213-800](file://src/data/db_storage.h#L213-L800)
 
 ## 架构总览
 系统启动流程与模块交互如下：
@@ -154,6 +158,14 @@ end
 - 线程与后台服务
   - startBackgroundServices(): 启动监控与采集线程。
   - 用户信息更新：updateUserName(int, string)、updateUserDept(int, int)、updateUserFace(int)、updateUserPassword(int, string)、updateUserRole(int, int)、deleteUser(int)。
+- 公司设置
+  - saveCompanyName(const std::string&): 保存公司名称。
+  - loadCompanyName(std::string&): 加载公司名称。
+- 部门管理
+  - addDepartment(const std::string&): 添加部门。
+  - updateDepartment(int, const std::string&): 更新部门。
+  - deleteDepartment(int): 删除部门。
+  - getDepartmentEmployeeCount(int): 获取部门员工数量。
 - 参数与返回
   - 所有接口均提供明确的参数类型与返回值定义；部分接口返回布尔值表示成功/失败，部分返回容器或结构体。
 - 异常处理
@@ -163,7 +175,7 @@ end
   - UI层通过UiController::getInstance()获取单例，调用registerNewUser(name, deptId)完成注册；随后通过getDbtUserCount()与getUserAt()展示用户列表。
 
 **章节来源**
-- [src/ui/ui_controller.h:26-110](file://src/ui/ui_controller.h#L26-L110)
+- [src/ui/ui_controller.h:26-122](file://src/ui/ui_controller.h#L26-L122)
 - [src/ui/ui_controller.cpp:37-141](file://src/ui/ui_controller.cpp#L37-L141)
 - [src/ui/ui_controller.cpp:172-200](file://src/ui/ui_controller.cpp#L172-L200)
 
@@ -305,7 +317,7 @@ FD-->>UI : "true/false"
   - UI层通过db_get_all_users_info()获取轻量用户列表；业务层通过db_add_user()注册用户并保存人脸图像。
 
 **章节来源**
-- [src/data/db_storage.h:215-683](file://src/data/db_storage.h#L215-L683)
+- [src/data/db_storage.h:215-800](file://src/data/db_storage.h#L215-L800)
 - [src/data/db_storage.cpp:133-310](file://src/data/db_storage.cpp#L133-L310)
 - [src/data/db_storage.cpp:434-486](file://src/data/db_storage.cpp#L434-L486)
 - [src/data/db_storage.cpp:773-820](file://src/data/db_storage.cpp#L773-L820)
@@ -321,6 +333,25 @@ FD-->>UI : "true/false"
 - [src/business/event_bus.h:10-43](file://src/business/event_bus.h#L10-L43)
 - [src/business/report_generator.h:31-192](file://src/business/report_generator.h#L31-L192)
 
+### UI管理层API
+- 屏幕管理
+  - registerScreen(ScreenType, lv_obj_t**): 注册屏幕对象到管理器。
+  - destroyAllScreensExcept(lv_obj_t*): 异步销毁除指定屏幕外的所有屏幕。
+  - freeScreenResources(lv_obj_t**): 清理特定屏幕资源。
+- 输入设备管理
+  - getKeypadGroup(): 获取键盘组。
+  - resetKeypadGroup(): 清空并重置组。
+  - addObjToGroup(lv_obj_t*): 添加对象到组。
+- 摄像头缓冲区管理
+  - getCameraDisplayBuffer(): 获取显示缓冲区指针。
+  - getCameraDisplayBufferSize(): 获取显示缓冲区大小。
+  - trySetFramePending(): 标记有一帧待更新。
+  - updateCameraFrame(const uint8_t*, size_t): 更新摄像头帧数据。
+  - clearFramePending(): 清除帧待更新标记。
+
+**章节来源**
+- [src/ui/managers/ui_manager.h:84-169](file://src/ui/managers/ui_manager.h#L84-L169)
+
 ## 依赖关系分析
 
 ```mermaid
@@ -330,6 +361,7 @@ UIController --> FaceDemo["face_demo.h/.cpp"]
 UIController --> AuthService["auth_service.h/.cpp"]
 UIController --> AttendanceRule["attendance_rule.h/.cpp"]
 UIController --> ReportGen["report_generator.h"]
+UIController --> UiManager["ui_managers.h"]
 FaceDemo --> DBStorage
 AuthService --> DBStorage
 AttendanceRule --> DBStorage
@@ -358,8 +390,7 @@ EventBus["event_bus.h"] --> UIController
   - 用户列表与考勤记录缓存减少频繁查询。
 - UI与业务
   - 后台线程与条件变量协调识别与数据库写入，避免阻塞主线程。
-
-[本节为通用指导，无需列出具体文件来源]
+  - UI管理层提供线程安全的缓冲区管理，支持异步屏幕清理。
 
 ## 故障排查指南
 - UI层
@@ -374,17 +405,19 @@ EventBus["event_bus.h"] --> UIController
 - 数据层
   - data_init()失败：检查数据库文件权限与SQLite版本。
   - db_add_user()失败：检查人脸图像编码与存储目录权限。
+- UI管理层
+  - updateCameraFrame()失败：检查缓冲区大小与指针有效性。
+  - destroyAllScreensExcept()导致崩溃：确保传入的屏幕指针有效。
 
 **章节来源**
 - [src/ui/ui_controller.cpp:37-44](file://src/ui/ui_controller.cpp#L37-L44)
 - [src/business/auth_service.cpp:9-37](file://src/business/auth_service.cpp#L9-L37)
 - [src/business/attendance_rule.cpp:148-187](file://src/business/attendance_rule.cpp#L148-L187)
 - [src/data/db_storage.cpp:133-160](file://src/data/db_storage.cpp#L133-L160)
+- [src/ui/managers/ui_manager.h:108-116](file://src/ui/managers/ui_manager.h#L108-L116)
 
 ## 结论
 本API参考文档梳理了智能考勤系统三层架构的接口边界与调用关系，明确了UI控制器、认证服务、考勤规则、人脸识别与数据层的职责划分与协作方式。通过参数、返回值、异常处理与使用示例，开发者可快速集成与扩展系统功能。建议在生产环境中替换指纹比对与人脸识别SDK占位实现，并根据部署环境调整数据库性能参数与存储策略。
-
-[本节为总结性内容，无需列出具体文件来源]
 
 ## 附录
 
@@ -449,6 +482,7 @@ FD-->>UI : "true/false"
   - 预编译语句与索引在data_init()中统一创建，升级时保持兼容。
 - UI层迁移
   - UiController接口保持稳定，新增接口（如exportCustomReport、exportUserReport）不影响既有调用。
+  - 新增公司设置与部门管理接口，向后兼容。
 - 业务层迁移
   - 认证与考勤规则接口保持向后兼容；指纹SDK替换不影响调用签名。
 - 建议

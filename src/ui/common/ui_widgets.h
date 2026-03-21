@@ -67,7 +67,7 @@ lv_obj_t* create_menu_grid_container(lv_obj_t* parent);
 lv_obj_t* create_sys_list_btn(
     lv_obj_t *parent,
     const char* icon, const char* text_en, const char* text_cn,
-    lv_event_cb_t event_cb, const char* user_data
+    lv_event_cb_t event_cb, const void* user_data
 );
 
 /**
@@ -139,14 +139,5 @@ static void popup_close_event_cb(lv_event_t * e);
  */
 void show_popup_msg(const char* title, const char* msg, lv_obj_t* focus_back_obj = nullptr, const char* btn_text = "确认");
 
-/**
- * @brief 显示通用弹窗
- */
-void show_popup(const char* title, const char* msg);
-
-/**
- * @brief 通用 MsgBox 关闭回调
- */
-void mbox_close_event_cb(lv_event_t * e);
 
 #endif // UI_WIDGETS_H

@@ -9,23 +9,125 @@
 namespace ui {
 namespace att_design {
 
-// ==================== 全局变量 ====================
+// ================= [内部状态: 屏幕指针] =================
 static lv_obj_t *scr_design = nullptr;   // 考勤设计主菜单屏幕
 static lv_obj_t *scr_dept = nullptr;     // 部门设置屏幕
-static lv_obj_t *scr_shift = nullptr;    // 班次设置屏幕
+static lv_obj_t *scr_shift_set = nullptr;    // 班次设置屏幕
 static lv_obj_t *scr_rule = nullptr;     // 考勤规则屏幕
 static lv_obj_t *scr_schedule = nullptr; // 人员排班屏幕
 static lv_obj_t *scr_company = nullptr; // 公司设置屏幕
 static lv_obj_t *scr_bell = nullptr;     // 定时响铃屏幕 
-static lv_obj_t* dept_list_container = nullptr;  // 部门列表容器
-static int g_selected_dept_id = -1;              // 当前选中的部门 ID
+static lv_obj_t *scr_shift_info = nullptr; //班次详细信息界面
 
-// ==================== 输入框指针 [新增] ====================
+// ================= [内部状态: 输入框指针] =================
 static lv_obj_t *ta_company_save = nullptr;    // 公司名称输入框 
-static lv_obj_t *btn_company_save = nullptr;   // 保存按钮 
-// 全局变量用于存储详情界面的输入框
-static lv_obj_t* ta_dept_name = nullptr;
+static lv_obj_t* ta_dept_name = nullptr;// 全局变量用于存储详情界面的输入框
 static std::array<lv_obj_t*, 14> ta_schedule_inputs; // 7 天×2 个输入框
+static lv_obj_t *g_ta_time_frame1 = nullptr;//班次信息时段一输入框
+static lv_obj_t *g_ta_time_frame2 = nullptr;//班次信息时段二输入框
+static lv_obj_t *g_ta_overtime = nullptr;//班次信息加班时段输入框
+
+// ================= [内部状态: 控件与数据] =================
+static lv_obj_t *btn_company_save = nullptr;   // 保存按钮 
+static lv_obj_t* dept_list_container = nullptr;  // 部门列表容器
+static lv_obj_t *g_btn_a1_amend = nullptr;//班次信息界面修改按钮
+
+// ================= [内部状态: 数据暂存] =================
+static int g_selected_dept_id = -1;              // 当前选中的部门 ID
+static int g_current_edit_shift_id = -1; // 记录当前选择的班次ID
+
+// ====================== [辅助函数] ======================
+
+// 文本框值改变时的回调：实现输入自动补全 ':' 和 '-'
+static void time_input_format_cb(lv_event_t *e) {
+    lv_obj_t *ta = (lv_obj_t *)lv_event_get_target(e);
+    const char *txt = lv_textarea_get_text(ta);
+    size_t len = strlen(txt);
+
+    // 只有在用户输入长度刚好是 2, 5, 8 且末尾是数字时，才自动补全符号
+    // 这样设计可以避免用户按退格键删除符号时陷入死循环
+    if (len > 0) {
+        char last_char = txt[len - 1];
+        if (last_char >= '0' && last_char <= '9') {
+            if (len == 2) {
+                lv_textarea_add_text(ta, ":");
+            } else if (len == 5) {
+                lv_textarea_add_text(ta, "-");
+            } else if (len == 8) {
+                lv_textarea_add_text(ta, ":");
+            }
+        }
+    }
+}
+
+// 校验字符串是否满足 HH:MM-HH:MM，并限制具体时间范围
+static bool validate_and_parse_time(const std::string& input, std::string& start, std::string& end) {
+    if (input.empty()) { // 为空是合法的，表示不排该时段
+        start = "";
+        end = "";
+        return true;
+    }
+    
+    // 长度必须刚好是 11
+    if (input.length() != 11 || input[2] != ':' || input[5] != '-' || input[8] != ':') {
+        return false;
+    }
+
+    start = input.substr(0, 5);
+    end = input.substr(6, 5);
+
+    // 解析数字，严格校验 小时 0-23，分钟 0-59 (若业务要求是 0-12 可以将 23 替换为 12)
+    int h1 = std::stoi(start.substr(0, 2));
+    int m1 = std::stoi(start.substr(3, 2));
+    int h2 = std::stoi(end.substr(0, 2));
+    int m2 = std::stoi(end.substr(3, 2));
+
+    if (h1 < 0 || h1 > 23 || m1 < 0 || m1 > 59 ||
+        h2 < 0 || h2 > 23 || m2 < 0 || m2 > 59) {
+        return false;
+    }
+
+    return true;
+}
+
+// ================== [时间合法性校验辅助函数] ==================
+
+// 1. 校验单个时间字符串的格式是否合法 (00:00 - 23:59)
+static bool is_valid_time_format(const std::string& time_str) {
+    // 允许为空，代表该时段不设置排班
+    if (time_str.empty()) return true; 
+
+    // 长度必须是 11 (HH:MM-HH:MM)
+    if (time_str.length() != 11) return false;
+    // 中间必须是冒号和横杠
+    if (time_str[2] != ':' || time_str[5] != '-' || time_str[8] != ':') return false;
+
+    // 校验前一半 (上班时间)
+    int h1 = std::stoi(time_str.substr(0, 2));
+    int m1 = std::stoi(time_str.substr(3, 2));
+    // 校验后一半 (下班时间)
+    int h2 = std::stoi(time_str.substr(6, 2));
+    int m2 = std::stoi(time_str.substr(9, 2));
+
+    return (h1 >= 0 && h1 <= 23) && (m1 >= 0 && m1 <= 59) &&
+           (h2 >= 0 && h2 <= 23) && (m2 >= 0 && m2 <= 59);
+}
+
+// 2. 校验时间段内部逻辑（上班时间必须 < 下班时间）
+static bool is_valid_time_range(const std::string& time_str) {
+    if (time_str.empty()) return true; 
+
+    int start_hh = std::stoi(time_str.substr(0, 2));
+    int start_mm = std::stoi(time_str.substr(3, 2));
+    int end_hh   = std::stoi(time_str.substr(6, 2));
+    int end_mm   = std::stoi(time_str.substr(9, 2));
+
+    int start_total_mins = start_hh * 60 + start_mm;
+    int end_total_mins   = end_hh * 60 + end_mm;
+
+    // 上班时间必须严格小于下班时间
+    return start_total_mins < end_total_mins; 
+}
 
 // ==================== 主菜单事件回调 ====================
 // 菜单按钮事件回调
@@ -63,7 +165,7 @@ static void design_event_cb(lv_event_t *e) {
             if (strcmp(tag, "DEPT") == 0) {
                 load_dept_screen(); // 跳转到部门设置界面
             } else if (strcmp(tag, "SHIFT") == 0) {
-                load_shift_screen(); // 跳转到班次设置界面
+                load_shift_set_screen(); // 跳转到班次设置界面
             } else if (strcmp(tag, "RULE") == 0) {
                 load_rule_screen(); // 跳转到考勤规则界面
             } else if (strcmp(tag, "SCH") == 0) {
@@ -425,100 +527,336 @@ void load_dept_screen() {
     lv_screen_load(scr_dept);
     UiManager::getInstance()->destroyAllScreensExcept(scr_dept);
 }
+
 // ==================== 班次设置子界面 ====================
 
-// 班次设置子界面按钮事件回调
-static void shift_btn_event_cb(lv_event_t *e) {
+// 班次设置事件回调
+static void shift_set_event_cb(lv_event_t *e) {
+
+    lv_indev_wait_release(lv_indev_get_act());
+
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *btn = (lv_obj_t*)lv_event_get_target(e);
-    lv_obj_t *list = lv_obj_get_parent(btn);
+    uint32_t key = (code == LV_EVENT_KEY) ? lv_event_get_key(e) : 0;
 
+    // 1. 导航逻辑 (兼容键盘方向键)
     if (code == LV_EVENT_KEY) {
-        uint32_t key = lv_event_get_key(e);
-        uint32_t index = lv_obj_get_index(btn);
-        uint32_t total = lv_obj_get_child_cnt(list);
+        if (key == LV_KEY_ESC) {
+            lv_indev_wait_release(lv_indev_get_act()); // 防连跳
+            load_att_design_menu_screen(); // 返回主菜单
+            return; // 拦截返回
+        } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
+            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
+            return;
+        } else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
+            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
+            return;
+        }
+    }
 
-        // 上下导航（1列列表，循环）
-        if (key == LV_KEY_DOWN) {
-            lv_group_focus_obj(lv_obj_get_child(list, (index + 1) % total));
-            lv_timer_handler(); // 处理按键
-        } else if (key == LV_KEY_UP) {
-            lv_group_focus_obj(lv_obj_get_child(list, (index + total - 1) % total));
-            lv_timer_handler(); // 处理按键
+    // 2. 跳转详情页逻辑 (点击 或 聚焦按回车)
+    if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+
+        lv_obj_t* target = (lv_obj_t*)lv_event_get_current_target(e); 
+        
+        // 如果触发事件的是屏幕本身 (比如上一个界面的Enter残留)，直接忽略！
+        if (target == scr_shift_set) {
+            return; 
         }
-        // ESC 返回上级菜单
-        else if (key == LV_KEY_ESC) {
-            load_att_design_menu_screen();
+
+        int shift_id = 0;
+
+        // 【途径一】：检查是否通过 lv_obj_add_event_cb 的 user_data 传入（对应 create_sys_list_btn）
+        void* event_user_data = lv_event_get_user_data(e);
+        if (event_user_data != nullptr) {
+            shift_id = (int)(intptr_t)event_user_data;
+        } 
+        // 【途径二】：检查是否通过 lv_obj_set_user_data 挂载在对象上（对应 lv_btn_create 动态 new 出来的情况）
+        else {
+            int* p_id = (int*)lv_obj_get_user_data(target);
+            if (p_id != nullptr) {
+                shift_id = *p_id;
+            }
         }
-        // ENTER 触发功能
-        else if (key == LV_KEY_ENTER) {
-            const char* tag = (const char*)lv_event_get_user_data(e);
-            if (strcmp(tag, "ADD") == 0) {
-                // TODO: 新增班次逻辑
-                show_popup("Hint", "Add Shift Feature Under Construction");
-            } else if (strcmp(tag, "EDIT") == 0) {
-                // TODO: 修改班次逻辑
-                show_popup("Hint", "Edit Shift Feature Under Construction");
-            } else if (strcmp(tag, "DELETE") == 0) {
-                // TODO: 删除班次逻辑
-                show_popup("Hint", "Delete Shift Feature Under Construction");
+
+        // 验证拿到真实的 shift_id 后跳转
+        if (shift_id > 0) {
+            lv_indev_wait_release(lv_indev_get_act()); // 必须在确认要跳转时才清空输入设备状态
+            load_shift_info_screen(shift_id);
+        } else {
+            // DEBUG: 如果没传参成功或者跑到屏幕自身事件上去了，弹窗提示以便排错
+            show_popup_msg("错误", "获取班次ID失败,请检查按钮创建逻辑", nullptr, "确认");
+        }
+    }
+}
+
+//班次设置界面
+void load_shift_set_screen() {
+    if (scr_shift_set){
+        lv_obj_delete(scr_shift_set);
+        scr_shift_set = nullptr;
+    }
+
+    BaseScreenParts parts = create_base_screen("班次设置");
+    scr_shift_set = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::SHIFT_SETTING, &scr_shift_set);
+
+    // 绑定销毁回调
+    lv_obj_add_event_cb(scr_shift_set, [](lv_event_t * e) {
+        scr_shift_set = nullptr;
+    }, LV_EVENT_DELETE, NULL);
+
+    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+
+    lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
+
+    //循环创建按钮
+    std::vector<ShiftInfo> shifts = UiController::getInstance()->getAllShifts();
+    
+    for (const auto& shift : shifts) {
+        // 判断班次是否有排班信息
+        // 根据用户说明：一个班次有三个时间段，只要有一个时间段输入了有正确的数据（需要有开始和结束也就是上班和下班）就可以判断为已设置排班信息
+        bool has_schedule = false;
+        
+        // 检查第一个时间段
+        if (!shift.s1_start.empty() && !shift.s1_end.empty()) {
+            has_schedule = true;
+        }
+        // 检查第二个时间段
+        else if (!shift.s2_start.empty() && !shift.s2_end.empty()) {
+            has_schedule = true;
+        }
+        // 检查第三个时间段
+        else if (!shift.s3_start.empty() && !shift.s3_end.empty()) {
+            has_schedule = true;
+        }
+        
+        std::string schedule_status = has_schedule ? "已设置排班" : "未设置排班";
+        
+        // 创建按钮文本：班次ID + 班次名字 + 排班状态
+        // 格式：ID: [id] 名称: [name] 状态: [status]
+        // 创建按钮文本：左侧显示班次ID和名称，右侧显示排班状态
+        std::string left_text = std::to_string(shift.id) + ". ";
+        std::string right_text = shift.name;
+        
+        // 创建按钮
+        void* user_data_id = (void*)(intptr_t)shift.id;
+        
+        create_sys_list_btn(list,left_text.c_str(), right_text.c_str(), schedule_status.c_str(), shift_set_event_cb, user_data_id);  
+    }
+
+    uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
+    for(uint32_t i=0; i<child_cnt; i++) {
+        lv_obj_t* btn = lv_obj_get_child(list, i);
+        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+    }
+    // 聚焦第一个按钮
+    if(child_cnt > 0) {
+        lv_group_focus_obj(lv_obj_get_child(list, 0));
+    }
+
+    lv_screen_load(scr_shift_set);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_shift_set);// 加载后销毁其他屏幕，保持资源清晰
+}
+
+//班次详细信息界面事件回调
+static void shift_info_event_cb(lv_event_t *e) {
+
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+
+    uint32_t key = 0;
+    if(code == LV_EVENT_KEY) {
+        key = lv_event_get_key(e);
+    }
+
+    // 1. 处理 ESC 键退出 (返回排班设置界面)
+    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
+        lv_indev_wait_release(lv_indev_get_act()); // 【防连跳核心】 --- IGNORE ---
+        load_shift_set_screen(); //返回排班设置界面
+        return;
+    }
+
+    // ================= 焦点在【时段一输入框】 =================
+    if (current_target == g_ta_time_frame1) {
+        // 按下回车或↓键，跳到时段二输入框
+        if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
+            lv_group_focus_obj(g_ta_time_frame2);
+            lv_indev_wait_release(lv_indev_get_act());
+        }
+    } 
+    // ================= 焦点在【时段二输入框】 =================
+    else if (current_target == g_ta_time_frame2) {
+        // 按下↑键，跳回时段一输入框
+        if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
+            lv_group_focus_obj(g_ta_time_frame1);
+            return; 
+        }
+        // 按下回车或↓键，跳到加班输入框
+        else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
+            lv_group_focus_obj(g_ta_overtime);
+            lv_indev_wait_release(lv_indev_get_act());
+        }
+    } 
+    // ================= 焦点在【加班输入框】 =================
+    else if (current_target == g_ta_overtime) {
+        // 按下↑键，跳回时段二输入框
+        if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
+            lv_group_focus_obj(g_ta_time_frame2);
+            return; 
+        }
+        // 按下回车或↓键，跳到下载按钮
+        else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
+            lv_group_focus_obj(g_btn_a1_amend);
+            lv_indev_wait_release(lv_indev_get_act());
+        }
+    } 
+    // ================= 焦点在【确认修改按钮】 =================
+    else if (current_target == g_btn_a1_amend) {
+        // 按下↑键，跳回加班输入框
+        if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
+            lv_group_focus_obj(g_ta_overtime);
+            return; 
+        }
+
+        // 按下确认修改
+        if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+            lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
+
+            std::string s1_input = lv_textarea_get_text(g_ta_time_frame1);
+            std::string s2_input = lv_textarea_get_text(g_ta_time_frame2);
+            std::string s3_input = lv_textarea_get_text(g_ta_overtime);
+
+            std::string s1_start, s1_end, s2_start, s2_end, s3_start, s3_end;
+
+            // 格式校验
+            if (!validate_and_parse_time(s1_input, s1_start, s1_end) ||
+                !validate_and_parse_time(s2_input, s2_start, s2_end) ||
+                !validate_and_parse_time(s3_input, s3_start, s3_end)) {
+                show_popup_msg("格式错误", "时间必须是 HH:MM-HH:MM 格式\n(时: 00-23, 分: 00-59)\n留空代表不排班", nullptr, "确认");
+                return;
+            }
+
+            // 逻辑校验 (上班时间必须早于下班时间)
+            if (!is_valid_time_range(s1_input) || 
+                !is_valid_time_range(s2_input) || 
+                !is_valid_time_range(s3_input)) {
+                show_popup_msg("逻辑错误", "单个时段内，上班时间\n必须早于下班时间!", nullptr, "确认");
+                return; // 拦截，不写入数据库
+            }
+
+            // 拆分字符串，准备写入数据库
+            // 因为之前的格式校验已经保证了长度绝对是 11，所以这里可以直接安全 substr
+            s1_start = s1_input.empty() ? "" : s1_input.substr(0, 5);
+            s1_end   = s1_input.empty() ? "" : s1_input.substr(6, 5);
+            s2_start = s2_input.empty() ? "" : s2_input.substr(0, 5);
+            s2_end   = s2_input.empty() ? "" : s2_input.substr(6, 5);
+            s3_start = s3_input.empty() ? "" : s3_input.substr(0, 5);
+            s3_end   = s3_input.empty() ? "" : s3_input.substr(6, 5);
+
+            // 写入数据库 
+            bool success = UiController::getInstance()->updateShiftInfo(
+                g_current_edit_shift_id,
+                s1_start, s1_end,
+                s2_start, s2_end,
+                s3_start, s3_end
+            );
+
+            if (success) {
+                show_popup_msg("保存成功", "班次信息已更新！", nullptr, "确认");
+                // 延时返回班次列表
+                lv_timer_create([](lv_timer_t* t){
+                    load_shift_set_screen();
+                    lv_timer_del(t);
+                }, 1000, nullptr);
+            } else {
+                show_popup_msg("保存失败", "写入数据库发生错误，请重试！", nullptr, "确认");
             }
         }
     }
 }
 
-void load_shift_screen() {
-    // 删除旧屏幕（如果存在）
-    if (scr_shift) {
-        lv_obj_delete(scr_shift);
-        scr_shift = nullptr;
+//班次详细信息界面
+void load_shift_info_screen(int shift_id) {
+
+    g_current_edit_shift_id = shift_id; // 记录当前所处的班次ID
+
+    if(scr_shift_info){
+        lv_obj_delete(scr_shift_info);
+        scr_shift_info = nullptr;
     }
 
-    // 创建新屏幕并注册
-    BaseScreenParts parts = create_base_screen("班次设置");
-    scr_shift = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::SHIFT_SETTING, &scr_shift);
+    // 1. 创建基础屏幕
+    BaseScreenParts parts = create_base_screen("班次详细信息");
+    scr_shift_info = parts.screen;
+    UiManager::getInstance()->registerScreen(ScreenType::SHIFT_INFO, &scr_shift_info);
 
     // 绑定销毁回调
-    lv_obj_add_event_cb(scr_shift, [](lv_event_t *e) {
-        scr_shift = nullptr;
-    }, LV_EVENT_DELETE, NULL);
+    lv_obj_add_event_cb(scr_shift_info, [](lv_event_t * e) {
+        scr_shift_info = nullptr;
+        g_ta_time_frame1 = nullptr;
+        g_ta_time_frame2 = nullptr;
+        g_ta_overtime = nullptr;
+        g_btn_a1_amend = nullptr;
+    }, LV_EVENT_DELETE, nullptr);
 
+    // 绑定全局 ESC 返回事件
+    lv_obj_add_event_cb(scr_shift_info, shift_info_event_cb, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->resetKeypadGroup();
 
-    // 创建列表容器
-    lv_obj_t* list = create_list_container(parts.content);
+    // 创建统一表单容器
+    lv_obj_t* form_cont = create_form_container(parts.content);
 
-    // 添加功能按钮
-    create_sys_list_btn(list, "1. ", "", "新增班次", shift_btn_event_cb, "ADD");
-    create_sys_list_btn(list, "2. ", "", "修改班次", shift_btn_event_cb, "EDIT");
-    create_sys_list_btn(list, "3. ", "", "删除班次", shift_btn_event_cb, "DELETE");
-
-    // 将按钮加入输入组
-    uint32_t child_cnt = lv_obj_get_child_cnt(list);
-    for (uint32_t i = 0; i < child_cnt; i++) {
-        UiManager::getInstance()->addObjToGroup(lv_obj_get_child(list, i));
+    // ================== [数据加载] ==================
+    auto shift_opt = UiController::getInstance()->getShiftInfo(shift_id);
+    std::string s1_text = "", s2_text = "", s3_text = "";
+    
+    if (shift_opt.has_value()) {
+        ShiftInfo info = shift_opt.value();
+        // 如果数据库中有数据并且不是无效的 "--:--" 标识，则拼接为 "08:00-12:00" 显示
+        if (!info.s1_start.empty() && info.s1_start != "--:--") 
+            s1_text = info.s1_start + "-" + info.s1_end;
+        if (!info.s2_start.empty() && info.s2_start != "--:--") 
+            s2_text = info.s2_start + "-" + info.s2_end;
+        if (!info.s3_start.empty() && info.s3_start != "--:--") 
+            s3_text = info.s3_start + "-" + info.s3_end;
     }
 
-    // 默认聚焦第一个按钮
-    if (child_cnt > 0) {
-        lv_group_focus_obj(lv_obj_get_child(list, 0));
-    }
+    // 1. 时段一输入框
+    g_ta_time_frame1 = create_form_input(form_cont, "时段一:", "如: 08:00-12:00", s1_text.c_str(), false);
+    lv_textarea_set_accepted_chars(g_ta_time_frame1, "0123456789:-"); // 限制仅允许数字和符号
+    lv_textarea_set_max_length(g_ta_time_frame1, 11);                 // 限制最大字符数 (HH:MM-HH:MM 即11个字符)
+    lv_obj_add_event_cb(g_ta_time_frame1, time_input_format_cb, LV_EVENT_VALUE_CHANGED, nullptr); // 绑定自动补全
+    lv_obj_add_event_cb(g_ta_time_frame1, shift_info_event_cb, LV_EVENT_ALL, nullptr);// 绑定全局事件处理
+    UiManager::getInstance()->addObjToGroup(g_ta_time_frame1);
 
-    // 处理 ESC 返回
-    lv_obj_add_event_cb(scr_shift, [](lv_event_t* e) {
-        if (lv_event_get_key(e) == LV_KEY_ESC) {
-            load_att_design_menu_screen();
-        }
-    }, LV_EVENT_KEY, nullptr);
+    // 2. 时段二输入框
+    g_ta_time_frame2 = create_form_input(form_cont, "时段二:", "如: 14:00-18:00", s2_text.c_str(), false);
+    lv_textarea_set_accepted_chars(g_ta_time_frame2, "0123456789:-");
+    lv_textarea_set_max_length(g_ta_time_frame2, 11);
+    lv_obj_add_event_cb(g_ta_time_frame2, time_input_format_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(g_ta_time_frame2, shift_info_event_cb, LV_EVENT_ALL, nullptr);// 绑定全局事件处理
+    UiManager::getInstance()->addObjToGroup(g_ta_time_frame2);
 
-    // 把屏幕本身加入组以响应 ESC
-    UiManager::getInstance()->addObjToGroup(scr_shift);
+    // 3. 加班输入框
+    g_ta_overtime = create_form_input(form_cont, "加班:", "为空则不显示", s3_text.c_str(), false);
+    lv_textarea_set_accepted_chars(g_ta_overtime, "0123456789:-");
+    lv_textarea_set_max_length(g_ta_overtime, 11);
+    lv_obj_add_event_cb(g_ta_overtime, time_input_format_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(g_ta_overtime, shift_info_event_cb, LV_EVENT_ALL, nullptr);// 绑定全局事件处理
+    UiManager::getInstance()->addObjToGroup(g_ta_overtime);
 
-    // 加载与清理
-    lv_screen_load(scr_shift);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_shift);
+    // 4. 确认修改按钮
+    g_btn_a1_amend = create_form_btn(form_cont, "确认下载", shift_info_event_cb, nullptr);
+    lv_obj_add_event_cb(g_btn_a1_amend, shift_info_event_cb, LV_EVENT_KEY, nullptr); 
+    UiManager::getInstance()->addObjToGroup(g_btn_a1_amend);
+
+    // 默认聚焦在开始时间
+    lv_group_focus_obj(g_ta_time_frame1);
+
+    lv_screen_load(scr_shift_info);
+    UiManager::getInstance()->destroyAllScreensExcept(scr_shift_info);
 }
+
 
 // ==================== 考勤规则子界面 ====================
 
@@ -550,13 +888,13 @@ static void rule_btn_event_cb(lv_event_t *e) {
             const char* tag = (const char*)lv_event_get_user_data(e);
             if (strcmp(tag, "ADD") == 0) {
                 // TODO: 新增班次逻辑
-                show_popup("Hint", "Add Rule Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "EDIT") == 0) {
                 // TODO: 修改班次逻辑
-                show_popup("Hint", "Edit Rule Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "DELETE") == 0) {
                 // TODO: 删除班次逻辑
-                show_popup("Hint", "Delete Rule Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             }
         }
     }
@@ -645,13 +983,13 @@ static void schedule_btn_event_cb(lv_event_t *e) {
             const char* tag = (const char*)lv_event_get_user_data(e);
             if (strcmp(tag, "ADD") == 0) {
                 // TODO: 新增排班逻辑
-                show_popup("Hint", "Add Schedule Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "EDIT") == 0) {
                 // TODO: 修改排班逻辑
-                show_popup("Hint", "Edit Schedule Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "DELETE") == 0) {
                 // TODO: 删除排班逻辑
-                show_popup("Hint", "Delete Schedule Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             }
         }
     }
@@ -852,13 +1190,13 @@ static void bell_btn_event_cb(lv_event_t *e) {
             const char* tag = (const char*)lv_event_get_user_data(e);
             if (strcmp(tag, "ADD") == 0) {
                 // TODO: 新增响铃逻辑
-                show_popup("Hint", "Add Bell Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "EDIT") == 0) {
                 // TODO: 修改响铃逻辑
-                show_popup("Hint", "Edit Bell Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "DELETE") == 0) {
                 // TODO: 删除响铃逻辑
-                show_popup("Hint", "Delete Bell Feature Under Construction");
+                show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             }
         }
     }
