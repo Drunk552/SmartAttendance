@@ -256,6 +256,25 @@ std::vector<UserData> UiController::getAllUsers() {
     return db_get_all_users();
 }
 
+//获取班次列表实现
+std::vector<ShiftInfo> UiController::getAllShifts() {
+    return db_get_shifts();
+}
+
+//获取指定班次的详细信息实现
+std::optional<ShiftInfo> UiController::getShiftInfo(int shiftId) {
+    return db_get_shift_info(shiftId);
+}
+
+//更新班次信息实现
+bool UiController::updateShiftInfo(int shift_id, 
+                                   const std::string& s1_start, const std::string& s1_end,
+                                   const std::string& s2_start, const std::string& s2_end,
+                                   const std::string& s3_start, const std::string& s3_end) {
+    // 调用底层更新，默认 cross_day 设为 0 (当天)
+    return db_update_shift(shift_id, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, 0);
+}
+
 int UiController::getUserCount() {
     return business_get_user_count();
 }
@@ -613,9 +632,16 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
 
     std::vector<UserData> import_users;
 
-    // 逐行解析：匹配 <row r="N" ...>...</row>（N >= 6 为数据行）
+    // 用于保存提取到的年份和月份，兜底使用当前年月
+    int import_year = 0, import_month = 0;
+    time_t now = time(0);
+    tm *ltm = localtime(&now);
+    import_year = 1900 + ltm->tm_year;
+    import_month = 1 + ltm->tm_mon;
+
+    // 逐行解析：匹配 <row r="N" ...>...</row>
     std::regex row_re("<row r=\"(\\d+)\"[^>]*>([\\s\\S]*?)</row>");
-    // 匹配行内每个单元格：<c r="A6" t="s"><v>3</v></c>（t 可能不存在）
+    // 匹配行内每个单元格：<c r="A6" t="s"><v>3</v></c>
     std::regex cell_re("<c r=\"([A-Z]+)(\\d+)\"(?:[^>]* t=\"([^\"]*)\")?[^>]*>(?:<v>([^<]*)</v>)?");
 
     auto row_begin = std::sregex_iterator(sheet_xml.begin(), sheet_xml.end(), row_re);
@@ -623,8 +649,6 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
 
     for (auto row_it = row_begin; row_it != row_end; ++row_it) {
         int row_num = std::stoi((*row_it)[1].str());
-        if (row_num < 6) continue; // 前5行是表头，跳过
-
         std::string row_content = (*row_it)[2].str();
 
         // 提取该行各列的值
@@ -643,8 +667,26 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
             col_vals[col_num] = get_cell_str(type, val);
         }
 
+        // 解析第1行的表头标题，提取年份和月份
+        if (row_num == 1) {
+            if (col_vals.count(1)) {
+                std::string title = col_vals[1];
+                std::regex title_regex(R"((\d{4})\s*年\s*(\d{1,2})\s*月)");
+                std::smatch match;
+                if (std::regex_search(title, match, title_regex)) {
+                    import_year = std::stoi(match[1]);
+                    import_month = std::stoi(match[2]);
+                    printf("[Import] 成功提取到排班表年月: %d-%02d\n", import_year, import_month);
+                }
+            }
+            continue; // 第1行处理完直接跳过
+        }
+
+        // 第2~5行是普通的表头，直接跳过
+        if (row_num < 6) continue; 
+
+        // === 下面是第6行起的数据行 ===
         // A(1)=工号, B(2)=姓名, C(3)=部门ID, D(4)=权限
-        // 工号和姓名是必填字段，缺少则跳过
         if (col_vals.find(1) == col_vals.end() || col_vals.find(2) == col_vals.end()) {
             continue;
         }
@@ -662,8 +704,21 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
         u.card_id         = "";
         u.password        = "";
 
+        // 从第5列(E)开始，提取 1~31 天的排班
+        for (int day = 1; day <= 31; ++day) {
+            int col_index = day + 4; // 1号对应第5列，2号对应第6列...
+            int shift_id = 0;
+            if (col_vals.count(col_index) && !col_vals[col_index].empty()) {
+                std::string shift_str = col_vals[col_index];
+                if (shift_str != "-" && shift_str != "休") {
+                    try { shift_id = std::stoi(shift_str); } catch (...) { shift_id = 0; }
+                }
+            }
+            u.monthly_schedule[day] = shift_id; // 存入该员工的字典
+        }
+
         import_users.push_back(u);
-        printf("[Import] 读取员工: id=%d name=%s dept=%d role=%d\n",
+        printf("[Import] 读取员工: id=%d name=%s dept=%d role=%d (已读取排班)\n",
                u.id, u.name.c_str(), u.dept_id, u.role);
     }
 
@@ -681,13 +736,36 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
         // 返回规范化的 "HH:MM" 字符串；非法时返回 "" 并计数
         auto validate_time = [&](const std::string& raw) -> std::string {
             if (raw.empty()) return ""; // 空格=未设置，直接透传空串
-            int mins = AttendanceRule::timeStringToMinutes(raw);
+            
+            std::string time_to_parse = raw;
+            
+            // 拦截并转换 Excel 浮点数时间格式 (如 "0.33333333333333" 代表 08:00)
+            if (raw.find('.') != std::string::npos) {
+                try {
+                    double time_fraction = std::stod(raw);
+                    // 确保是一个合理的时间比例值 (0.0 到 1.0 之间)
+                    if (time_fraction >= 0.0 && time_fraction < 1.0) {
+                        // 换算成当天的总分钟数
+                        int total_mins = std::round(time_fraction * 24 * 60);
+                        char buf[8];
+                        snprintf(buf, sizeof(buf), "%02d:%02d", total_mins / 60, total_mins % 60);
+                        time_to_parse = std::string(buf);
+                    }
+                } catch (...) {
+                    // 如果转换出错 (例如并非真正的数字)，则静默忽略，将原字符串交给业务层报错
+                }
+            }
+
+            // 使用转换后(或原本就合法)的字符串去获取分钟数
+            int mins = AttendanceRule::timeStringToMinutes(time_to_parse);
+            
             if (mins < 0) {
                 // 非法格式：记录日志并计数，返回空串（写DB时跳过）
-                printf("[Import] 时间格式非法，已跳过: \"%s\"\n", raw.c_str());
+                printf("[Import] 时间格式非法，已跳过: \"%s\" (原始值:%s)\n", time_to_parse.c_str(), raw.c_str());
                 ++bad_time_count;
                 return "";
             }
+            
             // 合法：格式化为标准 "HH:MM" 写回
             char buf[8];
             snprintf(buf, sizeof(buf), "%02d:%02d", mins / 60, mins % 60);
@@ -762,6 +840,12 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
 
     // 8. 员工数据写入数据库（INSERT OR REPLACE）
     bool ok = db_batch_add_users(import_users);
+
+    //如果员工基本信息写入成功，则继续写入他们的排班表
+    if (ok) {
+        db_batch_update_user_schedules(import_year, import_month, import_users);
+    }
+
     printf("[Import] 导入结果: %s,共 %zu 名员工，时间格式异常字段: %d\n",
            ok ? "成功" : "失败", import_users.size(), bad_time_count);
     return ok;

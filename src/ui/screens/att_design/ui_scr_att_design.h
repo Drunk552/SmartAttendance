@@ -25,7 +25,12 @@ void load_dept_detail_screen(int dept_id);
 /**
  * @brief 加载班次设置子界面
  */
-void load_shift_screen();
+void load_shift_set_screen();
+
+/**
+ * @brief 班次信息界面
+ */
+void load_shift_info_screen(int shift_id);
 
 /**
  * @brief 加载考勤规则子界面

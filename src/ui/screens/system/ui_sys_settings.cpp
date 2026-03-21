@@ -440,6 +440,7 @@ static void time_confirm_cb(lv_event_t *e){
     }
 }
 
+//时间设置界面
 void load_sys_basic_time_settings_screen(){
     if(scr_basic_settime){
         lv_obj_delete(scr_basic_settime);

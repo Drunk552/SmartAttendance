@@ -202,7 +202,7 @@ void set_base_footer_hint(lv_obj_t* footer, const char* left_text, const char* r
 lv_obj_t* create_sys_list_btn(
     lv_obj_t *parent,
     const char* icon, const char* text_en, const char* text_cn,
-    lv_event_cb_t event_cb, const char* user_data
+    lv_event_cb_t event_cb, const void* user_data
 ) {
     lv_obj_t *btn = lv_button_create(parent);
 
@@ -758,18 +758,3 @@ void show_popup_msg(const char* title, const char* msg, lv_obj_t* focus_back_obj
     }
 }
 
-// 弹窗关闭事件回调
-void mbox_close_event_cb(lv_event_t * e) {
-    lv_obj_t * mbox = (lv_obj_t *)lv_event_get_user_data(e);
-    if(mbox) lv_msgbox_close(mbox);
-}
-
-// 显示通用弹窗
-void show_popup(const char* title, const char* msg) {
-    lv_obj_t* mbox = lv_msgbox_create(lv_screen_active());
-    lv_msgbox_add_title(mbox, title);
-    lv_msgbox_add_text(mbox, msg);
-    lv_obj_t* btn = lv_msgbox_add_footer_button(mbox, "Close");
-    lv_obj_add_event_cb(btn, mbox_close_event_cb, LV_EVENT_CLICKED, mbox);
-    lv_obj_center(mbox);
-}
