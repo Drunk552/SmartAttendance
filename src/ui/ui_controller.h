@@ -99,6 +99,10 @@ public:
     bool updateDepartment(int deptId, const std::string& newName);
     bool deleteDepartment(int deptId);
     int getDepartmentEmployeeCount(int deptId);
+    DeptScheduleView getDeptSchedule(int deptId);// 获取指定部门的排班视图
+    // 更新指定部门的名称和排班信息
+    bool updateDeptSchedule(int deptId, const std::string& newName, const std::vector<int>& shifts);
+
     
     // --- 8. 班次管理类  ---
     std::vector<ShiftInfo> getAllShifts();//获取所有班次信息

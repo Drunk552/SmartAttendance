@@ -12,15 +12,14 @@ namespace att_design {
 void load_att_design_menu_screen();
 
 /**
- * @brief 加载部门设置子界面
+ * @brief 部门设置子界面
  */
-void load_dept_screen();
+void load_dept_set_screen();
 
 /**
- * @brief 加载部门详情子界面 [新增]
- * @param dept_id 部门 ID
+ * @brief 部门设置详情子界面
  */
-void load_dept_detail_screen(int dept_id);
+void load_dept_set_info_screen(int dept_id);
 
 /**
  * @brief 加载班次设置子界面
@@ -36,11 +35,6 @@ void load_shift_info_screen(int shift_id);
  * @brief 加载考勤规则子界面
  */
 void load_rule_screen();
-
-/**
- * @brief 加载排班设置子界面
- */
-void load_schedule_screen();
 
 /**
  * @brief 加载公司设置子界面
