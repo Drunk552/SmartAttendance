@@ -100,6 +100,16 @@ public:
     bool deleteDepartment(int deptId);
     int getDepartmentEmployeeCount(int deptId);
     
+    // --- 8. 班次管理类  ---
+    std::vector<ShiftInfo> getAllShifts();//获取所有班次信息
+
+    // 获取指定班次的详细信息，返回 optional 以处理不存在的情况
+    std::optional<ShiftInfo> getShiftInfo(int shiftId);
+    bool updateShiftInfo(int shift_id, 
+                         const std::string& s1_start, const std::string& s1_end,
+                         const std::string& s2_start, const std::string& s2_end,
+                         const std::string& s3_start, const std::string& s3_end);
+    
 private:
     UiController() = default; // 私有构造
     ~UiController() = default;

@@ -12,6 +12,7 @@
 #include <vector>
 #include <utility> // for std::pair
 #include <optional>
+#include <map>     //引入 map 头文件
 
 // ================= 数据结构定义(Data Structures) =================
 
@@ -159,6 +160,9 @@ struct UserData {
     ///绑定的默认班次ID
     int default_shift_id; 
 
+    // 用来存放 Excel 读出来的当月个人排班，<几号, 班次ID>
+    std::map<int, int> monthly_schedule;
+
     // 部门名称 (用于UI显示和报表，数据库不直接存，靠联表查询获取)
     std::string dept_name;
 
@@ -174,6 +178,9 @@ struct UserData {
 
     /// @brief 职位信息 (用于报表显示)
     std::string position;
+
+    UserData() : id(0), role(0), dept_id(0), default_shift_id(0) {}
+
 };
 
 /**
@@ -403,8 +410,6 @@ std::vector<BellSchedule> db_get_all_bells();
  * @return true 更新成功
  */
 bool db_update_bell(const BellSchedule& bell);
-bool db_save_company_name(const std::string& name);
-bool db_load_company_name(std::string& name);
 
 
 // ================= 3. 用户管理接口 (User DAO) =================
@@ -425,6 +430,16 @@ int db_add_user(const UserData& info, const cv::Mat& face_img);
  * @return 全部成功返回 true，发生中途错误则自动回滚并返回 false
  */
 bool db_batch_add_users(const std::vector<UserData>& users_list);
+
+/**
+ * @brief 批量更新/导入员工的排班信息 (用于 U盘/网络批量同步)
+ * @details 仅更新 `users` 表中的 `default_shift_id` 字段，其他信息保持不变。
+ * @param year 年份 (如 2024)
+ * @param month 月份 (1-12)
+ * @param users_list 包含工号和对应默认班次ID的列表
+ * @return 全部成功返回 true，发生中途错误则自动回滚并返回 false
+ */
+bool db_batch_update_user_schedules(int year, int month, const std::vector<UserData>& users_list);
 
 /**
  * @brief 删除用户
@@ -449,13 +464,6 @@ std::optional<UserData> db_get_user_info(int user_id);
  * @return std::vector<UserData> 包含人脸数据的用户列表
  */
 std::vector<UserData> db_get_all_users();
-
-/**
- * @brief 获取所有用户的基础信息 (用于报表和UI列表)
- * @details 包含部门名称，但不包含人脸数据(BLOB)，轻量高效。
- * @return std::vector<UserData> 用户列表
- */
-std::vector<UserData> db_get_all_users_info();
 
 /**
  * @brief 给用户指定班次 (排班)
@@ -677,6 +685,14 @@ bool db_clear_attendance();
  * @details 删除 users 表数据及其关联的图片文件
  */
 bool db_clear_users();
+
+/**
+ * @brief 清空所有员工考勤记录和员工数据
+ * @details 将删除 attendance、user_schedule、users 表中的数据，并清空对应的图片存储目录
+ * @param keep_admin 是否保留管理员账号 (默认 true，防止清空后无法登录系统)
+ * @return 成功返回 true，失败返回 false
+ */
+bool db_clear_all_employee_data(bool keep_admin = true);
 
 /**
  * @brief  恢复出厂设置

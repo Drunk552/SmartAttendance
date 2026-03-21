@@ -466,7 +466,7 @@ void load_user_info_screen(int user_id) {
     
     UserData user = UiController::getInstance()->getUserInfo(user_id);// 先获取用户数据，确保用户存在
     if (user.id == 0) {
-        show_popup("Error", "User Not Found!");
+        show_popup_msg("显示错误", "用户未找到! ", nullptr, "我知道了");
         load_user_list_screen();// 返回员工列表界面
         return;
     }

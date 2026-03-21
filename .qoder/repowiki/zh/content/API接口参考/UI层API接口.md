@@ -11,9 +11,12 @@
 - [src/business/face_demo.h](file://src/business/face_demo.h)
 - [src/business/report_generator.h](file://src/business/report_generator.h)
 - [src/data/db_storage.h](file://src/data/db_storage.h)
+- [src/data/db_storage.cpp](file://src/data/db_storage.cpp)
 - [src/main.cpp](file://src/main.cpp)
 - [src/ui/screens/home/ui_scr_home.h](file://src/ui/screens/home/ui_scr_home.h)
 - [src/ui/screens/home/ui_scr_home.cpp](file://src/ui/screens/home/ui_scr_home.cpp)
+- [src/ui/screens/system/ui_sys_settings.h](file://src/ui/screens/system/ui_sys_settings.h)
+- [src/ui/screens/system/ui_sys_settings.cpp](file://src/ui/screens/system/ui_sys_settings.cpp)
 </cite>
 
 ## 目录
@@ -31,6 +34,8 @@
 ## 简介
 本文件面向智能考勤系统的UI层，聚焦UiController类提供的全部公共接口，涵盖系统状态管理、用户管理、记录查询、维护功能、UI线程管理、摄像头帧获取与后台服务启动等能力。文档为每个接口提供参数说明、返回值定义、异常处理机制与最佳实践，并给出调用序列与时序图，帮助开发者快速理解并正确使用UI层API。
 
+**更新** 系统设置界面已完全重写，从约800行扩展到1000+行代码，新增记录清除功能、工厂重置选项和高级系统维护功能。UI控制器也相应扩展，新增公司管理操作和改进的部门处理。
+
 ## 项目结构
 UI层位于src/ui目录，围绕UiController为中心，向上对接LVGL界面与事件总线，向下封装数据层与业务层接口，形成清晰的分层职责：
 - UiController：UI层与业务/数据层的适配器，提供统一的API集合
@@ -44,6 +49,7 @@ subgraph "UI层"
 UIApp["ui_app.cpp<br/>UI入口初始化"]
 UIManager["ui_manager.h<br/>屏幕/摄像头管理"]
 UIController["ui_controller.h/.cpp<br/>UI控制器"]
+SystemSettings["ui_sys_settings.cpp<br/>系统设置界面"]
 end
 subgraph "业务层"
 FaceDemo["face_demo.h<br/>业务接口"]
@@ -51,7 +57,7 @@ EventBus["event_bus.h<br/>事件总线"]
 ReportGen["report_generator.h<br/>报表生成"]
 end
 subgraph "数据层"
-DB["db_storage.h<br/>数据接口"]
+DB["db_storage.h/.cpp<br/>数据接口"]
 end
 UIApp --> UIController
 UIController --> UIManager
@@ -59,6 +65,7 @@ UIController --> EventBus
 UIController --> FaceDemo
 UIController --> ReportGen
 UIController --> DB
+SystemSettings --> UIController
 ```
 
 **图表来源**
@@ -69,6 +76,7 @@ UIController --> DB
 - [src/business/face_demo.h:34-100](file://src/business/face_demo.h#L34-L100)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
 - [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
+- [src/ui/screens/system/ui_sys_settings.cpp:1-800](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L800)
 
 **章节来源**
 - [src/ui/ui_app.cpp:34-94](file://src/ui/ui_app.cpp#L34-L94)
@@ -84,11 +92,13 @@ UIController --> DB
 - UiManager：管理屏幕生命周期、输入组、摄像头显示缓冲区与帧同步
 - EventBus：发布/订阅系统事件（时间更新、磁盘状态、摄像头帧就绪等）
 - 业务层与数据层：提供底层能力（用户注册、记录查询、报表导出、数据库事务等）
+- 系统设置界面：全新的系统设置管理界面，包含基础设置和高级设置两大模块
 
 **章节来源**
-- [src/ui/ui_controller.h:21-110](file://src/ui/ui_controller.h#L21-L110)
+- [src/ui/ui_controller.h:21-122](file://src/ui/ui_controller.h#L21-L122)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:10-43](file://src/business/event_bus.h#L10-L43)
+- [src/ui/screens/system/ui_sys_settings.h:1-99](file://src/ui/screens/system/ui_sys_settings.h#L1-L99)
 
 ## 架构总览
 UiController作为UI层的统一适配器，向上通过事件总线驱动UI更新，向下封装业务层与数据层接口，同时负责后台线程的启动与管理。摄像头帧通过UiManager的共享缓冲区在UI线程与采集线程之间安全传递。
@@ -299,7 +309,7 @@ end
 - exportUserReport(int user_id, const std::string& start, const std::string& end)
   - 功能：导出个人考勤报表
   - 参数：user_id, start/end
-  - 返回：布尔值
+  - Returns：布尔值
   - 异常：同上
   - 使用场景：个人/部门导出
 
@@ -411,6 +421,89 @@ end
 - [src/ui/ui_controller.cpp:658-680](file://src/ui/ui_controller.cpp#L658-L680)
 - [src/ui/screens/home/ui_scr_home.cpp:110-121](file://src/ui/screens/home/ui_scr_home.cpp#L110-L121)
 
+### 公司设置与部门管理接口
+**新增** 公司设置功能
+- saveCompanyName(const std::string& name)
+  - 功能：保存公司名称到数据库
+  - 参数：name（公司名称）
+  - 返回：布尔值（保存成功/失败）
+  - 异常：数据库写入失败返回false
+  - 使用场景：系统设置中的公司名称配置
+  - 线程安全：使用互斥锁保护
+
+- loadCompanyName(std::string& name)
+  - 功能：从数据库加载公司名称
+  - 参数：name（输出参数，公司名称）
+  - 返回：布尔值（加载成功/失败）
+  - 异常：数据库读取失败返回false
+  - 使用场景：系统信息展示与报表标题
+  - 线程安全：使用互斥锁保护
+  - 性能优化：支持缓存机制，减少数据库查询
+
+**新增** 改进的部门管理功能
+- addDepartment(const std::string& deptName)
+  - 功能：添加新部门
+  - 参数：deptName（部门名称）
+  - 返回：布尔值（添加成功/失败）
+  - 异常：部门名称为空或数据库错误返回false
+  - 使用场景：组织架构管理
+  - 线程安全：使用数据库事务
+
+- updateDepartment(int deptId, const std::string& newName)
+  - 功能：更新部门名称
+  - 参数：deptId（部门ID），newName（新名称）
+  - 返回：布尔值（更新成功/失败）
+  - 异常：新名称为空或数据库错误返回false
+  - 使用场景：部门信息维护
+  - 线程安全：使用数据库事务
+
+- deleteDepartment(int deptId)
+  - 功能：删除部门（带完整性检查）
+  - 参数：deptId（部门ID）
+  - 返回：布尔值（删除成功/失败）
+  - 异常：部门下有员工或数据库错误返回false
+  - 使用场景：组织架构调整
+  - 线程安全：使用数据库事务
+  - 完整性检查：自动检查部门员工数量
+
+- getDepartmentEmployeeCount(int deptId)
+  - 功能：获取部门员工数量
+  - 参数：deptId（部门ID）
+  - 返回：整数（员工数量）
+  - 异常：数据库查询失败返回0
+  - 使用场景：部门删除前的完整性检查
+
+**章节来源**
+- [src/ui/ui_controller.cpp:70-118](file://src/ui/ui_controller.cpp#L70-L118)
+- [src/ui/ui_controller.cpp:159-219](file://src/ui/ui_controller.cpp#L159-L219)
+- [src/data/db_storage.h:268-327](file://src/data/db_storage.h#L268-L327)
+
+### 系统设置界面功能
+**新增** 全新的系统设置界面，包含以下功能模块：
+
+#### 基础设置模块
+- 时间设置：支持小时、分钟、秒的精确设置
+- 日期设置：支持年、月、日的独立设置
+- 日期格式：支持多种日期格式（YYYY-MM-DD、YYYY/MM/DD等）
+- 音量设置：支持音量调节和静音功能
+- 语言设置：支持中文和英文切换
+- 屏保设置：支持屏保时间和启用状态配置
+- 机器号设置：支持设备标识号配置
+- 返回时间设置：支持自动返回主界面的时间配置
+- 管理员总数设置：支持管理员数量上限配置
+- 记录警告数设置：支持警告记录数量上限配置
+
+#### 高级设置模块
+- 清除所有记录：一键清除所有考勤记录
+- 清除所有员工：一键清除所有员工信息
+- 清除所有数据：一键清除所有数据记录
+- 恢复出厂设置：重置系统到初始状态
+- 系统升级：检查和执行系统升级
+
+**章节来源**
+- [src/ui/screens/system/ui_sys_settings.h:1-99](file://src/ui/screens/system/ui_sys_settings.h#L1-L99)
+- [src/ui/screens/system/ui_sys_settings.cpp:1-3365](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3365)
+
 ### API调用最佳实践与性能优化建议
 - 事件驱动更新
   - 使用EventBus发布/订阅时间与磁盘状态，避免轮询
@@ -418,15 +511,19 @@ end
 - 线程安全
   - 帧数据通过UiManager的原子标记与互斥锁保护
   - UI线程仅读取共享缓冲区，业务线程写入
+  - 公司名称和部门操作使用互斥锁保护
 - I/O与CPU分离
   - 报表导出与U盘导入在后台线程执行
   - 采集线程与UI线程分离，避免阻塞
+  - 系统设置界面操作异步处理
 - 缓存与懒加载
   - 用户列表与记录查询使用数据库分页与缓存策略
   - 人脸特征按需加载，避免大对象频繁传输
+  - 公司名称支持缓存机制
 - 错误处理
   - 文件系统异常返回false，UI层据此弹窗提示
   - 磁盘检查失败返回false，避免误报
+  - 数据库操作失败时提供详细的错误信息
 
 **章节来源**
 - [src/ui/ui_controller.cpp:394-410](file://src/ui/ui_controller.cpp#L394-L410)
@@ -474,6 +571,12 @@ class UiController {
 +updateUserPassword(userId, newPassword)
 +updateUserRole(userId, newRole)
 +deleteUser(userId)
++saveCompanyName(name)
++loadCompanyName(name)
++addDepartment(deptName)
++updateDepartment(deptId, newName)
++deleteDepartment(deptId)
++getDepartmentEmployeeCount(deptId)
 }
 class UiManager {
 +getCameraDisplayBuffer()
@@ -514,6 +617,11 @@ class DataLayer {
 +db_clear_users()
 +db_factory_reset()
 +db_get_system_stats()
++db_save_company_name(name)
++db_load_company_name(name)
++db_add_department(dept_name)
++db_update_department(dept_id, new_name)
++db_delete_department(dept_id)
 }
 UiController --> UiManager : "使用"
 UiController --> EventBus : "发布事件"
@@ -523,7 +631,7 @@ UiController --> DataLayer : "调用"
 ```
 
 **图表来源**
-- [src/ui/ui_controller.h:21-110](file://src/ui/ui_controller.h#L21-L110)
+- [src/ui/ui_controller.h:21-122](file://src/ui/ui_controller.h#L21-L122)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:23-42](file://src/business/event_bus.h#L23-L42)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
@@ -531,7 +639,7 @@ UiController --> DataLayer : "调用"
 - [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
 
 **章节来源**
-- [src/ui/ui_controller.h:21-110](file://src/ui/ui_controller.h#L21-L110)
+- [src/ui/ui_controller.h:21-122](file://src/ui/ui_controller.h#L21-L122)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:23-42](file://src/business/event_bus.h#L23-L42)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
@@ -544,8 +652,8 @@ UiController --> DataLayer : "调用"
 - 文件I/O：报表导出与U盘导入在后台线程执行，避免阻塞UI
 - 内存拷贝：帧数据采用memcpy，避免额外格式转换
 - 事件频率：时间1Hz，磁盘5Hz，摄像头30ms，兼顾实时性与CPU占用
-
-[本节为通用指导，无需列出具体文件来源]
+- 缓存优化：公司名称支持缓存，减少数据库查询次数
+- 线程安全：使用互斥锁保护共享资源，避免竞态条件
 
 ## 故障排查指南
 - 磁盘空间不足
@@ -564,6 +672,12 @@ UiController --> DataLayer : "调用"
 - 用户信息异常
   - 现象：getUserInfo返回空对象或checkUserExists返回false
   - 处理：确认用户ID正确、数据库连接正常
+- 公司设置失败
+  - 现象：saveCompanyName/loadCompanyName返回false
+  - 处理：检查数据库连接、权限和网络状态
+- 部门操作失败
+  - 现象：addDepartment/updateDepartment/deleteDepartment返回false
+  - 处理：检查部门名称合法性、完整性约束和数据库状态
 
 **章节来源**
 - [src/ui/ui_controller.cpp:394-410](file://src/ui/ui_controller.cpp#L394-L410)
@@ -571,9 +685,7 @@ UiController --> DataLayer : "调用"
 - [src/ui/ui_controller.cpp:419-656](file://src/ui/ui_controller.cpp#L419-L656)
 
 ## 结论
-UiController提供了完备的UI层API，覆盖系统状态、用户管理、记录查询、维护与报表、摄像头帧获取与后台服务启动等核心能力。通过事件总线与UiManager的协作，实现了UI线程与业务线程的解耦与高效交互。遵循本文档的最佳实践与性能建议，可确保UI层在资源受限环境下稳定运行并提供流畅体验。
-
-[本节为总结性内容，无需列出具体文件来源]
+UiController提供了完备的UI层API，覆盖系统状态、用户管理、记录查询、维护与报表、摄像头帧获取与后台服务启动等核心能力。通过事件总线与UiManager的协作，实现了UI线程与业务线程的解耦与高效交互。新增的公司设置和部门管理功能进一步增强了系统的管理能力。遵循本文档的最佳实践与性能建议，可确保UI层在资源受限环境下稳定运行并提供流畅体验。
 
 ## 附录
 - UI入口初始化流程
@@ -582,8 +694,13 @@ UiController提供了完备的UI层API，覆盖系统状态、用户管理、记
 - 主页屏幕与定时器
   - 主页定时器每帧尝试获取最新帧并触发重绘
   - 屏幕销毁时清理资源并通知业务层停止识别
+- 系统设置界面
+  - 全新的系统设置界面，包含基础设置和高级设置两大模块
+  - 支持多种系统配置项的可视化管理
+  - 提供完整的数据验证和错误处理机制
 
 **章节来源**
 - [src/ui/ui_app.cpp:34-94](file://src/ui/ui_app.cpp#L34-L94)
 - [src/ui/screens/home/ui_scr_home.cpp:110-121](file://src/ui/screens/home/ui_scr_home.cpp#L110-L121)
 - [src/main.cpp:213-245](file://src/main.cpp#L213-L245)
+- [src/ui/screens/system/ui_sys_settings.cpp:1-800](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L800)

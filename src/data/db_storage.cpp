@@ -380,17 +380,18 @@ bool data_seed() {
         }
     }
 
-    // 1. 播种默认部门 (如果为空) 
+    // 1. 播种默认部门 (如果为空)
     if (is_table_empty("departments")) {
-        // 临时方案：先插入部门，稍后更新company_id
-        const char* sql_dept1 = "INSERT INTO departments (name, company_id) VALUES ('Not Set', 1);";
-        const char* sql_dept2 = "INSERT INTO departments (name, company_id) VALUES ('R&D', 1);";
-        const char* sql_dept3 = "INSERT INTO departments (name, company_id) VALUES ('HR', 1);";
-        
+        // 重置 AUTOINCREMENT 计数器，确保 id 从 1 开始
+        exec_sql("DELETE FROM sqlite_sequence WHERE name='departments';", "Reset Dept Sequence");
+        const char* sql_dept1 = "INSERT INTO departments (id, name, company_id) VALUES (1, 'Not Set', 1);";
+        const char* sql_dept2 = "INSERT INTO departments (id, name, company_id) VALUES (2, 'R&D', 1);";
+        const char* sql_dept3 = "INSERT INTO departments (id, name, company_id) VALUES (3, 'HR', 1);";
+
         exec_sql(sql_dept1, "Seed Dept Not Set");
         exec_sql(sql_dept2, "Seed Dept R&D");
         exec_sql(sql_dept3, "Seed Dept HR");
-        
+
         std::cout << "   [Seed] Created default departments for company ID: 1" << std::endl;
     }
 
@@ -594,34 +595,48 @@ bool db_update_department(int dept_id, const std::string& new_name) {
 
 // ================= 2. 班次管理 DAO =================
 
-bool db_update_shift(int shift_id, 
-                     const std::string& s1_start, const std::string& s1_end,
+bool db_update_shift(int shift_id, const std::string& s1_start, const std::string& s1_end,
                      const std::string& s2_start, const std::string& s2_end,
                      const std::string& s3_start, const std::string& s3_end,
                      int cross_day) {
-    
-    std::unique_lock<std::shared_mutex> lock(g_db_mutex);//排他锁（写锁）
-    
-    const char* sql = 
-        "UPDATE shifts SET s1_start=?, s1_end=?, s2_start=?, s2_end=?, s3_start=?, s3_end=?, cross_day=? "
-        "WHERE id=?;";
-    
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+
+    const char* sql = "INSERT OR REPLACE INTO shifts (id, name, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, cross_day) "
+                      "VALUES (?, "
+                      "(SELECT name FROM shifts WHERE id = ?), " // 保持原有的班次名称（如果存在）
+                      "?, ?, ?, ?, ?, ?, ?);";
+
     ScopedSqliteStmt stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        std::cerr << "[Data] Prepare Update Shift Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
 
-    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) return false;
-    
-    sqlite3_bind_text(stmt.get(), 1, s1_start.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt.get(), 2, s1_end.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt.get(), 3, s2_start.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt.get(), 4, s2_end.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt.get(), 5, s3_start.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt.get(), 6, s3_end.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt.get(), 7, cross_day);
-    sqlite3_bind_int(stmt.get(), 8, shift_id);
-    
-    bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
+    // 绑定数据
+    sqlite3_bind_int(stmt.get(), 1, shift_id);         // 插入的 id
+    sqlite3_bind_int(stmt.get(), 2, shift_id);         // 用于子查询 name 的 id
+    sqlite3_bind_text(stmt.get(), 3, s1_start.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 4, s1_end.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 5, s2_start.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 6, s2_end.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 7, s3_start.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt.get(), 8, s3_end.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt.get(),  9, cross_day);
 
-    return ok;
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        std::cerr << "[Data] Execute Update Shift Failed: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    // 如果子查询没查到原名称，导致 name 变成了 NULL，这里做个兜底更新
+    const char* fix_name_sql = "UPDATE shifts SET name = '班次' || CAST(id AS TEXT) WHERE id = ? AND name IS NULL;";
+    ScopedSqliteStmt stmt_fix;
+    if (sqlite3_prepare_v2(db, fix_name_sql, -1, stmt_fix.ptr(), 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt_fix.get(), 1, shift_id);
+        sqlite3_step(stmt_fix.get());
+    }
+
+    return true;
 }
 
 std::vector<ShiftInfo> db_get_shifts() {
@@ -1033,6 +1048,69 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
         std::cerr << "[Data] Batch sync failed, all changes rolled back." << std::endl;
     }
 
+    return success;
+}
+
+//批量更新/导入员工的排班信息 (用于 U盘/网络批量同步)
+bool db_batch_update_user_schedules(int year, int month, const std::vector<UserData>& users_list) {
+    if (users_list.empty()) return true;
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex);
+
+    char* zErrMsg = 0;
+    // 开启事务，加速写入
+    if (sqlite3_exec(db, "BEGIN TRANSACTION;", 0, 0, &zErrMsg) != SQLITE_OK) {
+        printf("[Data Error] Begin Transaction Failed (Schedules): %s\n", zErrMsg ? zErrMsg : "Unknown");
+        if (zErrMsg) sqlite3_free(zErrMsg);
+        return false;
+    }
+
+    // 准备排班插入语句（有则覆盖，无则新增）
+    const char* sql = "INSERT OR REPLACE INTO user_schedule (user_id, date_str, shift_id) VALUES (?, ?, ?);";
+    ScopedSqliteStmt stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        printf("[Data Error] Prepare Schedule Update Failed: %s\n", sqlite3_errmsg(db));
+        sqlite3_exec(db, "ROLLBACK;", 0, 0, 0);
+        return false;
+    }
+
+    bool success = true;
+    
+    // 遍历每一个员工
+    for (const auto& user : users_list) {
+        // 遍历该员工的 1-31 天排班字典
+        for (const auto& [day, shift_id] : user.monthly_schedule) {
+
+            if (shift_id <= 0) continue; // 如果是 0，说明是休息，直接跳过不写数据库！
+
+            // 组装标准的日期字符串，例如 "2026-03-01"
+            char date_buf[16];
+            snprintf(date_buf, sizeof(date_buf), "%04d-%02d-%02d", year, month, day);
+
+            // 绑定：用户ID、日期、班次ID
+            sqlite3_bind_int(stmt.get(), 1, user.id);
+            sqlite3_bind_text(stmt.get(), 2, date_buf, -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt.get(), 3, shift_id); // 0表示休息
+
+            // 执行单条插入
+            if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+                printf("[Data Error] Insert Schedule Error (User:%d, Date:%s): %s\n", 
+                       user.id, date_buf, sqlite3_errmsg(db));
+                success = false;
+                break;
+            }
+            sqlite3_clear_bindings(stmt.get());
+            sqlite3_reset(stmt.get());
+        }
+        if (!success) break;
+    }
+
+    // 提交或回滚
+    if (success) {
+        sqlite3_exec(db, "COMMIT;", 0, 0, 0);
+        printf("[Data] Successfully batch synced schedules for %zu users.\n", users_list.size());
+    } else {
+        sqlite3_exec(db, "ROLLBACK;", 0, 0, 0);
+    }
     return success;
 }
 
@@ -2204,6 +2282,75 @@ bool db_clear_users() {
     // 如果没有，可能需要额外执行 DELETE FROM attendance;
     
     std::cout << "[Data] All users cleared." << std::endl;
+    return true;
+}
+
+/**
+ * @brief 清空所有员工考勤记录和员工数据
+ * @details 将删除 attendance、user_schedule、users 表中的数据，并清空对应的图片存储目录
+ * @param keep_admin 是否保留管理员账号 (默认 true，防止清空后无法登录系统)
+ * @return 成功返回 true，失败返回 false
+ */
+bool db_clear_all_employee_data(bool keep_admin) {
+    // 1. 获取排他锁（写锁），保证操作期间其他线程无法读写数据库
+    std::unique_lock<std::shared_mutex> lock(g_db_mutex); 
+
+    // 2. 开启事务，保证删除操作的原子性
+    exec_sql("BEGIN TRANSACTION;", "Begin Transaction");
+
+    bool success = true;
+
+    // 清空考勤记录表
+    if (!exec_sql("DELETE FROM attendance;", "Clear Attendance")) success = false;
+    
+    // 清空用户排班表
+    if (!exec_sql("DELETE FROM user_schedule;", "Clear User Schedule")) success = false;
+
+    // 清空员工表 (根据参数决定是否保留管理员 privilege = 1)
+    if (keep_admin) {
+        if (!exec_sql("DELETE FROM users WHERE privilege = 0;", "Clear Users (Keep Admin)")) success = false;
+    } else {
+        if (!exec_sql("DELETE FROM users;", "Clear All Users")) success = false;
+        // 如果全部删除，可以选择重置一下自增主键序列
+        exec_sql("DELETE FROM sqlite_sequence WHERE name='users';", "Reset Users Sequence");
+    }
+
+    // 重置考勤表自增主键
+    exec_sql("DELETE FROM sqlite_sequence WHERE name='attendance';", "Reset Attendance Sequence");
+
+    // 3. 提交或回滚事务
+    if (success) {
+        exec_sql("COMMIT;", "Commit Transaction");
+        std::cout << "[Data] Successfully deleted employee and attendance data." << std::endl;
+    } else {
+        exec_sql("ROLLBACK;", "Rollback Transaction");
+        std::cerr << "[Data] Failed to delete data, transaction rolled back." << std::endl;
+        return false;
+    }
+
+    // 4. 清理本地存储的图片文件 (考勤抓拍图片 & 人脸注册图片)
+    try {
+        // 清理打卡图片
+        if (fs::exists(IMAGE_DIR)) {
+            for (const auto& entry : fs::directory_iterator(IMAGE_DIR)) {
+                if (entry.is_regular_file()) {
+                    fs::remove(entry.path());
+                }
+            }
+        }
+        
+        // 如果没有保留管理员，把人脸注册目录也全清空
+        if (!keep_admin && fs::exists(AVATAR_DIR)) {
+            for (const auto& entry : fs::directory_iterator(AVATAR_DIR)) {
+                if (entry.is_regular_file()) {
+                    fs::remove(entry.path());
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Data] Error clearing image files: " << e.what() << std::endl;
+    }
+
     return true;
 }
 
