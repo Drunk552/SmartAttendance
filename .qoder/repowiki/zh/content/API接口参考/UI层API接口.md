@@ -19,6 +19,15 @@
 - [src/ui/screens/system/ui_sys_settings.cpp](file://src/ui/screens/system/ui_sys_settings.cpp)
 </cite>
 
+## 更新摘要
+**所做更改**
+- 新增公司管理操作接口，包括公司名称保存和加载功能
+- 改进部门管理功能，新增部门添加、更新、删除和员工数量查询
+- 扩展班次管理接口，支持获取所有班次和更新班次信息
+- 完全重写系统设置界面，从约800行扩展到3366行代码
+- 新增批量员工排班导入功能，支持Excel文件解析和数据库导入
+- 增强系统设置界面，包含基础设置和高级设置两大模块
+
 ## 目录
 1. [简介](#简介)
 2. [项目结构](#项目结构)
@@ -34,7 +43,7 @@
 ## 简介
 本文件面向智能考勤系统的UI层，聚焦UiController类提供的全部公共接口，涵盖系统状态管理、用户管理、记录查询、维护功能、UI线程管理、摄像头帧获取与后台服务启动等能力。文档为每个接口提供参数说明、返回值定义、异常处理机制与最佳实践，并给出调用序列与时序图，帮助开发者快速理解并正确使用UI层API。
 
-**更新** 系统设置界面已完全重写，从约800行扩展到1000+行代码，新增记录清除功能、工厂重置选项和高级系统维护功能。UI控制器也相应扩展，新增公司管理操作和改进的部门处理。
+**更新** 系统设置界面已完全重写，从约800行扩展到3366行代码，新增记录清除功能、工厂重置选项和高级系统维护功能。UI控制器也相应扩展，新增公司管理操作和改进的部门处理，支持批量员工排班导入功能。
 
 ## 项目结构
 UI层位于src/ui目录，围绕UiController为中心，向上对接LVGL界面与事件总线，向下封装数据层与业务层接口，形成清晰的分层职责：
@@ -76,7 +85,7 @@ SystemSettings --> UIController
 - [src/business/face_demo.h:34-100](file://src/business/face_demo.h#L34-L100)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
 - [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
-- [src/ui/screens/system/ui_sys_settings.cpp:1-800](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L800)
+- [src/ui/screens/system/ui_sys_settings.cpp:1-3366](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3366)
 
 **章节来源**
 - [src/ui/ui_app.cpp:34-94](file://src/ui/ui_app.cpp#L34-L94)
@@ -95,7 +104,7 @@ SystemSettings --> UIController
 - 系统设置界面：全新的系统设置管理界面，包含基础设置和高级设置两大模块
 
 **章节来源**
-- [src/ui/ui_controller.h:21-122](file://src/ui/ui_controller.h#L21-L122)
+- [src/ui/ui_controller.h:21-132](file://src/ui/ui_controller.h#L21-L132)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:10-43](file://src/business/event_bus.h#L10-L43)
 - [src/ui/screens/system/ui_sys_settings.h:1-99](file://src/ui/screens/system/ui_sys_settings.h#L1-L99)
@@ -281,7 +290,7 @@ end
 - checkUserExists(int user_id)
   - 功能：检查用户是否存在
   - 参数：user_id
-  - 返回：布尔值
+  - Returns：布尔值
   - 异常：数据库失败时行为未定义
   - 使用场景：报表导出前校验
 
@@ -478,18 +487,46 @@ end
 - [src/ui/ui_controller.cpp:159-219](file://src/ui/ui_controller.cpp#L159-L219)
 - [src/data/db_storage.h:268-327](file://src/data/db_storage.h#L268-L327)
 
+### 班次管理接口
+**新增** 班次管理功能
+- getAllShifts()
+  - 功能：获取所有班次信息
+  - 参数：无
+  - 返回：ShiftInfo向量（最多10个班次）
+  - 异常：数据库访问失败时行为未定义
+  - 使用场景：班次选择与显示
+
+- getShiftInfo(int shiftId)
+  - 功能：获取指定班次的详细信息
+  - 参数：shiftId（班次ID）
+  - 返回：std::optional<ShiftInfo>（存在返回班次信息，不存在返回空）
+  - 异常：数据库访问失败时返回空
+  - 使用场景：班次详情展示
+
+- updateShiftInfo(int shift_id, 
+  - 功能：更新班次时间信息（支持3个时段）
+  - 参数：shift_id（班次ID），s1_start/s1_end（时段1），s2_start/s2_end（时段2），s3_start/s3_end（时段3），cross_day（是否跨天）
+  - 返回：布尔值（更新成功/失败）
+  - 异常：时间格式非法或数据库错误返回false
+  - 使用场景：班次时间调整
+  - 时间格式处理：支持标准"HH:MM"格式和Excel浮点数时间格式转换
+
+**章节来源**
+- [src/ui/ui_controller.cpp:259-276](file://src/ui/ui_controller.cpp#L259-L276)
+- [src/data/db_storage.h:337-387](file://src/data/db_storage.h#L337-L387)
+
 ### 系统设置界面功能
 **新增** 全新的系统设置界面，包含以下功能模块：
 
 #### 基础设置模块
 - 时间设置：支持小时、分钟、秒的精确设置
 - 日期设置：支持年、月、日的独立设置
-- 日期格式：支持多种日期格式（YYYY-MM-DD、YYYY/MM/DD等）
+- 日期格式：支持多种日期格式（YYYY-MM-DD、YYYY/MM/DD、YYYY年MM月DD日等）
 - 音量设置：支持音量调节和静音功能
 - 语言设置：支持中文和英文切换
 - 屏保设置：支持屏保时间和启用状态配置
 - 机器号设置：支持设备标识号配置
-- 返回时间设置：支持自动返回主界面的时间配置
+- 返回主界面时间：支持自动返回主界面的时间配置
 - 管理员总数设置：支持管理员数量上限配置
 - 记录警告数设置：支持警告记录数量上限配置
 
@@ -502,7 +539,7 @@ end
 
 **章节来源**
 - [src/ui/screens/system/ui_sys_settings.h:1-99](file://src/ui/screens/system/ui_sys_settings.h#L1-L99)
-- [src/ui/screens/system/ui_sys_settings.cpp:1-3365](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3365)
+- [src/ui/screens/system/ui_sys_settings.cpp:1-3366](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3366)
 
 ### API调用最佳实践与性能优化建议
 - 事件驱动更新
@@ -577,6 +614,9 @@ class UiController {
 +updateDepartment(deptId, newName)
 +deleteDepartment(deptId)
 +getDepartmentEmployeeCount(deptId)
++getAllShifts()
++getShiftInfo(shiftId)
++updateShiftInfo(shift_id, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end)
 }
 class UiManager {
 +getCameraDisplayBuffer()
@@ -622,6 +662,8 @@ class DataLayer {
 +db_add_department(dept_name)
 +db_update_department(dept_id, new_name)
 +db_delete_department(dept_id)
++db_get_all_shifts_limited()
++db_get_shift_info(shift_id)
 }
 UiController --> UiManager : "使用"
 UiController --> EventBus : "发布事件"
@@ -631,7 +673,7 @@ UiController --> DataLayer : "调用"
 ```
 
 **图表来源**
-- [src/ui/ui_controller.h:21-122](file://src/ui/ui_controller.h#L21-L122)
+- [src/ui/ui_controller.h:21-132](file://src/ui/ui_controller.h#L21-L132)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:23-42](file://src/business/event_bus.h#L23-L42)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
@@ -639,7 +681,7 @@ UiController --> DataLayer : "调用"
 - [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
 
 **章节来源**
-- [src/ui/ui_controller.h:21-122](file://src/ui/ui_controller.h#L21-L122)
+- [src/ui/ui_controller.h:21-132](file://src/ui/ui_controller.h#L21-L132)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:23-42](file://src/business/event_bus.h#L23-L42)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
@@ -678,6 +720,9 @@ UiController --> DataLayer : "调用"
 - 部门操作失败
   - 现象：addDepartment/updateDepartment/deleteDepartment返回false
   - 处理：检查部门名称合法性、完整性约束和数据库状态
+- 班次管理异常
+  - 现象：updateShiftInfo返回false或getShiftInfo返回空
+  - 处理：检查班次ID有效性、时间格式正确性和数据库状态
 
 **章节来源**
 - [src/ui/ui_controller.cpp:394-410](file://src/ui/ui_controller.cpp#L394-L410)
@@ -685,7 +730,7 @@ UiController --> DataLayer : "调用"
 - [src/ui/ui_controller.cpp:419-656](file://src/ui/ui_controller.cpp#L419-L656)
 
 ## 结论
-UiController提供了完备的UI层API，覆盖系统状态、用户管理、记录查询、维护与报表、摄像头帧获取与后台服务启动等核心能力。通过事件总线与UiManager的协作，实现了UI线程与业务线程的解耦与高效交互。新增的公司设置和部门管理功能进一步增强了系统的管理能力。遵循本文档的最佳实践与性能建议，可确保UI层在资源受限环境下稳定运行并提供流畅体验。
+UiController提供了完备的UI层API，覆盖系统状态、用户管理、记录查询、维护与报表、摄像头帧获取与后台服务启动等核心能力。通过事件总线与UiManager的协作，实现了UI线程与业务线程的解耦与高效交互。新增的公司设置和部门管理功能进一步增强了系统的管理能力。完全重写的系统设置界面提供了丰富的配置选项和良好的用户体验。遵循本文档的最佳实践与性能建议，可确保UI层在资源受限环境下稳定运行并提供流畅体验。
 
 ## 附录
 - UI入口初始化流程
@@ -703,4 +748,4 @@ UiController提供了完备的UI层API，覆盖系统状态、用户管理、记
 - [src/ui/ui_app.cpp:34-94](file://src/ui/ui_app.cpp#L34-L94)
 - [src/ui/screens/home/ui_scr_home.cpp:110-121](file://src/ui/screens/home/ui_scr_home.cpp#L110-L121)
 - [src/main.cpp:213-245](file://src/main.cpp#L213-L245)
-- [src/ui/screens/system/ui_sys_settings.cpp:1-800](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L800)
+- [src/ui/screens/system/ui_sys_settings.cpp:1-3366](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3366)

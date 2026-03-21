@@ -217,6 +217,30 @@ int UiController::getDepartmentEmployeeCount(int deptId) {
     
     return count;
 }
+
+// 获取指定部门的排班视图
+DeptScheduleView UiController::getDeptSchedule(int deptId) {
+    return db_get_dept_schedule_view(deptId);
+}
+
+// 更新指定部门的名称和排班信息
+bool UiController::updateDeptSchedule(int deptId, const std::string& newName, const std::vector<int>& shifts) {
+    // 1. 更新部门名称
+    db_update_department(deptId, newName);
+    
+    // 2. 更新排班表
+    std::vector<DeptScheduleEntry> entries;
+    for(int i = 0; i < 7; i++) {
+        DeptScheduleEntry entry;
+        entry.dept_id = deptId;
+        entry.day_of_week = i; // 0=日, 1=一 ... 6=六
+        entry.shift_id = shifts[i];
+        entries.push_back(entry);
+    }
+    db_import_dept_schedules(entries);
+    return true;
+}
+
 bool UiController::registerNewUser(const std::string& name, int deptId) {
     // 调用业务层接口
     return business_register_user(name.c_str(), deptId);

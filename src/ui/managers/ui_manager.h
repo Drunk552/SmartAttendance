@@ -48,9 +48,9 @@ enum class ScreenType {
     ATT_DESIGN,// 考勤设计
     DEPT_SETTING, //部门设置子界面
     SHIFT_SETTING,//班次设置子界面
+    DEPT_INFO,//部门设置详情界面
     SHIFT_INFO,//班次详细信息界面
     RULE_SETTING,//考勤规则设置
-    SCHEDULE_SETTING,//排班设置
     USER_INFO, // 员工详情
     PWD_CHANGE,// 密码修改
     ROLE_AUTH,// 权限变更
@@ -69,7 +69,6 @@ enum class ScreenType {
     DOWNLOAD_TIME_QUERY,//下载时间查询界面
     BELL_SETTING,           // 定时响铃子界面
     COMPANY_SETTING,        // 公司设置子界面
-    DEPT_DETAIL,            // 部门详情子界面
     RECORD_RESULT,          // 记录查询结果
     // ... 其他屏幕类型
     // 注意：每添加一个新屏幕类型，都要在 UiManager::registerScreen 中添加对应的管理逻辑

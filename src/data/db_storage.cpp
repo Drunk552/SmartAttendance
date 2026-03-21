@@ -384,15 +384,30 @@ bool data_seed() {
     if (is_table_empty("departments")) {
         // 重置 AUTOINCREMENT 计数器，确保 id 从 1 开始
         exec_sql("DELETE FROM sqlite_sequence WHERE name='departments';", "Reset Dept Sequence");
-        const char* sql_dept1 = "INSERT INTO departments (id, name, company_id) VALUES (1, 'Not Set', 1);";
-        const char* sql_dept2 = "INSERT INTO departments (id, name, company_id) VALUES (2, 'R&D', 1);";
-        const char* sql_dept3 = "INSERT INTO departments (id, name, company_id) VALUES (3, 'HR', 1);";
+        
+        // 1. 插入必须存在的默认部门（ID: 1）
+        exec_sql("INSERT INTO departments (id, name, company_id) VALUES (1, 'Not Set 1', 1);", "Seed Dept Not Set");
+        
+        // 2. 循环插入额外的 15 个部门（总计 16 条）
+        const char* predefined_names[] = {
+            "Not Set 2", "Not Set 3", "Not Set 4", "Not Set 5", "Not Set 6", 
+            "Not Set 7", "Not Set 8", "Not Set 9", "Not Set 10", "Not Set 11",
+            "Not Set 12", "Not Set 13", "Not Set 14", "Not Set 15", "Not Set 16"
+        };
 
-        exec_sql(sql_dept1, "Seed Dept Not Set");
-        exec_sql(sql_dept2, "Seed Dept R&D");
-        exec_sql(sql_dept3, "Seed Dept HR");
+        for (int i = 2; i <= 16; ++i) {
+            // 获取数组中的部门名称（i-2 是因为从索引 0 开始）
+            std::string dept_name = predefined_names[i - 2];
+            
+            // 拼接 SQL 语句
+            std::string sql = "INSERT INTO departments (id, name, company_id) VALUES (" 
+                              + std::to_string(i) + ", '" + dept_name + "', 1);";
+            
+            // 执行 SQL
+            exec_sql(sql.c_str(), ("Seed Dept " + dept_name).c_str());
+        }
 
-        std::cout << "   [Seed] Created default departments for company ID: 1" << std::endl;
+        std::cout << "   [Seed] Created 16 default departments for company ID: 1" << std::endl;
     }
 
     // 2. 播种默认班次 
@@ -507,7 +522,7 @@ std::vector<DeptInfo> db_get_departments_by_company(int company_id) {
     std::vector<DeptInfo> list;
     ScopedSqliteStmt stmt;
 
-    const char* sql = "SELECT id, name, company_id FROM departments WHERE company_id = ? ORDER BY name;";
+    const char* sql = "SELECT id, name, company_id FROM departments WHERE company_id = ? ORDER BY id;";
     
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) == SQLITE_OK) {
         sqlite3_bind_int(stmt.get(), 1, company_id);
