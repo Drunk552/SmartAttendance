@@ -22,9 +22,9 @@ static lv_obj_t *scr_self_check = nullptr;//自检设置屏幕
 
 // =================基础设置-时间设置（三级）==================
 static lv_obj_t *scr_basic_settime =nullptr;//时间设置屏幕
-static lv_obj_t *g_roller_hour = nullptr;   // 小时滚轮
-static lv_obj_t *g_roller_min  = nullptr;   // 分钟滚轮
-static lv_obj_t *g_roller_sec  = nullptr;   // 秒滚轮
+static lv_obj_t* g_ta_hour = nullptr;
+static lv_obj_t* g_ta_min = nullptr;   
+static lv_obj_t* g_ta_sec = nullptr;   
 static void show_time_confirm_dialog(const char* time_str);
 
 // =================基础设置-日期（三级）==================
@@ -56,6 +56,12 @@ static lv_obj_t *g_dropdown_language = nullptr;         // 语言选择
 // =================基础设置-屏保时间设置（三级）==================
 static lv_obj_t *scr_basic_screensafe = nullptr;      // 屏保设置屏幕
 static int g_current_screensafe_time = 30;
+static lv_obj_t *g_dropdown_screensafe = nullptr;  // 屏保时间下拉框
+static lv_obj_t *g_label_preview = nullptr;  // 预览标签
+
+// 当前屏保设置
+static bool g_screensafe_enabled = true;
+static int g_screensafe_time_index = 5;  // 默认30分钟
 
 // =================基础设置-机器号设置（三级）==================
 static lv_obj_t *scr_basic_machine_id = nullptr;
@@ -63,7 +69,7 @@ static lv_obj_t *g_ta_machine_id = nullptr;
 
 // =================基础设置-返回主界面时间设置（三级）================
 static lv_obj_t *scr_basic_return_time = nullptr;
-static lv_obj_t *g_roller_return_time = nullptr;
+static lv_obj_t* g_dropdown_return_time = nullptr;  // 下拉框对象
 
 // =================基础设置-管理员总数设置（三级）================
 static lv_obj_t *scr_basic_admin_count = nullptr;
@@ -91,6 +97,125 @@ static lv_obj_t *g_dialog_btn_yes = nullptr;        // "是"按钮
 static lv_obj_t *g_dialog_btn_no = nullptr;         // "否"按钮
 static lv_obj_t *g_btn_confirm = nullptr;//确认按钮
 static lv_obj_t *g_btn_cancel = nullptr;  // 取消按钮
+
+// 焦点切换辅助函数
+static void focus_next_widget(bool move_down) {
+    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+    if (!group) return;
+    
+    lv_obj_t* obj_focused = lv_group_get_focused(group);
+    
+    if (move_down) {
+        // 向下移动焦点
+        if (obj_focused == g_ta_hour) {
+            lv_group_focus_obj(g_ta_min);
+        } else if (obj_focused == g_ta_min) {
+            lv_group_focus_obj(g_ta_sec);
+        } else if (obj_focused == g_ta_sec) {
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (obj_focused == g_btn_confirm) {
+            lv_group_focus_obj(g_ta_hour);
+        } else if (obj_focused == g_ta_year) {
+            lv_group_focus_obj(g_ta_month);
+        } else if (obj_focused == g_ta_month) {
+            lv_group_focus_obj(g_ta_day);
+        } else if (obj_focused == g_ta_day) {
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (obj_focused == g_btn_confirm) {
+            lv_group_focus_obj(g_ta_year);
+        }
+    } else {
+        // 向上移动焦点
+        if (obj_focused == g_ta_hour) {
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (obj_focused == g_ta_min) {
+            lv_group_focus_obj(g_ta_hour);
+        } else if (obj_focused == g_ta_sec) {
+            lv_group_focus_obj(g_ta_min);
+        } else if (obj_focused == g_btn_confirm) {
+            lv_group_focus_obj(g_ta_sec);
+        } else if (obj_focused == g_ta_year) {
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (obj_focused == g_ta_month) {
+            lv_group_focus_obj(g_ta_year);
+        } else if (obj_focused == g_ta_day) {
+            lv_group_focus_obj(g_ta_month);
+        } else if (obj_focused == g_btn_confirm) {
+            lv_group_focus_obj(g_ta_day);
+        }
+    }
+}
+
+// 输入框的键盘事件处理
+static void textarea_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        lv_obj_t* obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：退出文本编辑，焦点移动到确认按钮
+            lv_textarea_set_cursor_click_pos(obj, false);
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点向上移动
+            focus_next_widget(false);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点向下移动
+            focus_next_widget(true);
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：在文本输入框内不做特殊处理
+            lv_indev_wait_release(lv_indev_get_act());
+        }
+    }
+}
+
+// 下拉框键盘导航回调
+static void dropdown_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *dropdown = (lv_obj_t*)lv_event_get_target(e);
+    
+   if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC){
+            // ESC键：返回上一级
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：如果下拉框关闭则打开，如果已打开则选中当前项
+            lv_indev_wait_release(lv_indev_get_act());
+            if (lv_dropdown_is_open(dropdown)) {
+                lv_dropdown_close(dropdown);
+                // 焦点移动到按钮
+                lv_group_focus_obj(g_btn_confirm);
+            } else {
+                lv_dropdown_open(dropdown);
+            }
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：如果下拉框关闭，焦点移动到按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            if (!lv_dropdown_is_open(dropdown)) {
+                lv_group_focus_obj(g_btn_confirm);
+            }
+        } else if (key == LV_KEY_UP) {
+            // 上键：如果下拉框关闭，焦点移动到按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            if (!lv_dropdown_is_open(dropdown)) {
+                lv_group_focus_obj(g_btn_confirm);
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+
 
 // =================系统主界面(一级)==================
 
@@ -133,7 +258,6 @@ static void sys_main_event_cb(lv_event_t *e) {
         // 根据按钮的 user_data（tag）来区分功能
         if (strcmp(tag, "BASIC") == 0)      load_sys_settings_basic_screen();// 基础设置
         else if (strcmp(tag, "ADVANCED") == 0)  load_sys_settings_advanced_screen();// 高级设置
-        else if (strcmp(tag, "PARAM") == 0) load_sys_settings_param_screen();//参数设置
         else if (strcmp(tag, "SELFCHECK") == 0) load_sys_settings_selfcheck_screen();//自检功能
     }
 }
@@ -159,14 +283,12 @@ void load_sys_settings_menu_screen() {
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
-    //1.基础设置
+    //基础设置
     create_sys_list_btn(list, "1. ", "", "基础设置", sys_main_event_cb, "BASIC");
-    // 2.高级设置
+    //高级设置
     create_sys_list_btn(list, "2. ", "", "高级设置", sys_main_event_cb, "ADVANCED");
-    // 3.参数设置
-    create_sys_list_btn(list, "3. ", "", "参数设置", sys_main_event_cb, "PARAM");
-    // 4.自检功能
-    create_sys_list_btn(list, "4. ", "", "自检功能", sys_main_event_cb, "SELFCHECK");
+    //自检功能
+    create_sys_list_btn(list, "3. ", "", "自检功能", sys_main_event_cb, "SELFCHECK");
 
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
@@ -271,6 +393,31 @@ void load_sys_settings_basic_screen(){
 }
 
 // =================基础设置界面--时间设置（三级）================
+static void time_confirm_cb(lv_event_t *e);
+
+// 按钮的键盘事件处理
+static void button_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级界面
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点向上移动
+            focus_next_widget(false);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点向下移动
+            focus_next_widget(true);
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发按钮的点击事件
+            lv_obj_send_event(g_btn_confirm, LV_EVENT_CLICKED, NULL);
+        }
+    }
+}
+
 static void save_time_to_system(int hour, int min, int sec){
     printf("时间已设置为%02d:%02d:%02d\n", hour, min, sec);
 }
@@ -279,21 +426,20 @@ static void dialog_confirm_yes_cb(lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
         lv_indev_wait_release(lv_indev_get_act());
         
-        // 从滚轮读取时间并保存
-        char buf_hour[8], buf_min[8], buf_sec[8];
-        lv_roller_get_selected_str(g_roller_hour, buf_hour, sizeof(buf_hour));
-        lv_roller_get_selected_str(g_roller_min, buf_min, sizeof(buf_min));
-        lv_roller_get_selected_str(g_roller_sec, buf_sec, sizeof(buf_sec));
+        // 从输入框读取时间并保存
+        const char* hour_str = lv_textarea_get_text(g_ta_hour);
+        const char* min_str = lv_textarea_get_text(g_ta_min);
+        const char* sec_str = lv_textarea_get_text(g_ta_sec);
         
-        int hour = atoi(buf_hour);
-        int min = atoi(buf_min);
-        int sec = atoi(buf_sec);
+        int hour = atoi(hour_str);
+        int min = atoi(min_str);
+        int sec = atoi(sec_str);
         
         save_time_to_system(hour, min, sec);
         
         // 关闭对话框
         if (g_dialog_confirm) {
-            lv_obj_del(lv_obj_get_parent(g_dialog_confirm)); // 删除遮罩层
+            lv_obj_del(lv_obj_get_parent(g_dialog_confirm));
             g_dialog_confirm = nullptr;
         }
         
@@ -306,7 +452,6 @@ static void dialog_confirm_no_cb(lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
         lv_indev_wait_release(lv_indev_get_act());
         
-        // 关闭对话框，停留在当前界面
         if (g_dialog_confirm) {
             lv_obj_del(lv_obj_get_parent(g_dialog_confirm));
             g_dialog_confirm = nullptr;
@@ -315,16 +460,14 @@ static void dialog_confirm_no_cb(lv_event_t *e) {
 }
 
 static void show_time_confirm_dialog(const char* time_str) {
-    // 如果已存在对话框，先删除
     if (g_dialog_confirm) {
         lv_obj_del(lv_obj_get_parent(g_dialog_confirm));
         g_dialog_confirm = nullptr;
     }
     
-    // 获取当前活动屏幕作为父对象
     lv_obj_t* parent = lv_scr_act();
     
-    // 创建遮罩层（半透明背景）
+    // 创建遮罩层
     lv_obj_t* mask = lv_obj_create(parent);
     lv_obj_set_size(mask, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
@@ -333,16 +476,15 @@ static void show_time_confirm_dialog(const char* time_str) {
     lv_obj_set_style_pad_all(mask, 0, 0);
     lv_obj_set_style_border_width(mask, 0, 0);
     
-    // 创建对话框容器
+    // 创建对话框
     g_dialog_confirm = lv_obj_create(mask);
-    lv_obj_set_size(g_dialog_confirm, 280, 180);
+    lv_obj_set_size(g_dialog_confirm, 180, 150);
     lv_obj_center(g_dialog_confirm);
     lv_obj_set_style_bg_color(g_dialog_confirm, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_radius(g_dialog_confirm, 10, 0);
     lv_obj_set_style_shadow_width(g_dialog_confirm, 10, 0);
     lv_obj_set_style_border_width(g_dialog_confirm, 0, 0);
     
-    // 设置为列布局
     lv_obj_set_flex_flow(g_dialog_confirm, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(g_dialog_confirm, LV_FLEX_ALIGN_SPACE_AROUND, 
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -371,26 +513,24 @@ static void show_time_confirm_dialog(const char* time_str) {
     lv_obj_set_style_bg_color(btn_panel, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_border_width(btn_panel, 0, 0);
     
-    // "是"按钮
-    g_dialog_btn_yes = create_form_btn (btn_panel, "是", dialog_confirm_yes_cb, NULL);
+    // 按钮
+    g_dialog_btn_yes = create_form_btn(btn_panel, "是", dialog_confirm_yes_cb, NULL);
     lv_obj_set_size(g_dialog_btn_yes, 90, 36);
     
-    // "否"按钮
-    g_dialog_btn_no = create_form_btn (btn_panel, "否", dialog_confirm_no_cb, NULL);
-    lv_obj_set_size(g_dialog_btn_no, 90, 36);  // 覆盖默认的宽度设置
+    g_dialog_btn_no = create_form_btn(btn_panel, "否", dialog_confirm_no_cb, NULL);
+    lv_obj_set_size(g_dialog_btn_no, 90, 36);
 
     lv_obj_add_event_cb(g_dialog_btn_yes, [](lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_DELETE) g_dialog_btn_yes = nullptr;
+        if (lv_event_get_code(e) == LV_EVENT_DELETE) g_dialog_btn_yes = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    // 设置遮罩层的删除回调
     lv_obj_add_event_cb(mask, [](lv_event_t* e) {
         g_dialog_confirm = nullptr;
         g_dialog_btn_yes = nullptr;
         g_dialog_btn_no = nullptr;
     }, LV_EVENT_DELETE, NULL);
     
-    // 将对话框按钮加入键盘组
+    // 加入键盘组
     lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
     if (group) {
         lv_group_add_obj(group, g_dialog_btn_yes);
@@ -407,40 +547,61 @@ static void get_current_time(int &hour, int &min, int &sec){
     sec = t->tm_sec;
 }
 
+static void time_input_cb(lv_event_t *e){
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if(code == LV_EVENT_READY){
+        lv_indev_wait_release(lv_indev_get_act());
+        
+        const char* hour_str = lv_textarea_get_text(g_ta_hour);
+        const char* min_str = lv_textarea_get_text(g_ta_min);
+        const char* sec_str = lv_textarea_get_text(g_ta_sec);
+        
+        int hour = atoi(hour_str);
+        int min = atoi(min_str);
+        int sec = atoi(sec_str);
+        
+        // 简单验证
+        if(hour < 0 || hour > 23 || min < 0 || min > 59 || sec < 0 || sec > 59){
+            // 可以添加错误提示
+            return;
+        }
+        
+        char time_str[20];
+        snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", hour, min, sec);
+        show_time_confirm_dialog(time_str);
+    }
+}
+
 static void time_confirm_cb(lv_event_t *e){
     lv_event_code_t code = lv_event_get_code(e);
     uint32_t key = 0;
 
     if(code == LV_EVENT_KEY){
         key = lv_event_get_key(e);
-
+        
         if(key == LV_KEY_ESC){
             load_sys_settings_basic_screen();
             lv_indev_wait_release(lv_indev_get_act()); 
             return;
         }
-
-        else if(code == LV_EVENT_CLICKED || key == LV_KEY_ENTER){
-            lv_indev_wait_release(lv_indev_get_act()); 
-
-            char buf_hour[8];
-            char buf_min[8];
-            char buf_sec[8];
-
-            lv_roller_get_selected_str(g_roller_hour, buf_hour, sizeof(buf_hour));
-            lv_roller_get_selected_str(g_roller_min,  buf_min,  sizeof(buf_min));
-            lv_roller_get_selected_str(g_roller_sec,  buf_sec,  sizeof(buf_sec)); 
-            
-            int hour = atoi(buf_hour);
-            int min = atoi(buf_min);
-            int sec = atoi(buf_sec);
-
-            char time_str[20];
-            snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", hour, min, sec);
-
-            show_time_confirm_dialog(time_str);
-        }  
     }
+    
+    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)){
+        lv_indev_wait_release(lv_indev_get_act()); 
+
+        const char* hour_str = lv_textarea_get_text(g_ta_hour);
+        const char* min_str = lv_textarea_get_text(g_ta_min);
+        const char* sec_str = lv_textarea_get_text(g_ta_sec);
+        
+        int hour = atoi(hour_str);
+        int min = atoi(min_str);
+        int sec = atoi(sec_str);
+        
+        char time_str[20];
+        snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", hour, min, sec);
+        show_time_confirm_dialog(time_str);
+    }  
 }
 
 void load_sys_basic_time_settings_screen(){
@@ -453,16 +614,11 @@ void load_sys_basic_time_settings_screen(){
     scr_basic_settime = parts.screen;
     UiManager::getInstance()->registerScreen(ScreenType::SYS_BASIC_SETTIME,&scr_basic_settime);
 
-    // 绑定销毁回调
-    lv_obj_add_event_cb(scr_basic_settime, [](lv_event_t * e) {
-        scr_basic_settime = nullptr;
-    }, LV_EVENT_DELETE, NULL);
-
     lv_obj_add_event_cb(scr_basic_settime, [](lv_event_t *e) {
         scr_basic_settime = nullptr;
-        g_roller_hour = nullptr;
-        g_roller_min  = nullptr;
-        g_roller_sec  = nullptr;
+        g_ta_hour = nullptr;
+        g_ta_min = nullptr;
+        g_ta_sec = nullptr;
         g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
@@ -472,73 +628,143 @@ void load_sys_basic_time_settings_screen(){
     int current_hour, current_min, current_sec;
     get_current_time(current_hour, current_min, current_sec);
 
-    // 内容区域（由 create_base_screen 提供）
+    // 内容区域
     lv_obj_t *content = parts.content;
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // ---- 时间滚轮面板 ----
-    lv_obj_t *time_panel = lv_obj_create(content);
-    lv_obj_set_size(time_panel, LV_PCT(90), 120);
-    lv_obj_center(time_panel);
-    lv_obj_set_flex_flow(time_panel, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(time_panel, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_border_width(time_panel, 0, 0);
-    lv_obj_set_style_pad_all(time_panel, 10, 0);
+    // 创建主面板
+    lv_obj_t *panel = lv_obj_create(content);
+    lv_obj_set_size(panel, LV_PCT(90), LV_SIZE_CONTENT);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_TRANSP, 0);
 
-    // 小时滚轮 (00-23)
-    g_roller_hour = lv_roller_create(time_panel);
-    lv_roller_set_options(g_roller_hour,
-        "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23",
-        LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_visible_row_count(g_roller_hour, 3);
-    lv_obj_set_width(g_roller_hour, 70);
-    lv_roller_set_selected(g_roller_hour, current_hour, LV_ANIM_OFF);
+    // 设置为垂直布局，三个单元上下排列
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(panel, 5, 0);
+    lv_obj_set_style_pad_row(panel, 8, 0);  // 行间距8像素
 
-    // 分钟滚轮 (00-59)
-    g_roller_min = lv_roller_create(time_panel);
-    lv_roller_set_options(g_roller_min,
-        "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59",
-        LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_visible_row_count(g_roller_min, 3);
-    lv_obj_set_width(g_roller_min, 70);
-    lv_roller_set_selected(g_roller_min, current_min, LV_ANIM_OFF);
+    // 预格式化为字符串
+    char hour_buf[8], min_buf[8], sec_buf[8];
+    sprintf(hour_buf, "%02d", current_hour);
+    sprintf(min_buf, "%02d", current_min);
+    sprintf(sec_buf, "%02d", current_sec);
 
-    // 秒滚轮 (00-59)
-    g_roller_sec = lv_roller_create(time_panel);
-    lv_roller_set_options(g_roller_sec,
-        "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59",
-        LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_visible_row_count(g_roller_sec, 3);
-    lv_obj_set_width(g_roller_sec, 70);
-    lv_roller_set_selected(g_roller_sec, current_sec, LV_ANIM_OFF);
+    // 小时输入行
+    lv_obj_t *time_hour = lv_obj_create(panel);
+    lv_obj_set_size(time_hour, LV_PCT(100), 40);
+    lv_obj_set_flex_flow(time_hour, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(time_hour, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_border_width(time_hour, 0, 0);
+    lv_obj_set_style_bg_opa(time_hour, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_left(time_hour, 10, 0);
 
-    lv_obj_t* btn_cont = lv_obj_create(content);
-    lv_obj_set_size(btn_cont, LV_PCT(90), 60);
-    lv_obj_set_pos(btn_cont, 12, 200);
+    lv_obj_t *label_hour = lv_label_create(time_hour);
+    lv_label_set_text(label_hour, "小时");
+    lv_obj_set_style_text_color(label_hour, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(label_hour, 50);
+
+    // 小时输入框
+    g_ta_hour = lv_textarea_create(time_hour);
+    lv_obj_set_size(g_ta_hour, 120, 35); 
+    lv_textarea_set_placeholder_text(g_ta_hour, "23");
+    lv_textarea_set_max_length(g_ta_hour, 4);
+    lv_textarea_set_one_line(g_ta_hour, true);
+    lv_textarea_set_accepted_chars(g_ta_hour, "0123456789");
+    lv_obj_set_style_border_width(g_ta_hour, 1, 0); 
+    lv_obj_set_style_border_color(g_ta_hour, lv_color_hex(0x2196F3), 0);
+    lv_obj_set_style_radius(g_ta_hour, 3, 0); 
+    lv_obj_set_style_pad_all(g_ta_hour, 5, 0); 
+
+    // 为文本输入框添加键盘事件处理
+    lv_obj_add_event_cb(g_ta_hour, textarea_keypad_cb, LV_EVENT_KEY, NULL);
+
+    // 分钟输入行
+    lv_obj_t *time_minute = lv_obj_create(panel);
+    lv_obj_set_size(time_minute, LV_PCT(100), 40);
+    lv_obj_set_flex_flow(time_minute, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(time_minute, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_border_width(time_minute, 0, 0);
+    lv_obj_set_style_bg_opa(time_minute, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_left(time_minute, 10, 0);
+
+    lv_obj_t *label_minute = lv_label_create(time_minute);
+    lv_label_set_text(label_minute, "分钟");
+    lv_obj_set_style_text_color(label_minute, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(label_minute, 50);
+
+    // 分钟输入框
+    g_ta_min = lv_textarea_create(time_minute);
+    lv_obj_set_size(g_ta_min, 120, 35); 
+    lv_textarea_set_placeholder_text(g_ta_min, "59");
+    lv_textarea_set_max_length(g_ta_min, 4);
+    lv_textarea_set_one_line(g_ta_min, true);
+    lv_textarea_set_accepted_chars(g_ta_min, "0123456789");
+    lv_obj_set_style_border_width(g_ta_min, 1, 0); 
+    lv_obj_set_style_border_color(g_ta_min, lv_color_hex(0x2196F3), 0);
+    lv_obj_set_style_radius(g_ta_min, 3, 0); 
+    lv_obj_set_style_pad_all(g_ta_min, 5, 0); 
+
+    // 为文本输入框添加键盘事件处理
+    lv_obj_add_event_cb(g_ta_min, textarea_keypad_cb, LV_EVENT_KEY, NULL);
+
+    // 秒输入行
+    lv_obj_t *time_seconds = lv_obj_create(panel);
+    lv_obj_set_size(time_seconds, LV_PCT(100), 40);
+    lv_obj_set_flex_flow(time_seconds, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(time_seconds, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_border_width(time_seconds, 0, 0);
+    lv_obj_set_style_bg_opa(time_seconds, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_left(time_seconds, 10, 0);
+
+    lv_obj_t *label_seconds = lv_label_create(time_seconds);
+    lv_label_set_text(label_seconds, "秒钟");
+    lv_obj_set_style_text_color(label_seconds, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(label_seconds, 50);
+
+    // 秒钟输入框
+    g_ta_sec = lv_textarea_create(time_seconds);
+    lv_obj_set_size(g_ta_sec, 120, 35); 
+    lv_textarea_set_placeholder_text(g_ta_sec, "59");
+    lv_textarea_set_max_length(g_ta_sec, 4);
+    lv_textarea_set_one_line(g_ta_sec, true);
+    lv_textarea_set_accepted_chars(g_ta_sec, "0123456789");
+    lv_obj_set_style_border_width(g_ta_sec, 1, 0); 
+    lv_obj_set_style_border_color(g_ta_sec, lv_color_hex(0x2196F3), 0);
+    lv_obj_set_style_radius(g_ta_sec, 3, 0); 
+    lv_obj_set_style_pad_all(g_ta_sec, 5, 0); 
+
+    // 按钮容器
+    lv_obj_t* btn_cont = create_list_container(content);
+    lv_obj_set_size(btn_cont, LV_PCT(90), 70);
     lv_obj_set_flex_flow(btn_cont, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_border_width(btn_cont, 0, LV_PART_MAIN); 
-
-    lv_obj_set_style_bg_opa(btn_cont, LV_OPA_TRANSP, LV_PART_MAIN); 
     lv_obj_clear_flag(btn_cont, LV_OBJ_FLAG_SCROLLABLE);
 
+    // 为文本输入框添加键盘事件处理
+    lv_obj_add_event_cb(g_ta_sec, textarea_keypad_cb, LV_EVENT_KEY, NULL);
 
-    g_btn_confirm = create_form_btn (btn_cont, "确认", time_confirm_cb,  NULL);
+    // 确认按键
+    g_btn_confirm = create_form_btn(btn_cont, "确认", time_confirm_cb, NULL);
+
+    // 为按钮添加键盘事件处理
+    lv_obj_add_event_cb(g_btn_confirm, button_keypad_cb, LV_EVENT_KEY, NULL);
     
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
+        if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     // 将所有可聚焦控件加入键盘组
-    UiManager::getInstance()->addObjToGroup(g_roller_hour);
-    UiManager::getInstance()->addObjToGroup(g_roller_min);
-    UiManager::getInstance()->addObjToGroup(g_roller_sec);
+    UiManager::getInstance()->addObjToGroup(g_ta_hour);
+    UiManager::getInstance()->addObjToGroup(g_ta_min);
+    UiManager::getInstance()->addObjToGroup(g_ta_sec);
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
 
-    // 设置初始焦点为小时滚轮
-    lv_group_focus_obj(g_roller_hour);
-    lv_group_focus_obj(g_btn_confirm);
+    // 设置初始焦点
+    lv_group_focus_obj(g_ta_hour);
 
-    // 加载屏幕并销毁其他屏幕
+    // 加载屏幕
     lv_screen_load(scr_basic_settime);
     UiManager::getInstance()->destroyAllScreensExcept(scr_basic_settime);  
 }
@@ -617,6 +843,31 @@ void load_sys_basic_date_screen() {
 }
 
 // =================基础设置界面--日期设置（四级）================
+// 按钮的键盘事件处理
+static void date_button_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级界面
+            load_sys_basic_date_screen();
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点向上移动
+           // date_focus_next_widget(false);
+            focus_next_widget(false); 
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点向下移动
+           // date_focus_next_widget(true);
+            focus_next_widget(true);
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发确认按钮点击事件
+            lv_obj_send_event(g_btn_confirm, LV_EVENT_CLICKED, NULL);
+        }
+    }
+}
+
 static void get_current_date(int &year, int &month, int &day) {
     time_t now = time(nullptr);
     struct tm *t = localtime(&now);
@@ -784,6 +1035,9 @@ void load_sys_basic_date_settings_screen() {
     lv_obj_set_style_radius(g_ta_year, 3, 0);  // 圆角3像素
     lv_obj_set_style_pad_all(g_ta_year, 5, 0);  // 内边距5像素
 
+    // 为年份输入框添加键盘事件处理
+    lv_obj_add_event_cb(g_ta_year, textarea_keypad_cb, LV_EVENT_KEY, NULL);
+
     char year_buf[8];
     sprintf(year_buf, "%04d", current_year);
     lv_textarea_set_text(g_ta_year, year_buf);
@@ -814,6 +1068,9 @@ void load_sys_basic_date_settings_screen() {
     lv_obj_set_style_border_color(g_ta_month, lv_color_hex(0x2196F3), 0);
     lv_obj_set_style_radius(g_ta_month, 3, 0);
     lv_obj_set_style_pad_all(g_ta_month, 5, 0);
+
+    // 为月份输入框添加键盘事件处理
+     lv_obj_add_event_cb(g_ta_month, textarea_keypad_cb, LV_EVENT_KEY, NULL);
 
     char month_buf[8];
     sprintf(month_buf, "%02d", current_month);
@@ -850,6 +1107,9 @@ void load_sys_basic_date_settings_screen() {
     sprintf(day_buf, "%02d", current_day);
     lv_textarea_set_text(g_ta_day, day_buf);
 
+    // 为日期输入框添加键盘事件处理
+    lv_obj_add_event_cb(g_ta_day, textarea_keypad_cb, LV_EVENT_KEY, NULL);
+
     // 添加输入框事件
     lv_obj_add_event_cb(g_ta_year, date_textarea_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(g_ta_month, date_textarea_cb, LV_EVENT_READY, NULL);
@@ -863,9 +1123,11 @@ void load_sys_basic_date_settings_screen() {
     lv_obj_set_style_border_width(btn_cont, 0, LV_PART_MAIN); 
     lv_obj_set_style_bg_opa(btn_cont, LV_OPA_TRANSP, LV_PART_MAIN); 
     lv_obj_clear_flag(btn_cont, LV_OBJ_FLAG_SCROLLABLE);
-    
+
     //确认按键
     g_btn_confirm = create_form_btn (btn_cont, "确认", date_confirm_cb,  NULL);
+
+    lv_obj_add_event_cb(g_btn_confirm, textarea_keypad_cb, LV_EVENT_KEY, NULL);
 
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
@@ -879,7 +1141,6 @@ void load_sys_basic_date_settings_screen() {
 
     // 设置初始焦点为年份输入框
     lv_group_focus_obj(g_ta_year);
-    lv_group_focus_obj(g_btn_confirm);
 
     // 加载屏幕并销毁其他屏幕
     lv_screen_load(scr_basic_date_setting);
@@ -912,13 +1173,13 @@ static const char* date_format_names[] = {
 
 // 格式示例数组（用于预览）
 static const char* date_format_examples[] = {
-    "2024-01-15",
-    "2024/01/15",
-    "2024年01月15日",
-    "15-01-2024",
-    "15/01/2024",
-    "01-15-2024",
-    "01/15/2024"
+    "2026-03-15",
+    "2026/03/15",
+    "2026年03月15日",
+    "15-03-2026",
+    "15/03/2026",
+    "03-15-2026",
+    "03/15/2026"
 };
 
 // 当前选中的格式索引（可以从系统配置读取）
@@ -936,33 +1197,66 @@ static void save_date_format_to_system(int format_index) {
 static void date_format_dropdown_keypad_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *dropdown = (lv_obj_t*)lv_event_get_target(e);
-    lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
     
     if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
         
-        if (key == LV_KEY_UP) {
-            if (!lv_dropdown_is_open(dropdown)) {
-                lv_group_focus_prev(group);
-            }
-        } else if (key == LV_KEY_DOWN) {
-            if (!lv_dropdown_is_open(dropdown)) {
-                lv_group_focus_next(group);
-            }
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_basic_date_screen();
         } else if (key == LV_KEY_ENTER) {
+            // ENTER键：如果下拉框关闭则打开，如果已打开则选中当前项
+            lv_indev_wait_release(lv_indev_get_act());
             if (lv_dropdown_is_open(dropdown)) {
                 lv_dropdown_close(dropdown);
+                // 焦点移动到按钮
+                lv_group_focus_obj(g_btn_confirm);
             } else {
                 lv_dropdown_open(dropdown);
             }
-        } else if (key == LV_KEY_ESC) {
-            if (lv_dropdown_is_open(dropdown)) {
-                lv_dropdown_close(dropdown);
-            } else {
-                load_sys_basic_date_screen(); 
-                lv_indev_wait_release(lv_indev_get_act());
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：如果下拉框关闭，焦点移动到按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            if (!lv_dropdown_is_open(dropdown)) {
+                lv_group_focus_obj(g_btn_confirm);
+            }
+        } else if (key == LV_KEY_UP) {
+            // 上键：如果下拉框关闭，焦点移动到按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            if (!lv_dropdown_is_open(dropdown)) {
+                lv_group_focus_obj(g_btn_confirm);
             }
         }
+    }
+}
+
+// 按钮键盘导航回调
+static void date_format_btn_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_basic_date_screen();
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发按钮点击事件
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            // 模拟点击事件
+            lv_obj_send_event(g_btn_confirm, LV_EVENT_CLICKED, NULL);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_date_format);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_date_format);
+        } 
     }
 }
 
@@ -989,16 +1283,8 @@ static void date_format_dropdown_cb(lv_event_t *e) {
 // 确认按钮回调
 static void format_confirm_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY){
-        key = lv_event_get_key(e);
-
-        if(key == LV_KEY_ESC){
-            load_sys_basic_date_screen(); 
-            lv_indev_wait_release(lv_indev_get_act());
-            return; 
-        } else if(code == LV_EVENT_CLICKED || key == LV_KEY_ENTER) {
+    
+    if(code == LV_EVENT_CLICKED) {
             lv_indev_wait_release(lv_indev_get_act()); 
 
             // 获取选中的格式索引
@@ -1013,7 +1299,15 @@ static void format_confirm_cb(lv_event_t *e) {
             // 返回上一级界面（日期主界面）
             load_sys_basic_date_screen();
         }
+}
+
+// 屏幕删除时的清理回调
+static void screen_delete_cb(lv_event_t *e) {
+    if (scr_basic_date_format) {
+        scr_basic_date_format = nullptr;
     }
+    g_dropdown_date_format = nullptr;
+    g_btn_confirm = nullptr;
 }
 
 void load_sys_basic_date_format_screen() {
@@ -1028,13 +1322,11 @@ void load_sys_basic_date_format_screen() {
     UiManager::getInstance()->registerScreen(ScreenType::SYS_BASIC_DATE_FORMAT, &scr_basic_date_format);
 
     // 屏幕删除回调
-    lv_obj_add_event_cb(scr_basic_date_format, [](lv_event_t *e) {
-        scr_basic_date_format = nullptr;
-        g_dropdown_date_format = nullptr;
-        g_btn_confirm = nullptr;
-    }, LV_EVENT_DELETE, NULL);
-
+    lv_obj_add_event_cb(scr_basic_date_format, screen_delete_cb, LV_EVENT_DELETE, NULL);
+    // 初始化键盘组
     UiManager::getInstance()->resetKeypadGroup();
+    lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
+    lv_group_set_editing(group, false);
 
     // 内容区域
     lv_obj_t *content = parts.content;
@@ -1042,8 +1334,8 @@ void load_sys_basic_date_format_screen() {
     // 设置内容区域为列布局
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(content, 20, 0);
-    lv_obj_set_style_pad_row(content, 15, 0);
+    lv_obj_set_style_pad_all(content, 15, 0);
+    lv_obj_set_style_pad_row(content, 12, 0);
 
     // ===== 标题提示 =====
     lv_obj_t *label_hint = lv_label_create(content);
@@ -1076,7 +1368,7 @@ void load_sys_basic_date_format_screen() {
     char preview_text[64];
     snprintf(preview_text, sizeof(preview_text), "预览: %s", date_format_examples[g_current_date_format]);
     lv_label_set_text(preview_label, preview_text);
-    lv_obj_set_style_text_color(preview_label, lv_color_hex(0x2196F3), 0);  // 蓝色文字
+    lv_obj_set_style_text_color(preview_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(preview_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(preview_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(preview_label, LV_PCT(100));
@@ -1095,43 +1387,29 @@ void load_sys_basic_date_format_screen() {
 
     // 创建确认按钮
     g_btn_confirm = create_form_btn(btn_cont, "确认", format_confirm_cb, NULL);
-    lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    
+    // 为按钮添加键盘导航回调
+    lv_obj_add_event_cb(g_btn_confirm, date_format_btn_keypad_cb, LV_EVENT_KEY, NULL);
     
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    // 为按钮添加键盘导航回调
-    lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
-        lv_event_code_t code = lv_event_get_code(e);
-        lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
-        
-        if (code == LV_EVENT_KEY) {
-            uint32_t key = lv_event_get_key(e);
-            
-            if (key == LV_KEY_UP) {
-                lv_group_focus_prev(group);
-            } else if (key == LV_KEY_DOWN) {
-                lv_group_focus_next(group);
-            } else if (key == LV_KEY_ESC) {
-                load_sys_basic_date_screen();
-                lv_indev_wait_release(lv_indev_get_act());
-            }
-        }
-    }, LV_EVENT_KEY, NULL);
-
     // ===== 加入键盘组 =====
     UiManager::getInstance()->addObjToGroup(g_dropdown_date_format);
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
 
-    // 设置编辑模式
-    lv_group_set_editing(UiManager::getInstance()->getKeypadGroup(), false);
-    
-    // 为下拉框添加标志，使其可聚焦
+    // 设置下拉框和按钮为可聚焦
     lv_obj_add_flag(g_dropdown_date_format, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 
     // 设置初始焦点到下拉框
     lv_group_focus_obj(g_dropdown_date_format);
+
+    // 确保组不为空
+    if (lv_group_get_obj_count(group) > 0) {
+        lv_indev_set_group(lv_indev_get_act(), group);
+    }
 
     // 加载屏幕
     lv_screen_load(scr_basic_date_format);
@@ -1145,6 +1423,113 @@ static void save_volume_to_system(int volume, bool muted) {
     g_current_volume = volume;
     g_is_muted = muted;
     // TODO: 实际调用系统接口设置音量
+}
+
+// 设置焦点样式
+static void set_focus_style(lv_obj_t *obj, bool focused) {
+    if (focused) {
+        lv_obj_set_style_border_width(obj, 3, 0);
+        lv_obj_set_style_border_color(obj, lv_color_hex(0x2196F3), 0);
+        lv_obj_set_style_shadow_width(obj, 10, 0);
+        lv_obj_set_style_shadow_color(obj, lv_color_hex(0x2196F3), 0);
+        lv_obj_set_style_shadow_opa(obj, LV_OPA_50, 0);
+    } else {
+        lv_obj_set_style_border_width(obj, 1, 0);
+        lv_obj_set_style_border_color(obj, lv_color_hex(0x666666), 0);
+        lv_obj_set_style_shadow_width(obj, 0, 0);
+    }
+}
+
+// 键盘事件处理函数
+static void volume_keyboard_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        bool handled = false;
+        
+        switch(key) {
+            case LV_KEY_UP:
+                // 上键增加音量
+                if (g_slider_volume) {
+                    int val = lv_slider_get_value(g_slider_volume);
+                    val = LV_MIN(100, val + 5);
+                    lv_slider_set_value(g_slider_volume, val, LV_ANIM_ON);
+                    
+                    // 更新显示
+                    char buf[8];
+                    sprintf(buf, "%d%%", val);
+                    lv_label_set_text(g_label_volume_value, buf);
+                    
+                    // 自动处理静音状态
+                    if (val > 0 && g_is_muted) {
+                        lv_obj_clear_state(g_switch_mute, LV_STATE_CHECKED);
+                        g_is_muted = false;
+                    }
+                    handled = true;
+                }
+                break;
+                
+            case LV_KEY_DOWN:
+                // 下键减少音量
+                if (g_slider_volume) {
+                    int val = lv_slider_get_value(g_slider_volume);
+                    val = LV_MAX(0, val - 5);
+                    lv_slider_set_value(g_slider_volume, val, LV_ANIM_ON);
+                    
+                    // 更新显示
+                    char buf[8];
+                    sprintf(buf, "%d%%", val);
+                    lv_label_set_text(g_label_volume_value, buf);
+                    
+                    // 自动处理静音状态
+                    if (val == 0 && !g_is_muted) {
+                        lv_obj_add_state(g_switch_mute, LV_STATE_CHECKED);
+                        g_is_muted = true;
+                    }
+                    handled = true;
+                }
+                break;
+                
+            case LV_KEY_ENTER:  // Enter键确认保存
+                if (g_slider_volume) {
+                    int volume = lv_slider_get_value(g_slider_volume);
+                    bool muted = lv_obj_has_state(g_switch_mute, LV_STATE_CHECKED);
+                    
+                    save_volume_to_system(volume, muted);
+                    
+                    // 显示成功提示
+                    show_popup_msg("成功", "音量设置已保存", nullptr, "确定");
+                    handled = true;
+                }
+                break;
+                
+            case LV_KEY_ESC:  // ESC键返回
+                lv_indev_wait_release(lv_indev_get_act());
+                load_sys_settings_basic_screen();
+                handled = true;
+                break;
+                
+            case LV_KEY_LEFT:
+            case LV_KEY_RIGHT:
+                // 左右键切换焦点
+                lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
+                if (group) {
+                    if (key == LV_KEY_RIGHT) {
+                        lv_group_focus_next(group);
+                    } else {
+                        lv_group_focus_prev(group);
+                    }
+                    handled = true;
+                }
+                break;
+        }
+        
+        // 标记事件已处理
+        if (handled) {
+            lv_event_stop_processing(e);
+        }
+    }
 }
 
 // 滑块事件回调
@@ -1171,9 +1556,13 @@ static void volume_slider_cb(lv_event_t *e) {
             g_is_muted = true;
         }
     }
+    else if (code == LV_EVENT_KEY) {
+        // 不处理按键事件，由屏幕的事件处理函数处理
+        lv_event_stop_processing(e);
+    }
 }
 
-// 静音开关事件回调
+//静音开关事件回调
 static void mute_switch_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     
@@ -1196,36 +1585,9 @@ static void mute_switch_cb(lv_event_t *e) {
             lv_label_set_text(g_label_volume_value, buf);
         }
     }
-}
-
-// 确认按钮回调
-static void volume_confirm_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if (key == LV_KEY_ESC) {
-        load_sys_settings_basic_screen();
-        lv_indev_wait_release(lv_indev_get_act());
-        return;
-    }
-    
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
-        lv_indev_wait_release(lv_indev_get_act());
-        
-        int volume = lv_slider_get_value(g_slider_volume);
-        bool muted = lv_obj_has_state(g_switch_mute, LV_STATE_CHECKED);
-        
-        save_volume_to_system(volume, muted);
-        
-        // 显示成功提示
-        show_popup_msg("成功", "音量设置已保存", nullptr, "确定");
-        
-        // 返回基础设置界面
-        load_sys_settings_basic_screen();
+    else if (code == LV_EVENT_KEY) {
+        // 不处理按键事件，由屏幕的事件处理函数处理
+        lv_event_stop_processing(e);
     }
 }
 
@@ -1246,8 +1608,6 @@ void load_sys_basic_volume_settings_screen() {
         g_slider_volume = nullptr;
         g_label_volume_value = nullptr;
         g_switch_mute = nullptr;
-        g_btn_confirm = nullptr;
-        g_btn_cancel = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     UiManager::getInstance()->resetKeypadGroup();
@@ -1259,84 +1619,44 @@ void load_sys_basic_volume_settings_screen() {
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_all(content, 5, 0);
-    lv_obj_set_style_pad_row(content, 10, 0);
+    lv_obj_set_style_pad_row(content, 15, 0);
 
     // ===== 音量标题 =====
-    lv_obj_t *icon_label = lv_label_create(content);
-    lv_label_set_text(icon_label, "当前音量");
-    lv_obj_set_style_text_font(icon_label, &lv_font_montserrat_16, 0);  
-    lv_obj_set_style_text_color(icon_label, lv_color_hex(0x2196F3), 0);
+    lv_obj_t *title_label = lv_label_create(content);
+    lv_label_set_text(title_label, "当前音量");
+    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_16, 0);  
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0x2196F3), 0);
 
     // ===== 音量数值显示 =====
     g_label_volume_value = lv_label_create(content);
     char buf[16];
     sprintf(buf, "%d%%", g_current_volume);
     lv_label_set_text(g_label_volume_value, buf);
-    lv_obj_set_style_text_font(icon_label,&lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(g_label_volume_value, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(g_label_volume_value, lv_color_hex(0xFFFFFF), 0);
-    
-    lv_obj_align(icon_label, LV_ALIGN_TOP_LEFT, 10, 20);
-    lv_obj_align_to(g_label_volume_value, icon_label, LV_ALIGN_OUT_RIGHT_MID, 15, 0);
 
     // ===== 音量滑块 =====
-    lv_obj_t *slider_cont = lv_obj_create(content);
-    lv_obj_set_size(slider_cont, LV_PCT(80), LV_SIZE_CONTENT);
-    lv_obj_set_style_border_width(slider_cont, 0, 0);
-    lv_obj_set_style_bg_opa(slider_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(slider_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(slider_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(slider_cont, 8, 0);
-
-    // 减号按钮
-    lv_obj_t *btn_minus = lv_btn_create(slider_cont);
-    lv_obj_set_size(btn_minus, 28, 28);
-    lv_obj_set_style_bg_color(btn_minus, lv_color_hex(0x2196F3), 0);
-    lv_obj_t *label_minus = lv_label_create(btn_minus);
-    lv_label_set_text(label_minus, "-");
-    lv_obj_center(label_minus);
-
-    // 滑块
-    g_slider_volume = lv_slider_create(slider_cont);
-    lv_obj_set_width(g_slider_volume, 80);
+    g_slider_volume = lv_slider_create(content);
+    lv_obj_set_width(g_slider_volume, LV_PCT(70));
     lv_slider_set_range(g_slider_volume, 0, 100);
     lv_slider_set_value(g_slider_volume, g_current_volume, LV_ANIM_OFF);
     lv_obj_add_event_cb(g_slider_volume, volume_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_set_style_bg_color(g_slider_volume, lv_color_hex(0xFFFFFF), LV_PART_INDICATOR);
-
-    // 加号按钮
-    lv_obj_t *btn_plus = lv_btn_create(slider_cont);
-    lv_obj_set_size(btn_plus, 28, 28);
-    lv_obj_set_style_bg_color(btn_plus, lv_color_hex(0x2196F3), 0);
-    lv_obj_t *label_plus = lv_label_create(btn_plus);
-    lv_label_set_text(label_plus, "+");
-    lv_obj_center(label_plus);
-
-    // 为加减按钮添加点击事件
-    lv_obj_add_event_cb(btn_minus, [](lv_event_t *e) {
-        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-            int val = lv_slider_get_value(g_slider_volume);
-            val = val > 0 ? val - 10 : 0;
-            lv_slider_set_value(g_slider_volume, val, LV_ANIM_ON);
-            volume_slider_cb(e);
-        }
-    }, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_add_event_cb(btn_plus, [](lv_event_t *e) {
-        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-            int val = lv_slider_get_value(g_slider_volume);
-            val = val < 100 ? val + 10 : 100;
-            lv_slider_set_value(g_slider_volume, val, LV_ANIM_ON);
-            volume_slider_cb(e);
-        }
-    }, LV_EVENT_CLICKED, NULL);
+    
+    // 设置滑块样式
+    lv_obj_set_style_bg_color(g_slider_volume, lv_color_hex(0x2196F3), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(g_slider_volume, 5, LV_PART_MAIN);
+    lv_obj_set_style_radius(g_slider_volume, 5, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(g_slider_volume, 10, LV_PART_KNOB);
+    lv_obj_set_style_border_width(g_slider_volume, 1, 0);
+    lv_obj_set_style_border_color(g_slider_volume, lv_color_hex(0x666666), 0);
 
     // ===== 静音开关 =====
     lv_obj_t *mute_cont = lv_obj_create(content);
-    lv_obj_set_size(mute_cont, LV_PCT(80), LV_SIZE_CONTENT);
+    lv_obj_set_size(mute_cont, LV_PCT(70), LV_SIZE_CONTENT);
     lv_obj_set_style_border_width(mute_cont, 0, 0);
     lv_obj_set_style_bg_opa(mute_cont, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(mute_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(mute_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(mute_cont, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(mute_cont, 15, 0);
 
     lv_obj_t *mute_label = lv_label_create(mute_cont);
@@ -1348,33 +1668,68 @@ void load_sys_basic_volume_settings_screen() {
         lv_obj_add_state(g_switch_mute, LV_STATE_CHECKED);
     }
     lv_obj_add_event_cb(g_switch_mute, mute_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    
+    // 设置开关样式
+    lv_obj_set_style_bg_color(g_switch_mute, lv_color_hex(0x444444), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(g_switch_mute, lv_color_hex(0x2196F3), LV_PART_INDICATOR | LV_STATE_CHECKED);
 
-    // ===== 按钮容器 =====
-    lv_obj_t* btn_cont = lv_obj_create(content);
-    lv_obj_set_size(btn_cont, LV_PCT(90), 70);
-    lv_obj_set_flex_flow(btn_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_border_width(btn_cont, 0, LV_PART_MAIN); 
-    lv_obj_set_style_bg_opa(btn_cont, LV_OPA_TRANSP, LV_PART_MAIN); 
-    lv_obj_clear_flag(btn_cont, LV_OBJ_FLAG_SCROLLABLE);
+    // ===== 操作提示 =====
+    lv_obj_t *hint_label = lv_label_create(content);
+    lv_label_set_text(hint_label, "上下键: 调节音量");
+    lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(hint_label, lv_color_hex(0xAAAAAA), 0);
+    lv_obj_set_style_text_align(hint_label, LV_TEXT_ALIGN_CENTER, 0);
 
-    // 确认按钮
-    g_btn_confirm = create_form_btn (btn_cont, "确认", volume_confirm_cb, NULL);
-  
-    lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm= nullptr;
-    }, LV_EVENT_DELETE, NULL);
+     // ===== 加入键盘组 =====
+    lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
+    
+    // 清除原有的组对象
+    lv_group_remove_all_objs(group);
+    
+    // 只添加滑块和开关到键盘组
+    lv_group_add_obj(group, g_slider_volume);
+    lv_group_add_obj(group, g_switch_mute);
 
-    // ===== 加入键盘组 =====
-    UiManager::getInstance()->addObjToGroup(g_slider_volume);
-    UiManager::getInstance()->addObjToGroup(g_switch_mute);
-    UiManager::getInstance()->addObjToGroup(g_btn_confirm);
-    UiManager::getInstance()->addObjToGroup(btn_minus);
-    UiManager::getInstance()->addObjToGroup(btn_plus);
+    // 设置对象的键盘输入模式
+    lv_obj_set_scroll_dir(g_slider_volume, LV_DIR_NONE);
+    lv_obj_clear_flag(g_slider_volume, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_slider_volume, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    
+    lv_obj_set_scroll_dir(g_switch_mute, LV_DIR_NONE);
+    lv_obj_clear_flag(g_switch_mute, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_switch_mute, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 
     // 设置初始焦点
     lv_group_focus_obj(g_slider_volume);
-    lv_group_focus_obj(g_btn_confirm);
+    
+    // 为焦点对象添加样式变化
+    lv_obj_add_event_cb(g_slider_volume, [](lv_event_t *e) {
+        lv_obj_t *obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        set_focus_style(obj, lv_event_get_code(e) == LV_EVENT_FOCUSED);
+    }, LV_EVENT_FOCUSED, NULL);
+    
+    lv_obj_add_event_cb(g_slider_volume, [](lv_event_t *e) {
+        lv_obj_t *obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        set_focus_style(obj, false);
+    }, LV_EVENT_DEFOCUSED, NULL);
+    
+    lv_obj_add_event_cb(g_switch_mute, [](lv_event_t *e) {
+        lv_obj_t *obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        set_focus_style(obj, lv_event_get_code(e) == LV_EVENT_FOCUSED);
+    }, LV_EVENT_FOCUSED, NULL);
+    
+    lv_obj_add_event_cb(g_switch_mute, [](lv_event_t *e) {
+        lv_obj_t *obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        set_focus_style(obj, false);
+    }, LV_EVENT_DEFOCUSED, NULL);
+
+    // 确保屏幕可以接收键盘事件
+    lv_obj_clear_flag(scr_basic_volume, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(scr_basic_volume, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scroll_dir(scr_basic_volume, LV_DIR_NONE);
+    
+    // 为主屏幕添加键盘事件监听
+    lv_obj_add_event_cb(scr_basic_volume, volume_keyboard_cb, LV_EVENT_KEY, NULL);
 
     // 加载屏幕
     lv_screen_load(scr_basic_volume);
@@ -1414,6 +1769,35 @@ static void save_language_to_system(int lang_index) {
     // 例如：set_system_language(language_codes[lang_index]);
 }
 
+// 按钮键盘导航回调
+static void language_btn_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发按钮点击事件
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            // 模拟点击事件
+            lv_obj_send_event(g_btn_confirm, LV_EVENT_CLICKED, NULL);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_language);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_language);
+        } 
+    }
+}
+
 // 下拉框值改变回调
 static void language_dropdown_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -1439,19 +1823,8 @@ static void language_dropdown_cb(lv_event_t *e) {
 // 确认按钮回调
 static void language_confirm_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
 
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        load_sys_settings_basic_screen();
-        lv_indev_wait_release(lv_indev_get_act());
-        return;
-    }
-    
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+    if(code == LV_EVENT_CLICKED ) {
         lv_indev_wait_release(lv_indev_get_act());
         
         // 获取选中的语言索引
@@ -1492,6 +1865,8 @@ void load_sys_basic_language_settings_screen() {
     }, LV_EVENT_DELETE, NULL);
 
     UiManager::getInstance()->resetKeypadGroup();
+    lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
+    lv_group_set_editing(group, false);
 
     // 内容区域
     lv_obj_t *content = parts.content;
@@ -1522,6 +1897,9 @@ void load_sys_basic_language_settings_screen() {
         language_options,           // 选项数据
         g_current_language          // 默认选中当前语言
     );
+
+    // 为下拉框添加键盘导航回调
+    lv_obj_add_event_cb(g_dropdown_language, dropdown_keypad_cb, LV_EVENT_KEY, NULL);
     
     // 为下拉框添加值改变事件
     lv_obj_t *preview_label = lv_label_create(content);
@@ -1534,9 +1912,9 @@ void load_sys_basic_language_settings_screen() {
     lv_obj_set_style_text_font(preview_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(preview_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(preview_label, LV_PCT(100));
-    
-    // 为下拉框添加事件回调
-    lv_obj_add_event_cb(g_dropdown_language, language_dropdown_cb, LV_EVENT_VALUE_CHANGED, preview_label);
+
+    // 为下拉框添加值改变事件，更新预览
+    lv_obj_add_event_cb(g_dropdown_language, dropdown_keypad_cb, LV_EVENT_VALUE_CHANGED, preview_label);
 
     // ===== 按钮容器 =====
     lv_obj_t* btn_cont = lv_obj_create(content);
@@ -1549,7 +1927,9 @@ void load_sys_basic_language_settings_screen() {
 
     // 确认按钮
     g_btn_confirm = create_form_btn(btn_cont, "确认", language_confirm_cb, NULL);
-  
+    // 为按钮添加键盘导航回调
+    lv_obj_add_event_cb(g_btn_confirm, dropdown_keypad_cb, LV_EVENT_KEY, NULL);
+    
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
@@ -1558,11 +1938,17 @@ void load_sys_basic_language_settings_screen() {
     UiManager::getInstance()->addObjToGroup(g_dropdown_language);
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
 
-    // 设置编辑模式
-    lv_group_set_editing(UiManager::getInstance()->getKeypadGroup(), true);
+    // 设置下拉框和按钮为可聚焦
+    lv_obj_add_flag(g_dropdown_language, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 
     // 设置初始焦点到下拉框
     lv_group_focus_obj(g_dropdown_language);
+
+    // 确保组不为空
+    if (lv_group_get_obj_count(group) > 0) {
+        lv_indev_set_group(lv_indev_get_act(), group);
+    }
 
     // 加载屏幕
     lv_screen_load(scr_basic_language);
@@ -1571,6 +1957,7 @@ void load_sys_basic_language_settings_screen() {
 
 // =================基础设置-屏保时间设置================
 static const int screensafe_time_options[] = {0, 1, 3, 5, 10, 15, 30, 60, 120, 180, 300};
+static const int SCREENSAFE_TIME_COUNT = sizeof(screensafe_time_options) / sizeof(screensafe_time_options[0]);
 static const char* screensafe_time_names[] = {
     "从不", 
     "1分钟", 
@@ -1584,15 +1971,6 @@ static const char* screensafe_time_names[] = {
     "3小时", 
     "5小时"
 };
-static const int SCREENSAFE_TIME_COUNT = sizeof(screensafe_time_options) / sizeof(screensafe_time_options[0]);
-
-static lv_obj_t *g_dropdown_screensafe = nullptr;  // 屏保时间下拉框
-static lv_obj_t *g_switch_screensafe_enable = nullptr;  // 屏保启用开关
-static lv_obj_t *g_label_preview = nullptr;  // 预览标签
-
-// 当前屏保设置
-static bool g_screensafe_enabled = true;
-static int g_screensafe_time_index = 5;  // 默认30分钟
 
 // 保存屏保设置到系统
 static void save_screensafe_to_system(bool enabled, int time_index) {
@@ -1606,78 +1984,32 @@ static void save_screensafe_to_system(bool enabled, int time_index) {
     // TODO: 实际调用系统接口设置屏保
 }
 
-// 开关事件回调
-static void screensafe_switch_cb(lv_event_t *e) {
+// 按钮键盘导航回调
+static void screensafe_btn_keypad_cb(lv_event_t *e){
     lv_event_code_t code = lv_event_get_code(e);
-    
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *sw = (lv_obj_t *)lv_event_get_target(e);
-        bool is_checked = lv_obj_has_state(sw, LV_STATE_CHECKED);
-        
-        // 更新下拉框状态
-        if (g_dropdown_screensafe) {
-            if (is_checked) {
-                lv_obj_clear_state(g_dropdown_screensafe, LV_STATE_DISABLED);
-            } else {
-                lv_obj_add_state(g_dropdown_screensafe, LV_STATE_DISABLED);
-            }
-        }
-        
-        // 更新预览
-        if (g_label_preview) {
-            if (is_checked) {
-                int selected = lv_dropdown_get_selected(g_dropdown_screensafe);
-                char buf[64];
-                if (selected == 0) {
-                    snprintf(buf, sizeof(buf), "屏保已启用，不会自动关闭屏幕");
-                } else {
-                    snprintf(buf, sizeof(buf), "无操作 %s 后关闭屏幕", screensafe_time_names[selected]);
-                }
-                lv_label_set_text(g_label_preview, buf);
-            } else {
-                lv_label_set_text(g_label_preview, "屏保已禁用");
-            }
-        }
-    }
-}
-
-// 下拉框键盘导航回调
-static void screensafe_dropdown_keypad_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *dropdown = (lv_obj_t*)lv_event_get_target(e);
-    lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
     
     if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
         
-        if (key == LV_KEY_UP || key == LV_KEY_DOWN) {
-            // 当下拉列表未展开时，上下键用于焦点移动
-            if (!lv_dropdown_is_open(dropdown)) {
-                if (key == LV_KEY_UP) {
-                    lv_group_focus_prev(group);
-                } else if (key == LV_KEY_DOWN) {
-                    lv_group_focus_next(group);
-                }
-            }    
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发按钮点击事件
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            // 模拟点击事件
+            lv_obj_send_event(g_btn_confirm, LV_EVENT_CLICKED, NULL);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_screensafe);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_screensafe);
         } 
-        
-        else if (key == LV_KEY_ENTER) {
-            // 回车键切换下拉列表展开/收起
-            if (lv_dropdown_is_open(dropdown)) {
-                lv_dropdown_close(dropdown);
-            } else {
-                lv_dropdown_open(dropdown);
-            }
-        } else if (key == LV_KEY_ESC) {
-            // ESC键关闭下拉列表
-            if (lv_dropdown_is_open(dropdown)) {
-                lv_dropdown_close(dropdown);
-            } else {
-                // 如果没有展开，返回上级界面
-                load_sys_settings_basic_screen();
-                lv_indev_wait_release(lv_indev_get_act());
-            }
-        }
     }
 }
 
@@ -1705,22 +2037,11 @@ static void screensafe_dropdown_cb(lv_event_t *e) {
 // 确认按钮回调
 static void screensafe_confirm_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        load_sys_settings_basic_screen();
-        lv_indev_wait_release(lv_indev_get_act());
-        return;
-    }
     
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+    if(code == LV_EVENT_CLICKED ) {
         lv_indev_wait_release(lv_indev_get_act());
         
-        bool enabled = lv_obj_has_state(g_switch_screensafe_enable, LV_STATE_CHECKED);
+        bool enabled = true; //默认开启
         int time_index = lv_dropdown_get_selected(g_dropdown_screensafe);
         
         save_screensafe_to_system(enabled, time_index);
@@ -1745,7 +2066,6 @@ void load_sys_basic_screensafe_settings_screen() {
     lv_obj_add_event_cb(scr_basic_screensafe, [](lv_event_t *e) {
         scr_basic_screensafe = nullptr;
         g_dropdown_screensafe = nullptr;
-        g_switch_screensafe_enable = nullptr;
         g_label_preview = nullptr;
         g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
@@ -1759,27 +2079,6 @@ void load_sys_basic_screensafe_settings_screen() {
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_all(content, 20, 0);
     lv_obj_set_style_pad_row(content, 15, 0);
-
-    // ===== 启用/禁用开关 =====
-    lv_obj_t *switch_cont = lv_obj_create(content);
-    lv_obj_set_size(switch_cont, LV_PCT(90), LV_SIZE_CONTENT);
-    lv_obj_set_style_border_width(switch_cont, 0, 0);
-    lv_obj_set_style_bg_opa(switch_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(switch_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(switch_cont, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(switch_cont, 0, 0);
-
-    lv_obj_t *switch_label = lv_label_create(switch_cont);
-    lv_label_set_text(switch_label, "启用屏保");
-    lv_obj_set_style_text_color(switch_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(switch_label, &lv_font_montserrat_16, 0);
-
-    g_switch_screensafe_enable = lv_switch_create(switch_cont);
-    lv_obj_set_size(g_switch_screensafe_enable, 40, 20);
-    if (g_screensafe_enabled) {
-        lv_obj_add_state(g_switch_screensafe_enable, LV_STATE_CHECKED);
-    }
-    lv_obj_add_event_cb(g_switch_screensafe_enable, screensafe_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // ===== 屏保时间下拉框 =====
     // 准备下拉框选项数据
@@ -1797,29 +2096,19 @@ void load_sys_basic_screensafe_settings_screen() {
     );
     
     // 为下拉框添加键盘导航回调
-    lv_obj_add_event_cb(g_dropdown_screensafe, screensafe_dropdown_keypad_cb, LV_EVENT_KEY, NULL);
+    lv_obj_add_event_cb(g_dropdown_screensafe, dropdown_keypad_cb, LV_EVENT_KEY, NULL);
     
     // 为下拉框添加值改变事件
     lv_obj_add_event_cb(g_dropdown_screensafe, screensafe_dropdown_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // 根据开关状态设置下拉框状态
-    if (!g_screensafe_enabled) {
-        lv_obj_add_state(g_dropdown_screensafe, LV_STATE_DISABLED);
-    }
 
     // ===== 预览标签 =====
     g_label_preview = lv_label_create(content);
-    if (g_screensafe_enabled) {
         char buf[64];
         if (g_screensafe_time_index == 0) {
             snprintf(buf, sizeof(buf), "屏保已启用，不会自动关闭屏幕");
         } else {
             snprintf(buf, sizeof(buf), "无操作 %s 后关闭屏幕", screensafe_time_names[g_screensafe_time_index]);
         }
-        lv_label_set_text(g_label_preview, buf);
-    } else {
-        lv_label_set_text(g_label_preview, "屏保已禁用");
-    }
     lv_obj_set_style_text_color(g_label_preview, lv_color_hex(0x2196F3), 0);
     lv_obj_set_style_text_font(g_label_preview, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(g_label_preview, LV_TEXT_ALIGN_CENTER, 0);
@@ -1838,43 +2127,23 @@ void load_sys_basic_screensafe_settings_screen() {
     g_btn_confirm = create_form_btn(btn_cont, "确认", screensafe_confirm_cb, NULL);
     lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     
+    // 为按钮添加键盘导航回调
+    lv_obj_add_event_cb(g_btn_confirm, screensafe_btn_keypad_cb, LV_EVENT_KEY, NULL);
+
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    // 为按钮添加键盘导航回调
-    lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
-        lv_event_code_t code = lv_event_get_code(e);
-        lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
-        
-        if (code == LV_EVENT_KEY) {
-            uint32_t key = lv_event_get_key(e);
-            
-            if (key == LV_KEY_UP) {
-                lv_group_focus_prev(group);
-            } else if (key == LV_KEY_DOWN) {
-                lv_group_focus_next(group);
-            } else if (key == LV_KEY_ESC) {
-                load_sys_settings_basic_screen();
-                lv_indev_wait_release(lv_indev_get_act());
-            }
-        }
-    }, LV_EVENT_KEY, NULL);
-
     // ===== 加入键盘组 =====
-    UiManager::getInstance()->addObjToGroup(g_switch_screensafe_enable);
     UiManager::getInstance()->addObjToGroup(g_dropdown_screensafe);
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
-
-    // 设置编辑模式
-    lv_group_set_editing(UiManager::getInstance()->getKeypadGroup(), true);
     
     // 为下拉框和开关添加标志，使其可聚焦
     lv_obj_add_flag(g_dropdown_screensafe, LV_OBJ_FLAG_CLICK_FOCUSABLE);
-    lv_obj_add_flag(g_switch_screensafe_enable, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 
     // 设置初始焦点到开关
-    lv_group_focus_obj(g_btn_confirm);
+    lv_group_focus_obj(g_dropdown_screensafe);
 
     // 加载屏幕
     lv_screen_load(scr_basic_screensafe);
@@ -1893,22 +2162,75 @@ static void save_machine_id_to_system(const char* machine_id) {
     // TODO: 实际保存到系统配置
 }
 
+// 文本框键盘事件处理
+static void machine_id_textarea_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：退出编辑，焦点移动到确认按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_textarea_set_cursor_click_pos(g_ta_machine_id, false);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到确认按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_textarea_set_cursor_click_pos(g_ta_machine_id, false);
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到确认按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_textarea_set_cursor_click_pos(g_ta_machine_id, false);
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：在文本输入框内不做特殊处理，保持编辑状态
+            lv_indev_wait_release(lv_indev_get_act());
+        }
+    }
+}
+
+// 按钮键盘事件处理
+static void machine_id_btn_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级界面
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发按钮点击事件
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            const char* machine_id = lv_textarea_get_text(g_ta_machine_id);
+            
+            if (strlen(machine_id) == 0) {
+                show_popup_msg("提示", "请输入机器号", nullptr, "确定");
+                return;
+            }
+            
+            save_machine_id_to_system(machine_id);
+            show_popup_msg("成功", "机器号已保存", nullptr, "确定");
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到文本框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_ta_machine_id);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到文本框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_ta_machine_id);
+        }
+    }
+}
+
 // 确认按钮回调
 static void machine_id_confirm_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        load_sys_settings_basic_screen();
-        lv_indev_wait_release(lv_indev_get_act());
-        return;
-    }
-    
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+    if (code == LV_EVENT_CLICKED) {
         lv_indev_wait_release(lv_indev_get_act());
         
         const char* machine_id = lv_textarea_get_text(g_ta_machine_id);
@@ -1985,7 +2307,8 @@ void load_sys_basic_machine_id_screen() {
     lv_obj_set_style_bg_color(g_ta_machine_id, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_color(g_ta_machine_id, lv_color_hex(0x2196F3), 0);
     
-    lv_textarea_set_text(g_ta_machine_id, g_machine_id);
+    // 为文本框添加键盘事件处理
+    lv_obj_add_event_cb(g_ta_machine_id, machine_id_textarea_keypad_cb, LV_EVENT_KEY, NULL);
 
     // 添加键盘完成事件
     lv_obj_add_event_cb(g_ta_machine_id, [](lv_event_t *e) {
@@ -2019,7 +2342,10 @@ void load_sys_basic_machine_id_screen() {
 
      // 确认按钮
     g_btn_confirm= create_form_btn (btn_cont, "确认", machine_id_confirm_cb, nullptr);
-  
+
+    // 为按钮添加键盘事件处理
+    lv_obj_add_event_cb(g_btn_confirm, machine_id_btn_keypad_cb, LV_EVENT_KEY, NULL);
+
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm= nullptr;
     }, LV_EVENT_DELETE, NULL);
@@ -2029,15 +2355,15 @@ void load_sys_basic_machine_id_screen() {
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
 
     // 设置初始焦点
-    lv_group_focus_obj(g_btn_confirm);
+    lv_group_focus_obj(g_ta_machine_id);
 
     // 加载屏幕
     lv_screen_load(scr_basic_machine_id);
     UiManager::getInstance()->destroyAllScreensExcept(scr_basic_machine_id);
 }
 
-// =================基础设置-返回主界面时间设置（三级）================
-// 返回时间选项（单位：秒）
+// =================基础设置-返回主界面时间设置（三级）- 下拉框版本 ================
+// 返回时间选项
 static const int return_time_options[] = {0, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600};
 static const char* return_time_names[] = {
     "从不返回",
@@ -2056,6 +2382,7 @@ static const int RETURN_TIME_COUNT = sizeof(return_time_options) / sizeof(return
 
 static int g_return_time_index = 3;  // 默认15秒
 
+
 // 保存返回时间设置
 static void save_return_time_to_system(int time_index) {
     g_return_time_index = time_index;
@@ -2065,42 +2392,45 @@ static void save_return_time_to_system(int time_index) {
     // TODO: 实际保存到系统配置
 }
 
-// 确认按钮回调
-static void return_time_confirm_cb(lv_event_t *e) {
+// 按钮键盘导航回调
+static void return_time_btn_keypad_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        load_sys_settings_basic_screen();
-        lv_indev_wait_release(lv_indev_get_act());
-        return;
-    }
     
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
-        lv_indev_wait_release(lv_indev_get_act());
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
         
-        int selected = lv_roller_get_selected(g_roller_return_time);
-        save_return_time_to_system(selected);
-        
-        show_popup_msg("成功", "返回时间已保存", nullptr, "确定");
-        load_sys_settings_basic_screen();
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发按钮点击事件
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            // 模拟点击事件
+            lv_obj_send_event(g_btn_confirm, LV_EVENT_CLICKED, NULL);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_return_time);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_return_time);
+        } 
     }
 }
 
-// 滚轮值改变回调（用于预览）
-static void return_time_roller_cb(lv_event_t *e) {
+// 下拉框值改变回调
+static void return_time_dropdown_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     
     if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *roller = (lv_obj_t*)lv_event_get_target(e);
+        lv_obj_t *dropdown = (lv_obj_t*)lv_event_get_target(e);
         lv_obj_t *preview_label = (lv_obj_t*)lv_event_get_user_data(e);
         
         if (preview_label) {
-            int selected = lv_roller_get_selected(roller);
+            int selected = lv_dropdown_get_selected(dropdown);
             char buf[64];
             if (return_time_options[selected] == 0) {
                 snprintf(buf, sizeof(buf), "不会自动返回主界面");
@@ -2111,6 +2441,28 @@ static void return_time_roller_cb(lv_event_t *e) {
             lv_label_set_text(preview_label, buf);
         }
     }
+}
+
+//确认按钮回调
+static void return_time_confirm_cb(lv_event_t *e){
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if(code == LV_EVENT_CLICKED) {
+            lv_indev_wait_release(lv_indev_get_act()); 
+
+            // 获取选中的格式索引
+            int selected = lv_dropdown_get_selected(g_dropdown_return_time);
+            
+            // 保存到系统
+            save_return_time_to_system(selected);
+            
+            // 显示成功提示（使用现有的弹窗）
+            show_popup_msg("成功", "返回时间已保存", nullptr, "确定");
+            
+            // 返回上一级界面（日期主界面）
+            load_sys_settings_basic_screen();
+        }
+
 }
 
 void load_sys_basic_return_time_screen() {
@@ -2126,24 +2478,20 @@ void load_sys_basic_return_time_screen() {
     // 屏幕删除回调
     lv_obj_add_event_cb(scr_basic_return_time, [](lv_event_t *e) {
         scr_basic_return_time = nullptr;
-        g_roller_return_time = nullptr;
+        g_dropdown_return_time = nullptr;
         g_btn_confirm = nullptr;
-        g_btn_cancel = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     UiManager::getInstance()->resetKeypadGroup();
 
     lv_obj_t *content = parts.content;
-
-    // 设置内容区域为列布局
-    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(content, 5, 0);
-    lv_obj_set_style_pad_row(content, 8, 0);
-
-    // 标题提示
-    lv_obj_t *title_cont = lv_obj_create(content);
-    lv_obj_set_size(title_cont, LV_PCT(90), LV_SIZE_CONTENT);
+    
+    // 创建表单容器
+    lv_obj_t *form_cont = create_form_container(content);
+    
+    // 标题容器
+    lv_obj_t *title_cont = lv_obj_create(form_cont);
+    lv_obj_set_size(title_cont, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_border_width(title_cont, 0, 0);
     lv_obj_set_style_bg_opa(title_cont, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(title_cont, LV_FLEX_FLOW_ROW);
@@ -2157,7 +2505,7 @@ void load_sys_basic_return_time_screen() {
     lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_14, 0);
 
     // 当前设置显示
-    lv_obj_t *current_label = lv_label_create(content);
+    lv_obj_t *current_label = lv_label_create(form_cont);
     char current_buf[64];
     if (return_time_options[g_return_time_index] == 0) {
         snprintf(current_buf, sizeof(current_buf), "当前设置: 从不返回");
@@ -2168,81 +2516,76 @@ void load_sys_basic_return_time_screen() {
     lv_label_set_text(current_label, current_buf);
     lv_obj_set_style_text_color(current_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(current_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_pad_bottom(current_label, 20, 0);
 
-    // 滚轮容器（带边框效果）
-    lv_obj_t *roller_cont = lv_obj_create(content);
-    lv_obj_set_size(roller_cont, LV_PCT(100), 120);
-    lv_obj_set_style_bg_opa(roller_cont, LV_OPA_TRANSP, 0);  // 背景透明
-    lv_obj_set_style_border_width(roller_cont, 0, 0);        // 无边框
-    lv_obj_set_style_pad_all(roller_cont, 0, 0);             // 无内边距
-    lv_obj_center(roller_cont);
-
-    // 创建滚轮
-    g_roller_return_time = lv_roller_create(roller_cont);
-    lv_obj_center(g_roller_return_time);
-    lv_obj_set_style_bg_opa(g_roller_return_time, LV_OPA_TRANSP, 0);
     
-    // 构建选项字符串
-    char options[512] = "";
-    for (int i = 0; i < RETURN_TIME_COUNT; i++) {
-        strcat(options, return_time_names[i]);
-        if (i < RETURN_TIME_COUNT - 1) {
-            strcat(options, "\n");
-        }
+    // 创建下拉框选项列表
+    std::vector<std::pair<int, std::string>> options;
+        for (int i = 0; i < RETURN_TIME_COUNT; i++) {
+            options.emplace_back(i, return_time_names[i]);
     }
-    
-    lv_roller_set_options(g_roller_return_time, options, LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_visible_row_count(g_roller_return_time, 5);
-    lv_obj_set_width(g_roller_return_time, 180);
-    lv_obj_set_style_text_font(g_roller_return_time, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_align(g_roller_return_time, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(g_roller_return_time, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_color(g_roller_return_time, lv_color_hex(0x333333), 0);
-    
-    lv_roller_set_selected(g_roller_return_time, g_return_time_index, LV_ANIM_OFF);
 
-    // 预览标签
-    lv_obj_t *preview_label = lv_label_create(content);
+    // 创建下拉框
+    g_dropdown_return_time = create_form_dropdown(form_cont, "返回时间:", options, g_return_time_index);
+    
+    // 设置下拉框样式
+    lv_obj_set_style_bg_color(g_dropdown_return_time, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(g_dropdown_return_time, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_color(g_dropdown_return_time, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(g_dropdown_return_time, 1, 0);
+    
+    // 为下拉框添加键盘事件处理
+    lv_obj_add_event_cb(g_dropdown_return_time, dropdown_keypad_cb, LV_EVENT_KEY, NULL);
+    
+    // 为下拉框设置事件回调
+    lv_obj_t *preview_label = lv_label_create(form_cont);
+    lv_obj_set_style_pad_top(preview_label, 20, 0);
+    
+    // 设置初始预览文本
+    char preview_buf[64];
     if (return_time_options[g_return_time_index] == 0) {
-        lv_label_set_text(preview_label, "不会自动返回主界面");
+        snprintf(preview_buf, sizeof(preview_buf), "不会自动返回主界面");
     } else {
-        char preview_buf[64];
         snprintf(preview_buf, sizeof(preview_buf), "预览: 无操作 %s 后自动返回", 
                  return_time_names[g_return_time_index]);
-        lv_label_set_text(preview_label, preview_buf);
     }
+    lv_label_set_text(preview_label, preview_buf);
     lv_obj_set_style_text_color(preview_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(preview_label, &lv_font_montserrat_14, 0);
-
-    // 为滚轮添加值改变事件
-    lv_obj_add_event_cb(g_roller_return_time, return_time_roller_cb, 
-                        LV_EVENT_VALUE_CHANGED, preview_label);
+    
+    // 为下拉框添加值改变事件
+    lv_obj_add_event_cb(g_dropdown_return_time, dropdown_keypad_cb, LV_EVENT_VALUE_CHANGED, preview_label);
 
     // 按钮容器
-    lv_obj_t* btn_cont = lv_obj_create(content);
-    lv_obj_set_size(btn_cont, LV_PCT(90), 70);
+    lv_obj_t* btn_cont = lv_obj_create(form_cont);
+    lv_obj_set_size(btn_cont, LV_PCT(100), 70);
     lv_obj_set_flex_flow(btn_cont, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_border_width(btn_cont, 0, LV_PART_MAIN); 
     lv_obj_set_style_bg_opa(btn_cont, LV_OPA_TRANSP, LV_PART_MAIN); 
     lv_obj_clear_flag(btn_cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_top(btn_cont, 20, 0);
 
     // 确认按钮
-    g_btn_confirm = create_form_btn (btn_cont, "确认", return_time_confirm_cb, NULL);
- 
+    g_btn_confirm = create_form_btn(btn_cont, "确认", return_time_confirm_cb, NULL);
+    
+    // 为确认按钮添加键盘事件处理
+    lv_obj_add_event_cb(g_btn_confirm, dropdown_keypad_cb, LV_EVENT_KEY, NULL);
+
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
+        if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     // 加入键盘组
-    UiManager::getInstance()->addObjToGroup(g_roller_return_time);
+    UiManager::getInstance()->addObjToGroup(g_dropdown_return_time);
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
 
-    // 设置编辑模式（滚轮需要）
-    lv_group_set_editing(UiManager::getInstance()->getKeypadGroup(), true);
+    // 设置下拉框和按钮为可聚焦
+    lv_obj_add_flag(g_dropdown_return_time, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 
     // 设置初始焦点
-    lv_group_focus_obj(g_btn_confirm);
+    lv_group_focus_obj(g_dropdown_return_time);
 
     // 加载屏幕
     lv_screen_load(scr_basic_return_time);
@@ -2257,28 +2600,86 @@ static void save_admin_count_to_system(int count) {
     // TODO: 实际保存到系统配置，例如写入配置文件或数据库
 }
 
+// 文本框键盘事件处理
+static void admin_count_textarea_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：退出编辑，焦点移动到确认按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_textarea_set_cursor_click_pos(g_ta_admin_count, false);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到确认按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_textarea_set_cursor_click_pos(g_ta_admin_count, false);
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到确认按钮
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_textarea_set_cursor_click_pos(g_ta_admin_count, false);
+            lv_group_focus_obj(g_btn_confirm);
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：在文本输入框内不做特殊处理，保持编辑状态
+            lv_indev_wait_release(lv_indev_get_act());
+        }
+    }
+}
+
+// 按钮键盘事件处理
+static void admin_count_btn_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级界面
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_ENTER) {
+            // ENTER键：触发按钮点击事件
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            const char* admin_count_str = lv_textarea_get_text(g_ta_admin_count);
+            
+            if (strlen(admin_count_str) == 0) {
+                show_popup_msg("提示", "请输入管理员数目", nullptr, "确定");
+                return;
+            }
+
+            int count = atoi(admin_count_str);
+            
+            save_admin_count_to_system(count);
+            show_popup_msg("成功", "管理员数目已保存", nullptr, "确定");
+            load_sys_settings_basic_screen();
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到文本框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_ta_admin_count);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到文本框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_ta_admin_count); ;
+        }
+    }
+}
+
+
 // 确认按钮回调
 static void admin_count_confirm_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        load_sys_settings_basic_screen();
-        lv_indev_wait_release(lv_indev_get_act());
-        return;
-    }
     
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+    if(code == LV_EVENT_CLICKED) {
         lv_indev_wait_release(lv_indev_get_act());
-        
+
         const char* count_str = lv_textarea_get_text(g_ta_admin_count);
-        
+
         if (strlen(count_str) == 0) {
             show_popup_msg("提示", "请输入管理员总数", nullptr, "确定");
+            lv_group_focus_obj(g_ta_admin_count);
             return;
         }
         
@@ -2287,6 +2688,7 @@ static void admin_count_confirm_cb(lv_event_t *e) {
         // 验证输入范围（根据实际需求调整）
         if (count < 1 || count > 100) {
             show_popup_msg("提示", "管理员总数范围: 1-100", nullptr, "确定");
+            lv_group_focus_obj(g_ta_admin_count);
             return;
         }
         
@@ -2311,7 +2713,6 @@ void load_sys_basic_admin_count_screen() {
         scr_basic_admin_count = nullptr;
         g_ta_admin_count = nullptr;
         g_btn_confirm = nullptr;
-        g_btn_cancel = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     UiManager::getInstance()->resetKeypadGroup();
@@ -2343,7 +2744,6 @@ void load_sys_basic_admin_count_screen() {
     lv_obj_t *label_prefix = lv_label_create(input_cont);
     lv_label_set_text(label_prefix, "数量:");
     lv_obj_set_style_text_color(label_prefix, lv_color_hex(0xFFFFFF), 0);
-    // 修复字体问题：使用存在的字体 lv_font_montserrat_16
     lv_obj_set_style_text_font(label_prefix, &lv_font_montserrat_16, 0);
 
     // 输入框
@@ -2359,16 +2759,18 @@ void load_sys_basic_admin_count_screen() {
     lv_obj_set_style_pad_all(g_ta_admin_count, 8, 0);
     lv_obj_set_style_bg_color(g_ta_admin_count, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_color(g_ta_admin_count, lv_color_hex(0x000000), 0);
-    // 修复字体问题：使用存在的字体 lv_font_montserrat_16
     lv_obj_set_style_text_font(g_ta_admin_count, &lv_font_montserrat_16, 0);
     
     // 设置当前值
     char count_buf[8];
     sprintf(count_buf, "%d", g_admin_count);
     lv_textarea_set_text(g_ta_admin_count, count_buf);
+    
+    // 添加键盘事件处理
+    lv_obj_add_event_cb(g_ta_admin_count, admin_count_textarea_keypad_cb, LV_EVENT_KEY, NULL);
 
     // 添加键盘完成事件
-    lv_obj_add_event_cb(g_ta_admin_count, [](lv_event_t *e) {
+    lv_obj_add_event_cb(g_ta_admin_count,[](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_READY) {
             admin_count_confirm_cb(e);
         }
@@ -2382,11 +2784,10 @@ void load_sys_basic_admin_count_screen() {
     lv_obj_set_style_text_color(current_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(current_label, &lv_font_montserrat_14, 0);
 
-    // 范围提示 - 修复字体问题
+    // 范围提示
     lv_obj_t *range_label = lv_label_create(content);
     lv_label_set_text(range_label, "范围: 1 - 100");
     lv_obj_set_style_text_color(range_label, lv_color_hex(0xAAAAAA), 0);
-    // 使用存在的字体 lv_font_montserrat_14 代替 12
     lv_obj_set_style_text_font(range_label, &lv_font_montserrat_14, 0);
 
     // 按钮容器
@@ -2400,13 +2801,12 @@ void load_sys_basic_admin_count_screen() {
 
     // 确认按钮
     g_btn_confirm = create_form_btn (btn_cont, "确认", admin_count_confirm_cb, NULL);
- 
+
+    // 为确认按钮添加键盘事件处理
+    lv_obj_add_event_cb(g_btn_confirm, admin_count_btn_keypad_cb, LV_EVENT_KEY, NULL);
+
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
-    }, LV_EVENT_DELETE, NULL);
-   
-    lv_obj_add_event_cb(g_btn_cancel, [](lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_cancel = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
     // 加入键盘组
@@ -2414,7 +2814,7 @@ void load_sys_basic_admin_count_screen() {
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
 
     // 设置初始焦点
-    lv_group_focus_obj(g_btn_confirm);
+    lv_group_focus_obj(g_ta_admin_count);
 
     // 加载屏幕
     lv_screen_load(scr_basic_admin_count);
@@ -2445,37 +2845,32 @@ static void save_warn_count_to_system(int index) {
     // TODO: 实际保存到系统配置
 }
 
-// 下拉框键盘导航回调
-static void warn_count_dropdown_keypad_cb(lv_event_t *e) {
+// 按钮键盘导航回调
+static void warn_count_btn_keypad_cb(lv_event_t *e){
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *dropdown = (lv_obj_t*)lv_event_get_target(e);
-    lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
     
     if (code == LV_EVENT_KEY) {
         uint32_t key = lv_event_get_key(e);
         
-        if (key == LV_KEY_UP) {
-            if (!lv_dropdown_is_open(dropdown)) {
-                lv_group_focus_prev(group);
-            }
-        } else if (key == LV_KEY_DOWN) {
-            if (!lv_dropdown_is_open(dropdown)) {
-                lv_group_focus_next(group);
-            }
+        if (key == LV_KEY_ESC) {
+            // ESC键：返回上一级
+            lv_indev_wait_release(lv_indev_get_act());
+            load_sys_settings_basic_screen();
         } else if (key == LV_KEY_ENTER) {
-            if (lv_dropdown_is_open(dropdown)) {
-                lv_dropdown_close(dropdown);
-            } else {
-                lv_dropdown_open(dropdown);
-            }
-        } else if (key == LV_KEY_ESC) {
-            if (lv_dropdown_is_open(dropdown)) {
-                lv_dropdown_close(dropdown);
-            } else {
-                load_sys_settings_basic_screen();
-                lv_indev_wait_release(lv_indev_get_act());
-            }
-        }
+            // ENTER键：触发按钮点击事件
+            lv_indev_wait_release(lv_indev_get_act());
+            
+            // 模拟点击事件
+            lv_obj_send_event(g_btn_confirm, LV_EVENT_CLICKED, NULL);
+        } else if (key == LV_KEY_DOWN) {
+            // 下键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_warn_count);
+        } else if (key == LV_KEY_UP) {
+            // 上键：焦点移动到下拉框
+            lv_indev_wait_release(lv_indev_get_act());
+            lv_group_focus_obj(g_dropdown_warn_count);
+        } 
     }
 }
 
@@ -2499,19 +2894,8 @@ static void warn_count_dropdown_cb(lv_event_t *e) {
 // 确认按钮回调
 static void warn_count_confirm_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        load_sys_settings_basic_screen();
-        lv_indev_wait_release(lv_indev_get_act());
-        return;
-    }
     
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+    if(code == LV_EVENT_CLICKED) {
         lv_indev_wait_release(lv_indev_get_act());
         
         int selected = lv_dropdown_get_selected(g_dropdown_warn_count);
@@ -2584,7 +2968,7 @@ void load_sys_basic_warn_count_screen() {
     );
     
     // 为下拉框添加键盘导航回调
-    lv_obj_add_event_cb(g_dropdown_warn_count, warn_count_dropdown_keypad_cb, LV_EVENT_KEY, NULL);
+    lv_obj_add_event_cb(g_dropdown_warn_count, dropdown_keypad_cb, LV_EVENT_KEY, NULL);
     
     // 为下拉框添加值改变事件
     lv_obj_add_event_cb(g_dropdown_warn_count, warn_count_dropdown_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2620,39 +3004,22 @@ void load_sys_basic_warn_count_screen() {
     // 创建确认按钮
     g_btn_confirm = create_form_btn(btn_cont, "确认", warn_count_confirm_cb, NULL);
     lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+
+    // 为按钮添加键盘导航回调
+    lv_obj_add_event_cb(g_btn_confirm, warn_count_btn_keypad_cb, LV_EVENT_KEY, NULL);
+
     
     lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_DELETE) g_btn_confirm = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    // 为按钮添加键盘导航回调
-    lv_obj_add_event_cb(g_btn_confirm, [](lv_event_t *e) {
-        lv_event_code_t code = lv_event_get_code(e);
-        lv_group_t *group = UiManager::getInstance()->getKeypadGroup();
-        
-        if (code == LV_EVENT_KEY) {
-            uint32_t key = lv_event_get_key(e);
-            
-            if (key == LV_KEY_UP) {
-                lv_group_focus_prev(group);
-            } else if (key == LV_KEY_DOWN) {
-                lv_group_focus_next(group);
-            } else if (key == LV_KEY_ESC) {
-                load_sys_settings_basic_screen();
-                lv_indev_wait_release(lv_indev_get_act());
-            }
-        }
-    }, LV_EVENT_KEY, NULL);
-
     // ===== 加入键盘组 =====
     UiManager::getInstance()->addObjToGroup(g_dropdown_warn_count);
     UiManager::getInstance()->addObjToGroup(g_btn_confirm);
-
-    // 设置编辑模式
-    lv_group_set_editing(UiManager::getInstance()->getKeypadGroup(), false);
     
     // 为下拉框添加标志，使其可聚焦
     lv_obj_add_flag(g_dropdown_warn_count, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_add_flag(g_btn_confirm, LV_OBJ_FLAG_CLICK_FOCUSABLE);    
 
     // 设置初始焦点到下拉框
     lv_group_focus_obj(g_dropdown_warn_count);
@@ -3168,40 +3535,65 @@ void load_sys_advanced_factory_reset_sreen() {
 // ================= 系统升级界面 ================
 static void upgrade_check_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    uint32_t key = 0;
+    lv_obj_t *target = (lv_obj_t*)lv_event_get_target(e);
 
-    if(code == LV_EVENT_KEY) {
-        key = lv_event_get_key(e);
-    }
-
-    if(code == LV_EVENT_KEY) {
-        if(key == LV_KEY_ESC) {
-            load_sys_settings_advanced_screen();
+   if(code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        
+        // ENTER键确认
+        if(key == LV_KEY_ENTER) {
             lv_indev_wait_release(lv_indev_get_act());
+            
+            const char *tag = (const char*)lv_obj_get_user_data(target);
+            
+            if(strcmp(tag, "CHECK") == 0) {
+                // 检查更新
+                show_popup_msg("提示", "正在检查更新...", nullptr, "确定");
+                // 这里应该调用实际的检查更新逻辑
+            } 
+            else if(strcmp(tag, "UPGRADE") == 0) {
+                // 开始升级
+                show_popup_msg("提示", "开始系统升级...", nullptr, "确定");
+                // 这里应该调用实际的升级逻辑
+            }
             return;
         }
     }
 
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
+    if(code == LV_EVENT_CLICKED) {
         lv_indev_wait_release(lv_indev_get_act());
         
-        lv_obj_t * target = (lv_obj_t*)lv_event_get_target(e);
-        const char * tag = (const char*)lv_obj_get_user_data(target);
+        const char *tag = (const char*)lv_obj_get_user_data(target);
         
         if(strcmp(tag, "CHECK") == 0) {
             // 检查更新
             show_popup_msg("提示", "正在检查更新...", nullptr, "确定");
-            load_sys_settings_advanced_screen();
         } 
-        
         else if(strcmp(tag, "UPGRADE") == 0) {
             // 开始升级
             show_popup_msg("提示", "开始系统升级...", nullptr, "确定");
-            load_sys_settings_advanced_screen();
-        } 
+        }
+    }
+}
+
+//键盘回调函数
+static void update_keypad_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if(code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
         
-        else if(strcmp(tag, "BACK") == 0) {
+        // 上下键切换焦点
+        if(key == LV_KEY_UP) {
+            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
+        }
+        else if(key == LV_KEY_DOWN) {
+            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
+        }
+        // ESC键返回上一层
+        else if(key == LV_KEY_ESC) {
             load_sys_settings_advanced_screen();
+            lv_indev_wait_release(lv_indev_get_act());
         }
     }
 }
@@ -3245,19 +3637,6 @@ void load_sys_advanced_system_update_sreen() {
     lv_obj_set_style_text_color(status_label, lv_color_hex(0x4CAF50), 0);
     lv_obj_set_style_pad_top(status_label, 20, 0);
 
-    // 进度条（升级时显示）
-    lv_obj_t *progress_bar = lv_bar_create(content);
-    lv_obj_set_size(progress_bar, 200, 20);
-    lv_bar_set_value(progress_bar, 0, LV_ANIM_OFF);
-    lv_obj_set_style_pad_top(progress_bar, 20, 0);
-    lv_obj_add_flag(progress_bar, LV_OBJ_FLAG_HIDDEN);
-
-    // 进度文本
-    lv_obj_t *progress_label = lv_label_create(content);
-    lv_label_set_text(progress_label, "0%");
-    lv_obj_set_style_pad_top(progress_label, 5, 0);
-    lv_obj_add_flag(progress_label, LV_OBJ_FLAG_HIDDEN);
-
     // 按钮容器
     lv_obj_t* btn_cont = lv_obj_create(content);
     lv_obj_set_size(btn_cont, LV_PCT(90), 60);
@@ -3284,6 +3663,17 @@ void load_sys_advanced_system_update_sreen() {
     UiManager::getInstance()->addObjToGroup(btn_check);
     UiManager::getInstance()->addObjToGroup(btn_upgrade);
 
+    // 设置键盘组的导航控制
+    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+    if(group) {
+        lv_group_set_editing(group, false);
+        lv_group_set_wrap(group, true);
+        
+        // 设置导航回调
+        lv_obj_add_event_cb(btn_check, update_keypad_cb, LV_EVENT_KEY, NULL);
+        lv_obj_add_event_cb(btn_upgrade, update_keypad_cb, LV_EVENT_KEY, NULL);
+    }
+
     // 设置初始焦点
     lv_group_focus_obj(btn_check);
 
@@ -3291,78 +3681,6 @@ void load_sys_advanced_system_update_sreen() {
     UiManager::getInstance()->destroyAllScreensExcept(scr_advanced_upgrade);
 }
 
-// =================参数设置界面（二级）================
-static void sys_param_event_cb(lv_event_t *e){
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
-    
-    uint32_t key = 0;
-
-    if(code == LV_EVENT_KEY){
-        key = lv_event_get_key(e);
-    }
-
-    if(code == LV_EVENT_KEY){
-
-        if(key == LV_KEY_ESC){
-          load_sys_settings_menu_screen();
-          lv_indev_wait_release(lv_indev_get_act());
-          return;
-        }
-
-        else if(key == LV_KEY_DOWN || key == LV_KEY_RIGHT){
-          lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
-          return;
-        }
-
-        else if(key == LV_KEY_UP || key == LV_KEY_LEFT){
-          lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
-          return;
-        }
-    }
-
-    if(code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)){
-        lv_indev_wait_release(lv_indev_get_act());
-        load_sys_settings_param_screen();
-    }
-}
-
-void load_sys_settings_param_screen(){
-        if(scr_param){
-        lv_obj_delete(scr_param);
-        scr_param = nullptr;
-    }
-
-    BaseScreenParts parts = create_base_screen("参数设置");
-    scr_param = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::SYS_PARAM,&scr_param);
-
-    lv_obj_add_event_cb(scr_param, [](lv_event_t *e){
-     scr_param = nullptr;
-    },LV_EVENT_DELETE,NULL);
-
-    UiManager::getInstance()->resetKeypadGroup();
-
-    lv_obj_t* list = create_list_container(parts.content);
-
-    create_sys_list_btn(list, "1. ", "", "灰度调节", sys_param_event_cb, "GRAYSCALE");
-    create_sys_list_btn(list, "2. ", "", "直方图均衡", sys_param_event_cb, "HISTOGRAM");
-    create_sys_list_btn(list, "3. ", "", "ROI裁剪", sys_param_event_cb, "ROI");
-
-    uint32_t child_cnt = lv_obj_get_child_cnt(list);
-    for(uint32_t i=0; i<child_cnt; i++) {
-        lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);
-    }
-
-    if(child_cnt > 0) {
-        lv_group_focus_obj(lv_obj_get_child(list, 0));
-    }
-
-    lv_screen_load(scr_param);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_param);
-
-}
 
 // =================自检设置界面（二级）================
 static void sys_selfcheck_event_cb(lv_event_t *e){
