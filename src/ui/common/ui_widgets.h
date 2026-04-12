@@ -8,12 +8,13 @@
 #include <utility> // std::pair 需要用到这个
 
 struct BaseScreenParts {
-    lv_obj_t* screen;   // 整个屏幕对象 (注册给UiManager用)
-    lv_obj_t* content;  // 中间空白区域 (放具体业务控件用)
-    lv_obj_t* header;   // 头部对象 (如果需要动态改标题)
-    lv_obj_t* footer;   // 底部对象 (如果需要改提示语)
-    lv_obj_t * lbl_title;// 标题标签 (如果需要动态改标题)
-    lv_obj_t * lbl_time;// 时间标签 (如果需要动态更新时间)
+    lv_obj_t* screen;        // 整个屏幕对象 (注册给UiManager用)
+    lv_obj_t* content;       // 中间空白区域 (放具体业务控件用)
+    lv_obj_t* header;        // 头部对象 (如果需要动态改标题)
+    lv_obj_t* footer;        // 底部对象 (如果需要改提示语)
+    lv_obj_t* lbl_title;     // 标题标签 (如果需要动态改标题)
+    lv_obj_t* lbl_time;      // 时间标签 (如果需要动态更新时间)
+    lv_obj_t* candidate_bar; // 中文候选字条 (默认隐藏，中文模式下自动弹出)
 };
 
 /**
@@ -77,12 +78,14 @@ lv_obj_t* create_sys_list_btn(
 lv_obj_t* create_list_container(lv_obj_t* parent);
 
 /**
- * @brief 创建标准的表单输入组 (Label + TextArea)
+ * @brief 创建标准表单输入组 (Label + TextArea)
  * * @param parent           父容器 (通常是 form_cont)
  * @param label_text       左侧/上方标题 (如 "原始姓名:")
  * @param placeholder_text 提示文字 (如 "请输入姓名"，如果传 nullptr 则不显示)
  * @param initial_text     初始填充的文字 (如数据库读出来的名字，如果传 nullptr 则为空)
  * @param is_readonly      是否为只读模式 (true 会变灰且不可点击)
+ * @param show_ime_indicator 是否在输入框旁显示输入法指示标签 ("123"/"ABC"/"拼")
+ *                           需要配合 hal_keypad.h 的模式接口使用；仅选择支持切换的输入框传 true
  * @return lv_obj_t* 返回创建好的文本输入框指针 (方便后续绑定事件或读取文本)
  */
 lv_obj_t* create_form_input(
@@ -90,7 +93,8 @@ lv_obj_t* create_form_input(
     const char *label_text, 
     const char *placeholder_text, 
     const char *initial_text, 
-    bool is_readonly
+    bool is_readonly,
+    bool show_ime_indicator = false
 );
 
 /**
@@ -114,6 +118,9 @@ lv_obj_t* create_form_dropdown(
  * @param parent 父对象 (通常是 parts.content)
  */
 lv_obj_t* create_form_container(lv_obj_t* parent);
+
+// 当切换屏幕时调用，重置全局 IME 指示标签列表（防止野指针）
+void reset_ime_labels();
 
 /**
  * @brief 创建标准表单按钮

@@ -87,9 +87,11 @@ file(GLOB_RECURSE SRC_FILES
     # UI 层 - 显式列出需要的文件
     "src/ui/common/ui_style.cpp"
     "src/ui/common/ui_widgets.cpp"
+    "src/ui/common/ime_chinese.cpp"
     "src/ui/common/t9_keyboard.cpp"
     "src/ui/common/t9_keymap.cpp"
     "src/ui/common/matrix_t9_keyboard.cpp"
+    "src/ui/porting/hal_keypad.cpp"
     "src/ui/managers/*.cpp"
     "src/ui/screens/home/*.cpp"
     "src/ui/screens/menu/*.cpp"
@@ -145,7 +147,17 @@ target_link_libraries(attendance_app PRIVATE
     ${SDL2_LIBRARIES}   # 驱动支持
     ${XLSXWRITER_LIBRARIES}  # 链接 libxlsxwriter
     Threads::Threads  # 链接线程库
+    # Deleted: wiringPi
 )
+
+# 树莓派硬件构建时才链接 wiringPi 并定义 RPI_BUILD 宏
+if(RPI_BUILD)
+    target_link_libraries(attendance_app PRIVATE wiringPi)
+    target_compile_definitions(attendance_app PRIVATE RPI_BUILD)
+    message(STATUS "RPI_BUILD=ON: 链接 wiringPi，启用 GPIO 矩阵键盘")
+else()
+    message(STATUS "RPI_BUILD=OFF: 跳过 wiringPi，使用 SDL 模拟模式")
+endif()
 
 # 编译信息输出
 message(STATUS "Build Setup:")

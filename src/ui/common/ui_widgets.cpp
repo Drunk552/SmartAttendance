@@ -1,5 +1,6 @@
 #include "ui_widgets.h"
 #include "ui_style.h"
+#include "ime_chinese.h"  // 中文输入法词典
 #include <cstring>
 #include <cstdio>
 #include <ctime>
@@ -9,6 +10,7 @@
 #include "../../business/event_bus.h"// 用于时间更新订阅
 #include "../../ui/ui_controller.h"// 用于获取当前时间字符串
 #include "../../ui/managers/ui_manager.h"
+#include "../porting/hal_keypad.h"// 用于 IME 模式查询与回调
 
 // 静态变量：用于保存和恢复输入组，实现物理隔离
 static lv_group_t * g_popup_group = nullptr;
@@ -162,6 +164,39 @@ BaseScreenParts create_base_screen(const char* title) {
     lv_obj_set_style_text_color(lbl_notarize, lv_color_hex(0xDDDDDD), 0); // 稍微灰一点的白
     //lv_obj_set_style_text_font(lbl_notarize, &lv_font_montserrat_14, 0);
     lv_obj_align(lbl_notarize, LV_ALIGN_RIGHT_MID, -10, 0);
+
+
+    // ================= 中文候选字条 (Candidate Bar) =================
+    // 位于 footer 正上方，默认隐藏
+    // 宽度: 整屏; 高度: UI_CANDIDATE_H(30px)
+    // 当中文模式激活且有候选字时，由 hal_keypad 调用 ime_candidate_bar_show() 显示
+    parts.candidate_bar = lv_obj_create(parts.screen);
+    lv_obj_set_size(parts.candidate_bar, LV_PCT(100), UI_CANDIDATE_H);
+    lv_obj_align(parts.candidate_bar, LV_ALIGN_BOTTOM_MID, 0, -UI_FOOTER_H); // footer 正上方
+
+    // 样式: 深色半透明背景（区别于 footer 的玻璃渐变，突出候选字）
+    lv_obj_set_style_bg_color(parts.candidate_bar, lv_color_hex(0x001A44), 0); // 深蓝背景
+    lv_obj_set_style_bg_opa(parts.candidate_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(parts.candidate_bar, 1, 0);
+    lv_obj_set_style_border_color(parts.candidate_bar, lv_color_hex(0x2195F6), 0);
+    lv_obj_set_style_border_side(parts.candidate_bar, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_radius(parts.candidate_bar, 0, 0);
+    lv_obj_set_style_pad_all(parts.candidate_bar, 0, 0);
+
+    // 内部使用横向 Flex 布局，候选字按钮从左往右排列
+    lv_obj_set_flex_flow(parts.candidate_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(parts.candidate_bar,
+                          LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(parts.candidate_bar, 0, 0);
+    lv_obj_set_scrollbar_mode(parts.candidate_bar, LV_SCROLLBAR_MODE_OFF);
+
+    // 默认隐藏，中文模式有候选字时才显示
+    lv_obj_add_flag(parts.candidate_bar, LV_OBJ_FLAG_HIDDEN);
+
+    // 自动注册候选字条到 hal_keypad，使中文模式可以直接找到并显示它
+    hal_keypad_set_candidate_bar(parts.candidate_bar);
 
 
     // ================= 中间内容区 (Content) =================
@@ -399,13 +434,69 @@ lv_obj_t* create_menu_grid_container(lv_obj_t* parent) {
 
 // ================= 实现标准辅助输入框创建函数 =================
 
+// 输入法指示标签的全局列表（用于模式切换时更新）
+struct ImeIndicatorEntry {
+    lv_obj_t* lbl;
+    bool      active; // 该入口是否已绑定（防重复注册回调）
+};
+static ImeIndicatorEntry g_ime_labels[8]; // 最多支持 8 个输入法指示标签的同时存在
+static int g_ime_label_count = 0;
+static bool g_ime_cb_registered = false; // 确保只注册一次回调
+
+// 模式变化回调：更新所有指示标签
+static void ime_mode_changed_cb(HalInputMode new_mode) {
+    const char* mode_str = hal_keypad_get_mode_str();
+    for (int i = 0; i < g_ime_label_count; i++) {
+        if (g_ime_labels[i].lbl && g_ime_labels[i].active) {
+            lv_label_set_text(g_ime_labels[i].lbl, mode_str);
+        }
+    }
+}
+
+// 指示标签被销毁时清理自身的入口
+static void ime_label_del_cb(lv_event_t* e) {
+    lv_obj_t* lbl = (lv_obj_t*)lv_event_get_user_data(e);
+    for (int i = 0; i < g_ime_label_count; i++) {
+        if (g_ime_labels[i].lbl == lbl) {
+            g_ime_labels[i].active = false;
+            g_ime_labels[i].lbl   = nullptr;
+            break;
+        }
+    }
+}
+
+// 输入法指示标签注册函数
+static void register_ime_label(lv_obj_t* lbl) {
+    if (g_ime_label_count < 8) {
+        g_ime_labels[g_ime_label_count++] = {lbl, true};
+        lv_obj_add_event_cb(lbl, ime_label_del_cb, LV_EVENT_DELETE, lbl);
+    }
+    // 确保全局回调只注册一次
+    if (!g_ime_cb_registered) {
+        hal_keypad_set_mode_change_cb(ime_mode_changed_cb);
+        g_ime_cb_registered = true;
+    }
+}
+
+// 输入法指示标签全部重置（切屏时调用）
+void reset_ime_labels() {
+    g_ime_label_count = 0;
+    for (int i = 0; i < 8; i++) {
+        g_ime_labels[i] = {nullptr, false};
+    }
+    // 同步注销候选字条和目标 textarea，防止切屏后出现野指针
+    hal_keypad_set_candidate_bar(nullptr);
+    hal_keypad_set_target_textarea(nullptr);
+}
+
 // 辅助函数：创建一个带标签的输入框，适用于表单输入场景
 lv_obj_t* create_form_input(
     lv_obj_t *parent, 
     const char *label_text, 
     const char *placeholder_text, 
     const char *initial_text, 
-    bool is_readonly
+    bool is_readonly,
+    bool show_ime_indicator
 ) {
     // ==========================================
     // 1. 创建一个透明的横向包裹容器 (Wrapper)
@@ -456,6 +547,28 @@ lv_obj_t* create_form_input(
     if (is_readonly) {
         lv_obj_remove_flag(ta, LV_OBJ_FLAG_CLICKABLE);                // 不可点击聚焦
         lv_obj_set_style_bg_color(ta, lv_color_hex(0x555555), 0);     // 背景变暗灰提示不可写
+    }
+
+    // ==========================================
+    // 5. 输入法指示标签（可选）
+    // ==========================================
+    if (show_ime_indicator && !is_readonly) {
+        // 输入框自动伸缩捠应会占满剩余空间，需先取消 flex_grow
+        // 让它有一个固定的返回：输入框占除指示标签外的剩余空间
+        // 指示标签: 显示 [123] / [ABC] / [拼]
+        lv_obj_t* lbl_ime = lv_label_create(wrapper);
+        lv_label_set_text(lbl_ime, hal_keypad_get_mode_str());
+        lv_obj_add_style(lbl_ime, &style_text_cn, 0);
+        lv_obj_set_style_text_color(lbl_ime, lv_color_hex(0xFFDD00), 0); // 黄色显示，跟输入框区分
+        lv_obj_set_style_bg_color(lbl_ime, lv_color_hex(0x003388), 0);   // 深蓝底色
+        lv_obj_set_style_bg_opa(lbl_ime, LV_OPA_COVER, 0);
+        lv_obj_set_style_pad_hor(lbl_ime, 4, 0); // 左右留出小边距
+        lv_obj_set_style_radius(lbl_ime, 0, 0);
+        lv_obj_set_width(lbl_ime, LV_SIZE_CONTENT); // 寋度自适应
+        // 指示标签自动注册到全局列表，模式切换后会自动刷新
+        register_ime_label(lbl_ime);
+        // 同时将此输入框注册为中文候选字的目标 textarea
+        hal_keypad_set_target_textarea(ta);
     }
 
     // 返回输入框指针
@@ -588,16 +701,15 @@ lv_obj_t* create_form_btn(lv_obj_t *parent, const char *btn_text, lv_event_cb_t 
 static void popup_close_async_task(void * p) {
     PopupContext * ctx = (PopupContext *)p;
 
-    // 1. 将键盘控制权安全地还给背景界面
-    lv_indev_t * indev = lv_indev_get_next(nullptr);
-    while(indev) {
-        if(lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
-            if (g_prev_group) {
+    // 1. 将所有 KEYPAD indev 的控制权安全地还给背景界面
+    if (g_prev_group) {
+        lv_indev_t * indev = lv_indev_get_next(nullptr);
+        while(indev) {
+            if(lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
                 lv_indev_set_group(indev, g_prev_group);
             }
-            break;
+            indev = lv_indev_get_next(indev);
         }
-        indev = lv_indev_get_next(indev);
     }
 
     // 2. 销毁弹窗专属的临时组
@@ -741,20 +853,27 @@ void show_popup_msg(const char* title, const char* msg, lv_obj_t* focus_back_obj
     lv_obj_add_event_cb(btn_ok, popup_close_event_cb, LV_EVENT_KEY, ctx);
 
     // 7. 物理隔离与抢占焦点
+    // 创建弹窗专属 group，将 btn_ok 加入其中
+    g_popup_group = lv_group_create();
+    lv_group_add_obj(g_popup_group, btn_ok);
+
+    // 遍历所有 KEYPAD 类型输入设备，全部切换到弹窗 group
+    // 注意：系统中同时存在 SDL 键盘和矩阵键盘两个 KEYPAD indev，
+    //       必须把两者都切过来，否则 SDL 回车键无法触发弹窗按钮。
     lv_indev_t * indev = lv_indev_get_next(nullptr);
+    bool group_saved = false;
     while(indev) {
         if(lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
-            
-            g_prev_group = lv_indev_get_group(indev); 
-            
-            g_popup_group = lv_group_create();        
-            lv_group_add_obj(g_popup_group, btn_ok);  
-            
-            lv_indev_set_group(indev, g_popup_group); 
-            lv_group_focus_obj(btn_ok);               
-            break;
+            // 只保存第一个 indev 的 group（恢复时统一还给所有 indev 即可）
+            if (!group_saved) {
+                g_prev_group = lv_indev_get_group(indev);
+                group_saved = true;
+            }
+            lv_indev_set_group(indev, g_popup_group);
         }
         indev = lv_indev_get_next(indev);
     }
+
+    lv_group_focus_obj(btn_ok);
 }
 

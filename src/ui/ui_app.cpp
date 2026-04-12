@@ -13,6 +13,7 @@
 #include "managers/ui_manager.h"
 #include "ui_controller.h"
 #include "common/ui_style.h"
+#include "porting/hal_keypad.h"
 
 // 引入主页头文件
 #include "screens/home/ui_scr_home.h"
@@ -61,6 +62,18 @@ void ui_init(void) {
     // ============================================================
     ui_style_init();
     UiManager::getInstance()->init(); // 内部创建 g_keypad_group
+
+    // ============================================================
+    // 4. 初始化物理矩阵键盘并绑定到 UI 焦点组
+    // ============================================================
+    lv_indev_t * keypad_indev = hal_keypad_init();
+    if (keypad_indev) {
+        lv_group_t * g = UiManager::getInstance()->getKeypadGroup();
+        if (g) {
+            lv_indev_set_group(keypad_indev, g);
+            printf("[UI] 物理矩阵键盘已成功绑定到焦点组！\n");
+        }
+    }
 
     // ============================================================
     // 4. 绑定键盘到 UI (解决无法操作菜单的问题)
