@@ -1,66 +1,96 @@
 # SmartAttendance - 智能考勤系统
 
-> 基于嵌入式 GUI 的智能人脸考勤系统原型（Phase 01）
+> 智能人脸考勤机软件层原型，当前仓库为 LVGL + SDL2 仿真版本。
 
 ---
 
 ## 项目简介
 
-SmartAttendance 是一款运行在 Linux 嵌入式设备（如 FA03H 人脸考勤机）上的智能考勤系统。系统集成人脸识别、考勤规则引擎、数据持久化与报表导出功能，采用 LVGL 图形框架构建嵌入式 GUI 界面，通过 SQLite 本地数据库实现离线运行。
+SmartAttendance 是一个智能人脸考勤机的软件层原型项目，当前仓库主要用于在 PC/WSL 环境下验证考勤机的软件功能、UI 交互、人脸识别流程、考勤规则和本地数据存储。
+
+本项目使用 LVGL 构建嵌入式风格 GUI，使用 SDL2 在桌面环境中模拟屏幕与输入设备，使用 OpenCV 处理摄像头画面，使用 SQLite 保存员工、班次、排班和考勤记录，并通过 libxlsxwriter 导出 Excel 报表。
+
+当前仓库不是最终直接烧录到 MPU 板子的完整工程。真实部署到考勤机硬件时，还需要补充板级硬件适配代码，并使用目标平台对应的交叉编译工具链编译后烧录到 MPU 板卡。
+
+---
+
+## 仓库定位
+
+本仓库主要包含：
+
+- LVGL 页面与交互逻辑
+- 员工管理、考勤规则、记录查询、报表导出等业务逻辑
+- SQLite 本地数据库封装
+- OpenCV 人脸检测与 LBPH 识别流程
+- SDL2 PC/WSL 仿真显示与输入
+- Windows 摄像头推流到 WSL/Linux 的辅助脚本
+- 稳定性测试和运行辅助脚本
+
+本仓库不包含：
+
+- MPU 目标板完整 BSP / SDK 工程
+- LCD、摄像头、按键、GPIO 等真实硬件驱动适配代码
+- 目标板交叉编译工具链配置
+- 最终烧录镜像、板端启动脚本或部署包
 
 ---
 
 ## 功能模块
 
-```
+```text
 智能考勤系统
-├── 员工管理        → 人脸注册 / 信息维护 / 删除
-├── 考勤执行        → 实时人脸识别 / 打卡记录
-├── 考勤规则配置    → 部门管理 / 班次设置 / 排班管理
-├── 考勤记录查询    → 按日期 / 按人员查询 / 明细导出
-├── 考勤统计分析    → 日报 / 月报 / 部门汇总 / Excel 导出
-└── 系统设置        → 设备信息 / 数据库管理 / 高级设置
+├── 员工管理        -> 人脸注册 / 信息维护 / 删除
+├── 考勤执行        -> 实时人脸识别 / 打卡记录
+├── 考勤规则配置    -> 部门管理 / 班次设置 / 排班管理
+├── 考勤记录查询    -> 按日期 / 按人员查询 / 明细导出
+├── 考勤统计分析    -> 日报 / 月报 / 部门汇总 / Excel 导出
+└── 系统设置        -> 设备信息 / 数据库管理 / 高级设置
 ```
 
 ---
 
 ## 技术栈
 
-| 类别 | 技术 |
-|------|------|
+| 类别 | 当前仓库实现 |
+|------|--------------|
 | 开发语言 | C11 / C++17 |
-| GUI 框架 | LVGL v9.4（SDL2 + Freetype 渲染） |
-| 人脸识别 | OpenCV 4（`objdetect`、`face` 模块） |
+| GUI 框架 | LVGL v9.4 |
+| 显示与输入 | SDL2 仿真 |
+| 字体渲染 | Freetype |
+| 视频输入 | Windows FFmpeg RTP 推流 + OpenCV GStreamer 接收 |
+| 人脸识别 | OpenCV 4 Haar + LBPHFaceRecognizer |
 | 本地数据库 | SQLite 3 |
-| 报表导出 | libxlsxwriter（Excel `.xlsx`） |
+| 报表导出 | libxlsxwriter |
 | 构建系统 | CMake 3.16+ |
 | 线程支持 | POSIX Threads |
+| 板端适配 | 预留接口，最终需替换 SDL/推流/输入等适配层 |
 
 ---
 
 ## 项目结构
 
-```
+```text
 SmartAttendance/
 ├── CMakeLists.txt              # CMake 构建脚本
 ├── lv_conf.h                   # LVGL 图形库配置
 ├── env/
 │   └── env.sh                  # 开发环境快捷命令脚本
 ├── libs/
-│   └── lvgl/                   # LVGL 第三方库（子模块）
+│   └── lvgl/                   # LVGL 第三方库
 ├── src/
 │   ├── main.cpp                # 程序入口（初始化 + 主循环）
-│   ├── business/               # [业务层] 核心逻辑
+│   ├── business/               # 业务层核心逻辑
 │   │   ├── attendance_rule     # 考勤规则引擎（状态判定、迟到早退计算）
 │   │   ├── auth_service        # 身份认证（登录、权限校验）
 │   │   ├── event_bus           # 事件总线（组件间解耦通信）
-│   │   ├── face_demo           # 人脸识别流程（采集 → 检测 → 识别）
+│   │   ├── face_demo           # 人脸识别流程（采集 -> 检测 -> 识别）
 │   │   └── report_generator    # Excel 报表生成器
 │   ├── data/
-│   │   └── db_storage          # [数据层] SQLite DAO 封装
+│   │   └── db_storage          # SQLite DAO 封装
 │   └── ui/
 │       ├── common/             # 通用组件（样式、控件、T9 键盘）
 │       ├── managers/           # UI 管理器（页面跳转、按键组）
+│       ├── porting/            # 输入设备适配层，当前支持 SDL 模拟/RPI_BUILD 条件编译
 │       ├── screens/            # 各业务页面
 │       │   ├── home/           # 待机主页（摄像头预览、时钟）
 │       │   ├── menu/           # 九宫格主菜单
@@ -70,32 +100,38 @@ SmartAttendance/
 │       │   ├── att_design/     # 考勤规则/排班设计
 │       │   ├── system/         # 系统设置
 │       │   └── sys_info/       # 系统信息
-│       ├── ui_app              # UI 层入口
-│       └── ui_controller       # 业务桥接层
+│       ├── ui_app              # UI 层入口（SDL 仿真初始化）
+│       └── ui_controller       # UI 与业务/数据层桥接
 ├── docs/                       # 项目文档与产品资料
 └── tools/                      # 辅助脚本
-    ├── stability_test.sh        # 1小时稳定性测试
-    ├── quick_stability_test.sh  # 10分钟快速测试
-    ├── analyze_stability.py     # 测试结果分析
-    └── stream/                  # 视频推流模拟工具
+    ├── stream/                 # Windows 摄像头推流脚本
+    │   ├── run.bat
+    │   └── stream.ps1
+    ├── stability_test.sh       # 1 小时稳定性测试
+    ├── quick_stability_test.sh # 10 分钟快速测试
+    ├── stress_test.sh          # 压力测试脚本
+    └── analyze_stability.py    # 测试结果分析
 ```
 
 ---
 
 ## 环境依赖
 
-### 系统要求
+### Linux / WSL 侧
 
-- OS：Linux（Ubuntu 20.04 / 22.04 推荐）
-- 摄像头：`/dev/video0`（USB 摄像头或 MIPI 摄像头）
+推荐环境：
 
-### 依赖库安装
+- Ubuntu 20.04 / 22.04
+- 支持图形显示的桌面 Linux 或 WSLg 环境
+- CMake 3.16+
+
+安装依赖：
 
 ```bash
 # 基础构建工具
 sudo apt install cmake build-essential pkg-config
 
-# SDL2 & Freetype（LVGL 渲染后端）
+# SDL2 & Freetype（LVGL 仿真显示和字体渲染）
 sudo apt install libsdl2-dev libfreetype-dev
 
 # OpenCV 4（含人脸识别模块）
@@ -106,7 +142,29 @@ sudo apt install libsqlite3-dev
 
 # libxlsxwriter（Excel 报表）
 sudo apt install libxlsxwriter-dev
+
+# GStreamer（OpenCV 通过 GStreamer 管道接收 RTP 视频流）
+sudo apt install gstreamer1.0-tools \
+                 gstreamer1.0-plugins-base \
+                 gstreamer1.0-plugins-good \
+                 gstreamer1.0-plugins-bad \
+                 gstreamer1.0-libav
 ```
+
+### Windows 推流侧
+
+当前仿真版本的视频输入流程为：
+
+```text
+Windows 摄像头 -> FFmpeg/dshow -> RTP/UDP 5004 -> WSL/Linux -> OpenCV GStreamer -> 程序预览与识别
+```
+
+Windows 侧需要：
+
+- 安装 FFmpeg
+- 确保 `ffmpeg` 可以在 PowerShell 中直接执行
+- 确认摄像头设备名称与 `tools/stream/stream.ps1` 中的 `$Device` 一致
+- 确认 WSL 发行版名称与脚本中的 `$Distro` 一致，默认是 `Ubuntu-22.04`
 
 ---
 
@@ -119,7 +177,7 @@ git clone https://github.com/<your-username>/SmartAttendance.git
 cd SmartAttendance
 ```
 
-### 2. 加载开发环境（可选，提供快捷命令）
+### 2. 加载开发环境（可选）
 
 ```bash
 source env/env.sh
@@ -130,48 +188,120 @@ source env/env.sh
 | 命令 | 说明 |
 |------|------|
 | `m` 或 `make` | 编译项目（cmake + make） |
-| `r` 或 `run`  | 运行程序 |
+| `r` 或 `run` | 运行程序 |
 | `cl` 或 `clean` | 清理构建目录 |
 | `croot` | 回到项目根目录 |
 
 ### 3. 编译
 
 ```bash
-mkdir -p build && cd build
+mkdir -p build
+cd build
 cmake ..
 make -j$(nproc)
 ```
 
-### 4. 运行
+如果已经加载 `env/env.sh`，也可以在项目根目录直接执行：
+
+```bash
+m
+```
+
+### 4. 启动 Windows 摄像头推流
+
+运行程序前，需要先在 Windows 侧启动摄像头推流。
+
+在 Windows 中进入本仓库目录，执行：
+
+```bat
+tools\stream\run.bat
+```
+
+也可以手动执行 PowerShell 脚本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\stream\stream.ps1
+```
+
+推流脚本默认配置：
+
+| 配置项 | 默认值 |
+|--------|--------|
+| WSL 发行版 | `Ubuntu-22.04` |
+| 摄像头名称 | `USB2.0 PC CAMERA` |
+| 分辨率 | `640x480` |
+| 帧率 | `30` |
+| UDP 端口 | `5004` |
+
+如果你的 WSL 发行版名称或摄像头名称不同，需要修改 `tools/stream/stream.ps1` 中的 `$Distro` 和 `$Device`。
+
+### 5. 运行程序
+
+在 Linux / WSL 侧执行：
 
 ```bash
 cd build
 ./attendance_app
 ```
 
-> **注意**：首次运行会自动创建 `attendance.db` 数据库并写入默认部门、班次数据。
+如果已经加载 `env/env.sh`，也可以在项目根目录直接执行：
+
+```bash
+r
+```
+
+> 注意：必须先启动 Windows 摄像头推流，再运行 `attendance_app`。否则 UI 可以启动，但摄像头预览和人脸识别会等待 UDP 5004 视频流。
+
+首次运行会自动创建 `attendance.db` 数据库，并写入默认部门、班次和系统配置数据。
+
+---
+
+## 运行时生成文件
+
+程序运行过程中会在工作目录下生成一些本地数据文件：
+
+| 路径 | 说明 |
+|------|------|
+| `attendance.db` | SQLite 本地数据库 |
+| `face_model.xml` | OpenCV LBPH 人脸识别模型 |
+| `captured_images/` | 打卡抓拍图片 |
+| `output/usb_sim/` | 报表导出仿真目录 |
+| `output/usb_settings/` | 员工设置表导入/导出仿真目录 |
+
+这些文件用于本地仿真和调试，不属于板端烧录工程。
 
 ---
 
 ## 考勤规则说明
 
-系统遵循 FA03H 硬件规格定义的考勤计算逻辑：
+系统按考勤机业务规则实现考勤状态计算，主要包括：
 
-1. **无排班** → 判定为"未排班"
-2. **有排班、无打卡** → 判定为"旷工"
-3. **打卡点归属（折中原则）**：每条打卡记录按与考勤点的距离折中判定归属
+1. **无排班**：判定为未排班
+2. **有排班、无打卡**：判定为旷工
+3. **打卡点归属**：根据打卡时间与考勤点的接近程度判定归属
 4. **多重记录处理**：上班点取最早记录，下班点取最晚记录
 5. **状态判定**：正常 / 迟到 / 早退 / 未打卡
 
+当前仓库实现的是软件层规则逻辑，真实硬件上的时间源、存储路径、外设输入等还需要在板端适配阶段确认。
+
 ---
 
-## U 盘导入排班
+## U 盘导入导出仿真
 
-1. 在设备菜单中导出员工设置表至 U 盘（`员工设置报表.xls`）
-2. 在电脑（支持 Office 2007+ / WPS 2012+）中填写班次与排班信息
-3. 将修改后的 `.xls` 文件存回 U 盘，插入设备上传即可生效
+当前 PC/WSL 仿真版本使用本地目录模拟 U 盘导入导出流程：
 
-> 时间格式要求：`HH:MM`（英文冒号，范围 `00:00`-`23:59`，不含前导空格）
+- 考勤报表导出目录：`output/usb_sim/`
+- 员工设置表目录：`output/usb_settings/`
+- 员工设置表文件名：`员工设置表.xlsx`
+
+基本流程：
+
+1. 在设备菜单中导出员工设置表，程序会生成 `output/usb_settings/员工设置表.xlsx`
+2. 在电脑中填写或修改员工、部门、班次与排班信息
+3. 将修改后的 `员工设置表.xlsx` 放回 `output/usb_settings/`
+4. 在程序菜单中执行上传，导入数据库
+
+时间格式要求：`HH:MM`，使用英文冒号，范围为 `00:00` 到 `23:59`，不要包含前导空格。
 
 ---
 
@@ -190,6 +320,8 @@ make stability_test
 make analyze_stability
 ```
 
+稳定性测试会启动 `attendance_app` 并监控运行时间、进程状态、内存占用和 CPU 占用。测试期间仍然建议先启动 Windows 推流，避免摄像头输入一直处于等待状态。
+
 ---
 
 ## 架构设计
@@ -199,15 +331,35 @@ graph TD
     A[main.cpp 程序入口] --> B[data_init 数据层初始化]
     A --> C[ui_init UI层初始化]
     A --> D[business_init 业务层初始化]
-    
-    C --> E[LVGL 主循环]
+
+    C --> E[LVGL + SDL2 主循环]
     D --> F[人脸识别线程]
-    
+    D --> K[数据库异步写入线程]
+
+    J[Windows FFmpeg 推流] --> L[UDP 5004]
+    L --> M[OpenCV GStreamer 管道]
+    M --> F
+
     F -->|EventBus 事件| C
     C -->|用户操作| G[attendance_rule 考勤规则引擎]
     G --> H[db_storage SQLite DAO]
-    G --> I[report_generator Excel报表]
+    G --> I[report_generator Excel 报表]
 ```
+
+---
+
+## 真实硬件部署说明
+
+当前仓库主要用于软件功能验证和 UI 仿真。若要部署到真实 MPU 考勤机板卡，需要完成以下适配工作：
+
+1. 替换 SDL2 显示后端，接入目标板 LCD / framebuffer / DRM 显示驱动。
+2. 替换 Windows RTP 推流输入，接入目标板真实摄像头驱动，如 V4L2、MIPI CSI 或厂商 SDK。
+3. 替换或启用真实按键、矩阵键盘、GPIO 输入适配层。
+4. 根据目标板工具链修改 CMake 交叉编译配置。
+5. 将 SQLite 数据库、抓拍图片、模型文件和导出目录映射到板端实际存储路径。
+6. 完成板端性能、稳定性和外设联调后，再生成烧录镜像或应用包。
+
+因此，本仓库不是最终烧录到板子的完整代码，而是考勤机软件部分的仿真开发版本。
 
 ---
 
