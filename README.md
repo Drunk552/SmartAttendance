@@ -16,9 +16,7 @@ SmartAttendance 是一个智能人脸考勤机的软件层原型项目，当前�
 
 ## 项目演示
 
-
-Uploading 6月12日.mp4…
-
+https://github.com/user-attachments/assets/bed3d816-28b0-4db3-bd88-6bd952dc702e
 
 ---
 
