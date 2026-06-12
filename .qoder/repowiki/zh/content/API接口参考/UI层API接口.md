@@ -17,16 +17,16 @@
 - [src/ui/screens/home/ui_scr_home.cpp](file://src/ui/screens/home/ui_scr_home.cpp)
 - [src/ui/screens/system/ui_sys_settings.h](file://src/ui/screens/system/ui_sys_settings.h)
 - [src/ui/screens/system/ui_sys_settings.cpp](file://src/ui/screens/system/ui_sys_settings.cpp)
+- [src/ui/screens/att_design/ui_scr_att_design.cpp](file://src/ui/screens/att_design/ui_scr_att_design.cpp)
 </cite>
 
 ## 更新摘要
 **所做更改**
-- 新增公司管理操作接口，包括公司名称保存和加载功能
-- 改进部门管理功能，新增部门添加、更新、删除和员工数量查询
-- 扩展班次管理接口，支持获取所有班次和更新班次信息
-- 完全重写系统设置界面，从约800行扩展到3366行代码
-- 新增批量员工排班导入功能，支持Excel文件解析和数据库导入
-- 增强系统设置界面，包含基础设置和高级设置两大模块
+- 新增完整的部门管理API，包括部门列表获取、部门名称解析、部门创建、修改、删除等方法
+- 新增部门员工数量统计和排班信息查询功能
+- 新增部门调度管理功能，包括getDeptSchedule()和updateDeptSchedule()接口
+- 完善部门排班视图的数据结构和数据库接口
+- 增强UI控制器的部门管理能力，支持复杂的排班管理操作
 
 ## 目录
 1. [简介](#简介)
@@ -43,7 +43,7 @@
 ## 简介
 本文件面向智能考勤系统的UI层，聚焦UiController类提供的全部公共接口，涵盖系统状态管理、用户管理、记录查询、维护功能、UI线程管理、摄像头帧获取与后台服务启动等能力。文档为每个接口提供参数说明、返回值定义、异常处理机制与最佳实践，并给出调用序列与时序图，帮助开发者快速理解并正确使用UI层API。
 
-**更新** 系统设置界面已完全重写，从约800行扩展到3366行代码，新增记录清除功能、工厂重置选项和高级系统维护功能。UI控制器也相应扩展，新增公司管理操作和改进的部门处理，支持批量员工排班导入功能。
+**更新** 系统设置界面已完全重写，从约800行扩展到3366行代码，新增记录清除功能、工厂重置选项和高级系统维护功能。UI控制器也相应扩展，新增公司管理操作和改进的部门处理，支持批量员工排班导入功能。本次更新特别增加了部门调度管理功能，包括复杂的排班视图管理和批量导入导出能力。
 
 ## 项目结构
 UI层位于src/ui目录，围绕UiController为中心，向上对接LVGL界面与事件总线，向下封装数据层与业务层接口，形成清晰的分层职责：
@@ -59,6 +59,7 @@ UIApp["ui_app.cpp<br/>UI入口初始化"]
 UIManager["ui_manager.h<br/>屏幕/摄像头管理"]
 UIController["ui_controller.h/.cpp<br/>UI控制器"]
 SystemSettings["ui_sys_settings.cpp<br/>系统设置界面"]
+AttDesign["ui_scr_att_design.cpp<br/>考勤设计界面"]
 end
 subgraph "业务层"
 FaceDemo["face_demo.h<br/>业务接口"]
@@ -75,6 +76,7 @@ UIController --> FaceDemo
 UIController --> ReportGen
 UIController --> DB
 SystemSettings --> UIController
+AttDesign --> UIController
 ```
 
 **图表来源**
@@ -86,6 +88,7 @@ SystemSettings --> UIController
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
 - [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
 - [src/ui/screens/system/ui_sys_settings.cpp:1-3366](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3366)
+- [src/ui/screens/att_design/ui_scr_att_design.cpp:380-579](file://src/ui/screens/att_design/ui_scr_att_design.cpp#L380-L579)
 
 **章节来源**
 - [src/ui/ui_app.cpp:34-94](file://src/ui/ui_app.cpp#L34-L94)
@@ -97,20 +100,21 @@ SystemSettings --> UIController
 - [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
 
 ## 核心组件
-- UiController：单例，封装系统状态、用户管理、记录查询、维护与报表、摄像头帧获取、后台服务启动等接口
+- UiController：单例，封装系统状态、用户管理、记录查询、维护与报表、摄像头帧获取、后台服务启动等接口，现新增部门调度管理功能
 - UiManager：管理屏幕生命周期、输入组、摄像头显示缓冲区与帧同步
 - EventBus：发布/订阅系统事件（时间更新、磁盘状态、摄像头帧就绪等）
 - 业务层与数据层：提供底层能力（用户注册、记录查询、报表导出、数据库事务等）
 - 系统设置界面：全新的系统设置管理界面，包含基础设置和高级设置两大模块
+- 考勤设计界面：支持部门排班的详细设置和管理
 
 **章节来源**
-- [src/ui/ui_controller.h:21-132](file://src/ui/ui_controller.h#L21-L132)
-- [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
+- [src/ui/ui_controller.h:21-136](file://src/ui/ui_controller.h#L21-L136)
+- [src/ui/managers/ui_manager.h:12-164](file://src/ui/managers/ui_manager.h#L12-L164)
 - [src/business/event_bus.h:10-43](file://src/business/event_bus.h#L10-L43)
 - [src/ui/screens/system/ui_sys_settings.h:1-99](file://src/ui/screens/system/ui_sys_settings.h#L1-L99)
 
 ## 架构总览
-UiController作为UI层的统一适配器，向上通过事件总线驱动UI更新，向下封装业务层与数据层接口，同时负责后台线程的启动与管理。摄像头帧通过UiManager的共享缓冲区在UI线程与采集线程之间安全传递。
+UiController作为UI层的统一适配器，向上通过事件总线驱动UI更新，向下封装业务层与数据层接口，同时负责后台线程的启动与管理。摄像头帧通过UiManager的共享缓冲区在UI线程与采集线程之间安全传递。新增的部门调度管理功能通过DeptScheduleView结构体提供完整的排班视图，支持7天的班次安排。
 
 ```mermaid
 sequenceDiagram
@@ -248,7 +252,7 @@ end
 - updateUserDept(int userId, int newDeptId)
   - 功能：更新用户部门
   - 参数：userId, newDeptId
-  - 返回：布尔值
+  - Returns：布尔值
   - 异常：用户不存在返回false
   - 使用场景：组织架构调整
 
@@ -482,10 +486,32 @@ end
   - 异常：数据库查询失败返回0
   - 使用场景：部门删除前的完整性检查
 
+**新增** 部门调度管理功能
+- getDeptSchedule(int deptId)
+  - 功能：获取指定部门的完整排班视图
+  - 参数：deptId（部门ID）
+  - 返回：DeptScheduleView结构体（包含部门ID、名称和7天班次安排）
+  - 异常：数据库查询失败返回默认视图
+  - 使用场景：考勤设计界面显示部门排班
+  - 数据结构：DeptScheduleView包含dept_id、dept_name和shifts[7]数组
+  - 排班规则：shifts[0]=周日, shifts[1]=周一, ..., shifts[6]=周六，0表示节假日
+
+- updateDeptSchedule(int deptId, const std::string& newName, const std::vector<int>& shifts)
+  - 功能：更新指定部门的名称和排班信息
+  - 参数：deptId（部门ID）、newName（新名称）、shifts（7天班次向量）
+  - 返回：布尔值（更新成功/失败）
+  - 异常：数据验证失败或数据库错误返回false
+  - 使用场景：考勤设计界面保存部门排班
+  - 数据验证：shifts必须包含7个元素，每个元素为0-10的整数
+  - 批量导入：内部将向量转换为DeptScheduleEntry列表并批量导入
+
 **章节来源**
 - [src/ui/ui_controller.cpp:70-118](file://src/ui/ui_controller.cpp#L70-L118)
 - [src/ui/ui_controller.cpp:159-219](file://src/ui/ui_controller.cpp#L159-L219)
-- [src/data/db_storage.h:268-327](file://src/data/db_storage.h#L268-L327)
+- [src/ui/ui_controller.cpp:221-242](file://src/ui/ui_controller.cpp#L221-L242)
+- [src/data/db_storage.h:72-107](file://src/data/db_storage.h#L72-L107)
+- [src/data/db_storage.h:792-805](file://src/data/db_storage.h#L792-L805)
+- [src/ui/screens/att_design/ui_scr_att_design.cpp:380-579](file://src/ui/screens/att_design/ui_scr_att_design.cpp#L380-L579)
 
 ### 班次管理接口
 **新增** 班次管理功能
@@ -541,6 +567,17 @@ end
 - [src/ui/screens/system/ui_sys_settings.h:1-99](file://src/ui/screens/system/ui_sys_settings.h#L1-L99)
 - [src/ui/screens/system/ui_sys_settings.cpp:1-3366](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3366)
 
+### 考勤设计界面功能
+**新增** 考勤设计界面支持部门排班管理：
+- 部门设置详情界面：显示和编辑部门排班
+- 排班表格：2列×9行网格，包含表头和7天输入框
+- 输入验证：每个输入框接受0-10的数字，0表示节假日
+- 焦点管理：严格的输入焦点顺序控制
+- 数据保存：调用updateDeptSchedule()批量保存所有排班数据
+
+**章节来源**
+- [src/ui/screens/att_design/ui_scr_att_design.cpp:380-579](file://src/ui/screens/att_design/ui_scr_att_design.cpp#L380-L579)
+
 ### API调用最佳实践与性能优化建议
 - 事件驱动更新
   - 使用EventBus发布/订阅时间与磁盘状态，避免轮询
@@ -549,18 +586,22 @@ end
   - 帧数据通过UiManager的原子标记与互斥锁保护
   - UI线程仅读取共享缓冲区，业务线程写入
   - 公司名称和部门操作使用互斥锁保护
+  - 部门排班更新使用数据库事务保证一致性
 - I/O与CPU分离
   - 报表导出与U盘导入在后台线程执行
   - 采集线程与UI线程分离，避免阻塞
   - 系统设置界面操作异步处理
+  - 部门排班批量导入使用事务优化性能
 - 缓存与懒加载
   - 用户列表与记录查询使用数据库分页与缓存策略
   - 人脸特征按需加载，避免大对象频繁传输
   - 公司名称支持缓存机制
+  - 部门排班视图按需查询，避免不必要的数据传输
 - 错误处理
   - 文件系统异常返回false，UI层据此弹窗提示
   - 磁盘检查失败返回false，避免误报
   - 数据库操作失败时提供详细的错误信息
+  - 部门排班数据验证失败时提供具体的错误信息
 
 **章节来源**
 - [src/ui/ui_controller.cpp:394-410](file://src/ui/ui_controller.cpp#L394-L410)
@@ -614,6 +655,8 @@ class UiController {
 +updateDepartment(deptId, newName)
 +deleteDepartment(deptId)
 +getDepartmentEmployeeCount(deptId)
++getDeptSchedule(deptId)
++updateDeptSchedule(deptId, newName, shifts)
 +getAllShifts()
 +getShiftInfo(shiftId)
 +updateShiftInfo(shift_id, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end)
@@ -664,6 +707,8 @@ class DataLayer {
 +db_delete_department(dept_id)
 +db_get_all_shifts_limited()
 +db_get_shift_info(shift_id)
++db_import_dept_schedules(schedules)
++db_get_dept_schedule_view(dept_id)
 }
 UiController --> UiManager : "使用"
 UiController --> EventBus : "发布事件"
@@ -673,20 +718,20 @@ UiController --> DataLayer : "调用"
 ```
 
 **图表来源**
-- [src/ui/ui_controller.h:21-132](file://src/ui/ui_controller.h#L21-L132)
+- [src/ui/ui_controller.h:21-136](file://src/ui/ui_controller.h#L21-L136)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:23-42](file://src/business/event_bus.h#L23-L42)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
 - [src/business/face_demo.h:34-136](file://src/business/face_demo.h#L34-L136)
-- [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
+- [src/data/db_storage.h:213-834](file://src/data/db_storage.h#L213-L834)
 
 **章节来源**
-- [src/ui/ui_controller.h:21-132](file://src/ui/ui_controller.h#L21-L132)
+- [src/ui/ui_controller.h:21-136](file://src/ui/ui_controller.h#L21-L136)
 - [src/ui/managers/ui_manager.h:71-156](file://src/ui/managers/ui_manager.h#L71-L156)
 - [src/business/event_bus.h:23-42](file://src/business/event_bus.h#L23-L42)
 - [src/business/report_generator.h:31-98](file://src/business/report_generator.h#L31-L98)
 - [src/business/face_demo.h:34-136](file://src/business/face_demo.h#L34-L136)
-- [src/data/db_storage.h:213-683](file://src/data/db_storage.h#L213-L683)
+- [src/data/db_storage.h:213-834](file://src/data/db_storage.h#L213-L834)
 
 ## 性能考虑
 - 帧率控制：采集线程30ms一帧，UI定时器配合原子标记避免重复绘制
@@ -696,6 +741,8 @@ UiController --> DataLayer : "调用"
 - 事件频率：时间1Hz，磁盘5Hz，摄像头30ms，兼顾实时性与CPU占用
 - 缓存优化：公司名称支持缓存，减少数据库查询次数
 - 线程安全：使用互斥锁保护共享资源，避免竞态条件
+- 部门排班优化：DeptScheduleView结构体提供连续内存布局，避免频繁的数据库查询
+- 批量操作：部门排班更新使用批量导入，减少数据库往返次数
 
 ## 故障排查指南
 - 磁盘空间不足
@@ -720,6 +767,10 @@ UiController --> DataLayer : "调用"
 - 部门操作失败
   - 现象：addDepartment/updateDepartment/deleteDepartment返回false
   - 处理：检查部门名称合法性、完整性约束和数据库状态
+- 部门排班异常
+  - 现象：getDeptSchedule返回默认视图或updateDeptSchedule返回false
+  - 处理：检查部门ID有效性、排班数据格式正确性和数据库状态
+  - 数据验证：确保7天排班数据都在0-10范围内，0表示节假日
 - 班次管理异常
   - 现象：updateShiftInfo返回false或getShiftInfo返回空
   - 处理：检查班次ID有效性、时间格式正确性和数据库状态
@@ -728,9 +779,10 @@ UiController --> DataLayer : "调用"
 - [src/ui/ui_controller.cpp:394-410](file://src/ui/ui_controller.cpp#L394-L410)
 - [src/ui/ui_controller.cpp:212-231](file://src/ui/ui_controller.cpp#L212-L231)
 - [src/ui/ui_controller.cpp:419-656](file://src/ui/ui_controller.cpp#L419-L656)
+- [src/ui/ui_controller.cpp:221-242](file://src/ui/ui_controller.cpp#L221-L242)
 
 ## 结论
-UiController提供了完备的UI层API，覆盖系统状态、用户管理、记录查询、维护与报表、摄像头帧获取与后台服务启动等核心能力。通过事件总线与UiManager的协作，实现了UI线程与业务线程的解耦与高效交互。新增的公司设置和部门管理功能进一步增强了系统的管理能力。完全重写的系统设置界面提供了丰富的配置选项和良好的用户体验。遵循本文档的最佳实践与性能建议，可确保UI层在资源受限环境下稳定运行并提供流畅体验。
+UiController提供了完备的UI层API，覆盖系统状态、用户管理、记录查询、维护与报表、摄像头帧获取与后台服务启动等核心能力。通过事件总线与UiManager的协作，实现了UI线程与业务线程的解耦与高效交互。新增的公司设置和部门管理功能进一步增强了系统的管理能力，特别是部门调度管理功能的引入，通过DeptScheduleView结构体提供了完整的7天排班视图管理能力。完全重写的系统设置界面提供了丰富的配置选项和良好的用户体验。新增的屏幕类型枚举从77个减少到76个，移除了重复的UNKNOWN类型，使屏幕管理更加简洁。遵循本文档的最佳实践与性能建议，可确保UI层在资源受限环境下稳定运行并提供流畅体验。
 
 ## 附录
 - UI入口初始化流程
@@ -743,9 +795,15 @@ UiController提供了完备的UI层API，覆盖系统状态、用户管理、记
   - 全新的系统设置界面，包含基础设置和高级设置两大模块
   - 支持多种系统配置项的可视化管理
   - 提供完整的数据验证和错误处理机制
+- 考勤设计界面
+  - 支持部门排班的详细设置和管理
+  - 提供210×210像素的网格布局，包含表头和7天输入框
+  - 实现严格的输入焦点控制和数据验证
+  - 调用updateDeptSchedule()批量保存排班数据
 
 **章节来源**
 - [src/ui/ui_app.cpp:34-94](file://src/ui/ui_app.cpp#L34-L94)
 - [src/ui/screens/home/ui_scr_home.cpp:110-121](file://src/ui/screens/home/ui_scr_home.cpp#L110-L121)
 - [src/main.cpp:213-245](file://src/main.cpp#L213-L245)
 - [src/ui/screens/system/ui_sys_settings.cpp:1-3366](file://src/ui/screens/system/ui_sys_settings.cpp#L1-L3366)
+- [src/ui/screens/att_design/ui_scr_att_design.cpp:380-579](file://src/ui/screens/att_design/ui_scr_att_design.cpp#L380-L579)

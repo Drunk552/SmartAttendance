@@ -11,6 +11,7 @@
 
 #define UI_HEADER_H 30   // 顶部标题栏高度
 #define UI_FOOTER_H 30   // 底部状态栏高度
+#define UI_CANDIDATE_H 30 // 中文候选字条高度（紧贴 footer 上方，显隐切换）
 
 // 颜色定义 (参考原代码中的深色商务风格)
 #define THEME_COLOR_PRIMARY      lv_palette_main(LV_PALETTE_BLUE)// 主要蓝色 (按钮/高亮)

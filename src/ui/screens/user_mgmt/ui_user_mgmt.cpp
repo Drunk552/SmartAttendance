@@ -1331,7 +1331,7 @@ void load_user_register_form() {
     lv_obj_t* ta_id = create_form_input(form_cont, "工号:", nullptr, id_str.c_str(), true);
 
     //lv_textarea_set_text(ta_id, std::to_string(next_user_id).c_str());
-    g_ta_new_name = create_form_input(form_cont, "姓名:", "请输入员工姓名", nullptr, false);
+    g_ta_new_name = create_form_input(form_cont, "姓名:", "请输入员工姓名", nullptr, false, true);
     lv_obj_add_event_cb(g_ta_new_name, register_user_event_cb, LV_EVENT_ALL, nullptr); // 使用统一回调，监听 ALL
     UiManager::getInstance()->addObjToGroup(g_ta_new_name); // 加入焦点组
 
