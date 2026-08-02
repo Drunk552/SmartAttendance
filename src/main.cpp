@@ -13,6 +13,8 @@
 #include <cstdio>
 #include <signal.h>
 #include <cstdlib>// 确保包含 system 和 setenv
+#include <filesystem>
+#include <system_error>
 
 // 1. 引入第三方库头文件
 #include "lvgl.h"
@@ -31,6 +33,44 @@ extern "C" {
 #include "ui/ui_app.h"          // UI层
 #include "business/face_demo.h" // 业务层
 #include "data/db_storage.h"    // 数据层
+#include "app/application.h"
+
+namespace {
+
+std::filesystem::path executableDirectory(const char* executablePath) {
+    std::error_code error;
+    const auto procExecutable = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error && !procExecutable.empty()) {
+        return procExecutable.parent_path();
+    }
+
+    error.clear();
+    const auto absolutePath = std::filesystem::absolute(executablePath, error);
+    if (!error) {
+        return absolutePath.parent_path();
+    }
+
+    return {};
+}
+
+const char* initErrorMessage(smart_attendance::app::ApplicationInitError error) {
+    using smart_attendance::app::ApplicationInitError;
+    switch (error) {
+    case ApplicationInitError::InvalidState:
+        return "应用生命周期状态无效";
+    case ApplicationInitError::InvalidDatabaseLifecycle:
+        return "数据库生命周期配置无效";
+    case ApplicationInitError::RuntimeDirectoryUnavailable:
+        return "运行目录无法创建或访问";
+    case ApplicationInitError::DatabaseInitializationFailed:
+        return "数据库初始化失败";
+    case ApplicationInitError::None:
+        return "无错误";
+    }
+    return "未知初始化错误";
+}
+
+} // namespace
 
 // ==========================================
 // 测试函数定义区域
@@ -184,7 +224,8 @@ void disable_system_screensaver() {
 // ==========================================
 // 主程序入口
 // ==========================================
-int main() {
+int main(int argc, char* argv[]) {
+    (void)argc;
 
     // 注册信号处理 (Ctrl+C)
     signal(SIGINT, signal_handler);
@@ -199,13 +240,19 @@ int main() {
     // 1. 基础环境检查
     test_epic1_framework();
 
-    // 2. 初始化数据层 (Phase 2 新 Schema + 自动播种)
+    // 2. Application 统一准备运行目录并初始化数据层。
+    const auto runtimeDirectory = executableDirectory(argv[0]) / "runtime";
+    smart_attendance::app::Application application(
+        {data_init, data_close}, runtimeDirectory);
+
     std::cout << ">>> 初始化数据层..." << std::endl;
-    // 如果是第一次运行，建议先: rm attendance.db
-    if (!data_init()) {
-        std::cerr << "[Fatal] 数据库初始化失败，程序退出。" << std::endl;
-        return -1;
+    const auto initResult = application.initialize();
+    if (initResult != smart_attendance::app::ApplicationInitError::None) {
+        std::cerr << "[Fatal] " << initErrorMessage(initResult) << "，程序退出。" << std::endl;
+        return EXIT_FAILURE;
     }
+    std::cout << "[OK] 运行时文件目录: "
+              << application.runtimeDirectory().string() << std::endl;
 
     // 3. 执行 Phase 2 核心测试 (DAO + Seeding)
     //test_epic2_dao_and_seeding();
@@ -219,8 +266,17 @@ int main() {
     std::cout << ">>> 初始化业务层..." << std::endl;
     if (!business_init()) {
         std::cerr << "[Error] 业务层初始化失败。" << std::endl;
-        data_close();
-        return -1;
+        application.requestStop();
+        application.stop();
+        return EXIT_FAILURE;
+    }
+
+    if (!application.markRunning()) {
+        std::cerr << "[Fatal] 应用生命周期状态异常，无法进入运行状态。" << std::endl;
+        application.requestStop();
+        business_quit();
+        application.stop();
+        return EXIT_FAILURE;
     }
 
     // 6. 进入主循环
@@ -239,8 +295,12 @@ int main() {
 
     std::cout << ">>> 系统安全退出 (Main Loop Ended)" << std::endl;
     
+    application.requestStop();
     business_quit();// 清理业务层资源
 
-    data_close();
-    return 0;
+    if (!application.stop()) {
+        std::cerr << "[Error] 数据库关闭失败。" << std::endl;
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }
