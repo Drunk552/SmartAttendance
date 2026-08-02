@@ -252,7 +252,7 @@ r
 
 > 注意：必须先启动 Windows 摄像头推流，再运行 `attendance_app`。否则 UI 可以启动，但摄像头预览和人脸识别会等待 UDP 5004 视频流。
 
-首次运行会自动创建 `attendance.db` 数据库，并写入默认部门、班次和系统配置数据。
+首次运行会在可执行文件同级的 `runtime/` 目录中创建 `attendance.db` 数据库，并写入默认部门、班次和系统配置数据。使用标准构建目录时，无论从仓库根目录还是 `build/` 目录启动，运行文件都统一位于 `build/runtime/`。
 
 ---
 
@@ -262,11 +262,12 @@ r
 
 | 路径 | 说明 |
 |------|------|
-| `attendance.db` | SQLite 本地数据库 |
-| `face_model.xml` | OpenCV LBPH 人脸识别模型 |
-| `captured_images/` | 打卡抓拍图片 |
-| `output/usb_sim/` | 报表导出仿真目录 |
-| `output/usb_settings/` | 员工设置表导入/导出仿真目录 |
+| `build/runtime/attendance.db` | SQLite 本地数据库 |
+| `build/runtime/face_model.xml` | OpenCV LBPH 人脸识别模型 |
+| `build/runtime/captured_images/` | 打卡抓拍图片 |
+| `build/runtime/registered_avatars/` | 员工注册头像 |
+| `build/runtime/output/usb_sim/` | 报表导出仿真目录 |
+| `build/runtime/output/usb_settings/` | 员工设置表导入/导出仿真目录 |
 
 这些文件用于本地仿真和调试，不属于板端烧录工程。
 

@@ -579,12 +579,6 @@ bool business_init() {
     // 初始化LBPH人脸识别器
     recog = LBPHFaceRecognizer::create(1, 8, 8, 8, 500.0);
     
-    // 确保数据层已初始化 (连接数据库)
-    if (!data_init()) {
-        std::cerr << "[Business] 数据层初始化失败！" << std::endl;
-        return false;
-    }
-
     // 系统启动时，静默清理 30 天前的旧打卡抓拍图，释放磁盘空间
     std::cout << ">>> [Business] 正在检查磁盘空间与过期打卡抓拍图..." << std::endl;
     int cleaned_images = db_cleanup_old_attendance_images(30); // 30天

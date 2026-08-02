@@ -9,8 +9,11 @@ set -e
 
 APP="./build/attendance_app"
 DURATION=30
-LOG_FILE="verify_test.log"
-PID_FILE="verify_app.pid"
+REPORT_DIR="./build/test_reports"
+LOG_FILE="$REPORT_DIR/verify_test.log"
+PID_FILE="$REPORT_DIR/verify_app.pid"
+
+mkdir -p "$REPORT_DIR"
 
 # 颜色定义
 RED='\033[0;31m'

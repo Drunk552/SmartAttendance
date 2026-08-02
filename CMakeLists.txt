@@ -7,6 +7,7 @@ project(SmartAttendance_Phase01 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 # 开启调试符号
 set(CMAKE_BUILD_TYPE Debug)
 # [关键] 生成 compile_commands.json，让 VS Code 自动识别头文件路径
@@ -20,6 +21,8 @@ find_package(PkgConfig REQUIRED)
 
 # [Epic 4.4 新增] 查找线程库
 find_package(Threads REQUIRED)  
+
+include(CTest)
 
 # 2.2 LVGL 依赖 (SDL2, Freetype)
 pkg_check_modules(SDL2 REQUIRED sdl2)
@@ -83,6 +86,9 @@ endif()
 # 自动查找 src 下的源文件 (实际开发建议显式列出以避免遗漏)
 file(GLOB_RECURSE SRC_FILES
     "src/main.cpp"
+
+    # 应用生命周期层
+    "src/app/*.cpp"
     
     # UI 层 - 显式列出需要的文件
     "src/ui/common/ui_style.cpp"
@@ -145,7 +151,17 @@ target_link_libraries(attendance_app PRIVATE
     ${SDL2_LIBRARIES}   # 驱动支持
     ${XLSXWRITER_LIBRARIES}  # 链接 libxlsxwriter
     Threads::Threads  # 链接线程库
+    # Deleted: wiringPi
 )
+
+# 树莓派硬件构建时才链接 wiringPi 并定义 RPI_BUILD 宏
+if(RPI_BUILD)
+    target_link_libraries(attendance_app PRIVATE wiringPi)
+    target_compile_definitions(attendance_app PRIVATE RPI_BUILD)
+    message(STATUS "RPI_BUILD=ON: 链接 wiringPi，启用 GPIO 矩阵键盘")
+else()
+    message(STATUS "RPI_BUILD=OFF: 跳过 wiringPi，使用 SDL 模拟模式")
+endif()
 
 # 编译信息输出
 message(STATUS "Build Setup:")
