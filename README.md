@@ -329,22 +329,23 @@ make analyze_stability
 
 ```mermaid
 graph TD
-    A[main.cpp 程序入口] --> B[data_init 数据层初始化]
-    A --> C[ui_init UI层初始化]
-    A --> D[business_init 业务层初始化]
+    A[main.cpp 程序入口] --> B[Application 生命周期]
+    B --> C[data_init/data_close 数据库生命周期]
+    A --> D[ui_init UI层初始化]
+    B --> E[TaskManager 后台任务生命周期]
 
-    C --> E[LVGL + SDL2 主循环]
-    D --> F[人脸识别线程]
-    D --> K[数据库异步写入线程]
+    D --> F[LVGL + SDL2 主循环]
+    E --> G[采集 Worker]
+    E --> H[数据库异步写入 Worker]
 
-    J[Windows FFmpeg 推流] --> L[UDP 5004]
-    L --> M[OpenCV GStreamer 管道]
-    M --> F
+    I[Windows FFmpeg 推流] --> J[UDP 5004]
+    J --> K[OpenCV GStreamer 管道]
+    K --> G
 
-    F -->|EventBus 事件| C
-    C -->|用户操作| G[attendance_rule 考勤规则引擎]
-    G --> H[db_storage SQLite DAO]
-    G --> I[report_generator Excel 报表]
+    G -->|EventBus 事件| D
+    D -->|用户操作| L[attendance_rule 考勤规则引擎]
+    L --> M[db_storage SQLite DAO]
+    L --> N[report_generator Excel 报表]
 ```
 
 ---

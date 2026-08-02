@@ -11,12 +11,22 @@
 namespace smart_attendance::app {
 
 Application::Application(DatabaseLifecycle databaseLifecycle,
+                         TaskInitializer taskInitializer,
+                         WorkerLifecycle captureWorkerLifecycle,
+                         WorkerLifecycle databaseWriterWorkerLifecycle,
                          std::filesystem::path runtimeDirectory)
     : databaseLifecycle_(databaseLifecycle),
+      taskManager_(taskInitializer,
+                   captureWorkerLifecycle,
+                   databaseWriterWorkerLifecycle),
       runtimeDirectory_(std::move(runtimeDirectory)) {}
 
 Application::~Application() noexcept {
-    closeDatabaseNoexcept();
+    (void)taskManager_.requestStop();
+    (void)taskManager_.join();
+    if (taskManager_.state() == TaskManagerState::Joined) {
+        closeDatabaseNoexcept();
+    }
 }
 
 ApplicationInitError Application::initialize() noexcept {
@@ -61,6 +71,10 @@ bool Application::markRunning() noexcept {
         return false;
     }
 
+    if (!taskManager_.start()) {
+        return false;
+    }
+
     state_ = ApplicationState::Running;
     return true;
 }
@@ -71,12 +85,20 @@ bool Application::requestStop() noexcept {
         return false;
     }
 
+    if (!taskManager_.requestStop()) {
+        return false;
+    }
     state_ = ApplicationState::StopRequested;
     return true;
 }
 
 bool Application::stop() noexcept {
     if (state_ != ApplicationState::StopRequested) {
+        return false;
+    }
+
+    const bool tasksSucceeded = taskManager_.join();
+    if (taskManager_.state() != TaskManagerState::Joined) {
         return false;
     }
 
@@ -90,7 +112,7 @@ bool Application::stop() noexcept {
     }
 
     state_ = ApplicationState::Stopped;
-    return true;
+    return tasksSucceeded;
 }
 
 ApplicationState Application::state() const noexcept {

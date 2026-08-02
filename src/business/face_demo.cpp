@@ -17,6 +17,12 @@
 #include <map>// 字典支持
 #include <queue>// 队列支持
 #include <condition_variable>// 条件变量支持
+#include <cerrno>
+#include <cstdint>
+#include <poll.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 #include "face_demo.h" // 人脸识别演示模块的头文件
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 #include "db_storage.h"//数据层头文件
@@ -54,8 +60,6 @@ struct PunchTask {
 static std::queue<PunchTask> g_punch_queue;      // 任务队列
 static std::mutex g_queue_mutex;                 // 保护队列的锁
 static std::condition_variable g_queue_cv;       // 信号量
-static std::atomic<bool> g_db_writer_running{false}; // 写库线程运行标志
-static std::thread g_db_writer_thread;           // 写库线程对象
 
 // ============== [新增：考勤配置全局缓存] ==============
 static RuleConfig g_rule_cfg;              // 全局规则配置
@@ -73,10 +77,32 @@ static PreprocessConfig preprocess_config; // 全局预处理配置
 
 static cv::Mat g_display_frame_buffer; // 专门给 UI 显示用的帧缓存
 static std::mutex g_display_mutex;     // 保护 g_display_frame_buffer 的锁
-static std::atomic<bool> g_is_running{false}; // 线程运行标志
-static std::thread g_worker_thread;    // 后台采集线程对象
 
 const std::string MODEL_FILE = "face_model.xml"; // 模型文件名
+constexpr std::uint16_t kSimulatorStreamPort = 5004;
+constexpr int kStreamProbeTimeoutMs = 200;
+
+class ScopedFileDescriptor final {
+public:
+    explicit ScopedFileDescriptor(int descriptor) noexcept
+        : descriptor_(descriptor) {}
+
+    ~ScopedFileDescriptor() noexcept {
+        if (descriptor_ >= 0) {
+            close(descriptor_);
+        }
+    }
+
+    ScopedFileDescriptor(const ScopedFileDescriptor&) = delete;
+    ScopedFileDescriptor& operator=(const ScopedFileDescriptor&) = delete;
+
+    int get() const noexcept {
+        return descriptor_;
+    }
+
+private:
+    int descriptor_;
+};
 
 /**
  * @brief 应用直方图均衡化
@@ -213,6 +239,51 @@ static Mat preprocess_face(const Mat& current_frame, const Rect& roi) {
     return preprocess_face_complete(current_frame, roi, preprocess_config);// 使用全局预处理配置
 }
 
+/**
+ * @brief 等待仿真 UDP 流出现，同时允许采集 Worker 每 200ms 响应停止请求。
+ */
+static bool waitForSimulatorStream(
+    const std::atomic<bool>& stopRequested) {
+    // TODO(refactor/phase-6): 平台工厂落地后，将 UDP 探测和 GStreamer 管线
+    // 一并迁入 platform/pc，业务模块只接收摄像头帧。
+    const ScopedFileDescriptor socketFd(
+        socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+    if (socketFd.get() < 0) {
+        return false;
+    }
+
+    const int reuseAddress = 1;
+    (void)setsockopt(socketFd.get(), SOL_SOCKET, SO_REUSEADDR,
+                     &reuseAddress, sizeof(reuseAddress));
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(kSimulatorStreamPort);
+    if (bind(socketFd.get(), reinterpret_cast<sockaddr*>(&address),
+             sizeof(address)) != 0) {
+        return false;
+    }
+
+    pollfd descriptor{};
+    descriptor.fd = socketFd.get();
+    descriptor.events = POLLIN;
+    while (!stopRequested.load()) {
+        const int pollResult = poll(&descriptor, 1, kStreamProbeTimeoutMs);
+        if (pollResult > 0 && (descriptor.revents & POLLIN) != 0) {
+            return true;
+        }
+        if (pollResult > 0 &&
+            (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+            return false;
+        }
+        if (pollResult < 0 && errno != EINTR) {
+            return false;
+        }
+    }
+
+    return false;
+}
 
 /**
  * @brief 使用硬编码参数打开 SDP 视频流
@@ -235,25 +306,29 @@ static VideoCapture open_sdp_stream(const std::string& /*unused*/) {
         "appsink sync=false drop=true max-buffers=1";
 
     std::cout << "[Stream] 使用硬编码管道连接..." << std::endl;
-    VideoCapture cap(pipe, cv::CAP_GSTREAMER);
-    return cap;
+    VideoCapture stream(pipe, cv::CAP_GSTREAMER);
+    return stream;
 }
 
 /**
  * @brief 数据库写入专用线程 (消费者)
  * @note 从队列取任务并串行写入，彻底解决 SQLite 多线程竞争问题
  */
-static void attendance_writer_thread() {
-    while (g_db_writer_running) {
+void business_run_database_writer_task(
+    const std::atomic<bool>& stopRequested) {
+    std::cout << ">>> [Business] DB Writer thread started." << std::endl;
+    while (true) {
         std::unique_lock<std::mutex> lock(g_queue_mutex);
         
         // 等待条件：队列不为空 OR 收到停止信号
-        g_queue_cv.wait(lock, []{ 
-            return !g_punch_queue.empty() || !g_db_writer_running; 
+        g_queue_cv.wait(lock, [&stopRequested]{
+            return !g_punch_queue.empty() || stopRequested.load();
         });
 
         // 如果停止了且队列处理完了，就退出
-        if (!g_db_writer_running && g_punch_queue.empty()) break;
+        if (stopRequested.load() && g_punch_queue.empty()) {
+            break;
+        }
 
         // 取出一个任务
         if (!g_punch_queue.empty()) {
@@ -282,13 +357,20 @@ static void attendance_writer_thread() {
 
         }
     }
+    std::cout << ">>> [Business] DB Writer thread stopped." << std::endl;
+}
+
+void business_wake_database_writer_task() {
+    std::cout << ">>> [Business] Stopping DB Writer thread..." << std::endl;
+    g_queue_cv.notify_all();
 }
 
 /**
  * @brief 后台采集与处理线程函数
  * @note 持续采集视频帧，进行人脸检测与识别，并更新全局显示缓存
  */
-static void background_capture_loop() {
+void business_run_capture_task(const std::atomic<bool>& stopRequested) {
+    std::cout << ">>> [Business] Background capture thread started." << std::endl;
     // === 优化参数配置 ===
     const int SKIP_FRAMES = 4;           // 每 5 帧才做一次人脸检测 (0, 1, 2, 3, 4)
     const int RECOG_COOLDOWN_MS = 2000;  // 识别冷却时间 2000ms (2秒)
@@ -309,7 +391,7 @@ static void background_capture_loop() {
     
     int fail_consecutive_count = 0;// 连续失败计数器
 
-    while (g_is_running) {
+    while (!stopRequested.load()) {
         try {
             // 1. 检查连接状态 (SDP 重连逻辑)
             if (!cap.isOpened()) {
@@ -317,7 +399,9 @@ static void background_capture_loop() {
                 if (++retry_cnt % 10 == 0) { // 每2秒重试
                     std::cout << "[Stream] 尝试重连 SDP..." << std::endl;
                     cap.release();
-                    cap = open_sdp_stream("/tmp/yuyv.sdp");
+                    if (waitForSimulatorStream(stopRequested)) {
+                        cap = open_sdp_stream("/tmp/yuyv.sdp");
+                    }
                     if (cap.isOpened()) fail_consecutive_count = 0; // 重置计数
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -546,12 +630,15 @@ static void background_capture_loop() {
             std::cerr << "[Error] Unknown crash in capture loop!" << std::endl;
         }
     }
+    std::cout << ">>> [Business] Stopping capture thread..." << std::endl;
+    cap.release();
+    std::cout << ">>> [Business] Capture thread stopped." << std::endl;
 }
 
 /**
  * @brief 业务模块初始化函数
  * @return true-初始化成功，false-失败
- * @note 包括加载人脸检测器、打开视频源、初始化人脸识别器、设置预处理配置
+ * @note 包括加载人脸检测器、初始化人脸识别器和设置预处理配置；采集由 Worker 启动。
  */
 
 bool business_init() {
@@ -668,20 +755,6 @@ bool business_init() {
         } else {
              std::cout << ">>> [Business] 数据库无用户，跳过训练。" << std::endl;
         }
-    }
-
-    // 启动采集线程 
-    if (!g_is_running) {
-        g_is_running = true;
-        g_worker_thread = std::thread(background_capture_loop);
-        std::cout << ">>> [Business] Background capture thread started." << std::endl;
-    }
-
-    // 启动数据库写入线程
-    if (!g_db_writer_running) {
-        g_db_writer_running = true;
-        g_db_writer_thread = std::thread(attendance_writer_thread);
-        std::cout << ">>> [Business] DB Writer thread started." << std::endl;
     }
 
     return true;
@@ -1403,32 +1476,4 @@ void business_reload_config() {
     
     g_is_config_loaded = false;
     std::cout << ">>> [Business] 配置已过期，将在下一帧自动刷新。" << std::endl;
-}
-
-/**
- * @brief 业务退出函数
- * @note 停止采集线程和数据库写入线程
- */
-void business_quit() {
-    // 1. 停止采集线程
-    if (g_is_running) {
-        std::cout << ">>> [Business] Stopping capture thread..." << std::endl;// 停止采集线程
-        g_is_running = false;
-        if (g_worker_thread.joinable()) {
-            g_worker_thread.join();
-        }
-        std::cout << ">>> [Business] Capture thread stopped." << std::endl;// 停止完成
-    }
-
-    // 2. 停止数据库写入线程
-    if (g_db_writer_running) {
-        std::cout << ">>> [Business] Stopping DB Writer thread..." << std::endl;// 停止DB写入线程
-        g_db_writer_running = false;
-        g_queue_cv.notify_all(); // 唤醒沉睡的线程让它退出
-        
-        if (g_db_writer_thread.joinable()) {
-            g_db_writer_thread.join();
-        }
-        std::cout << ">>> [Business] DB Writer thread stopped." << std::endl;// 停止完成
-    }
 }
