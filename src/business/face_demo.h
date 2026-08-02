@@ -11,6 +11,7 @@
 // 只有 C++ 编译器能看到的区域
 #ifdef __cplusplus
 
+#include <atomic>
 #include "db_storage.h"//数据层头文件
 
 #include <opencv2/core.hpp> // 包含 cv::Mat 定义,只有 C++ 编译器才引入 OpenCV
@@ -33,7 +34,7 @@ extern "C" {
 
 /**
  * @brief 初始化业务模块
- * @details 加载人脸检测模型、初始化识别器、打开摄像头或视频流。
+ * @details 加载人脸检测模型并初始化识别资源；摄像头由采集 Worker 打开。
  * @return true 初始化成功
  * @return false 初始化失败 (如模型文件丢失、摄像头无法打开)
  */
@@ -201,12 +202,23 @@ bool business_get_recognition_enabled(void);
  * @note Epic 3要求实现的独立函数
  */
 cv::Mat convertToGrayscale(const cv::Mat& inputImage);
-#endif
 
 /**
- * @brief 退出并清理业务模块
- * @details 释放资源，关闭摄像头或视频流。
+ * @brief TaskManager 拥有的采集 Worker 入口。
+ * @param stopRequested 由 Worker 持有的停止标志，只在任务循环中读取。
  */
-void business_quit();
+void business_run_capture_task(
+    const std::atomic<bool>& stopRequested);
+
+/**
+ * @brief TaskManager 拥有的数据库写 Worker 入口。
+ * @param stopRequested 停止后继续排空已入队任务，再退出。
+ */
+void business_run_database_writer_task(
+    const std::atomic<bool>& stopRequested);
+
+/** @brief 唤醒等待队列的数据库写 Worker。 */
+void business_wake_database_writer_task();
+#endif
 
 #endif // FACE_DEMO_H

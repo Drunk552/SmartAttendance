@@ -170,6 +170,35 @@ message(STATUS "  SQLite3 Lib: ${SQLite3_LIBRARIES}")
 message(STATUS "  LVGL Conf: ${CMAKE_SOURCE_DIR}/lv_conf.h")
 message(STATUS "Compile Commands Export: ${CMAKE_EXPORT_COMPILE_COMMANDS}")
 
+if(BUILD_TESTING)
+    add_executable(application_lifecycle_test
+        src/app/application.cpp
+        src/app/task_manager.cpp
+        tests/unit/application_lifecycle_test.cpp
+    )
+    target_include_directories(application_lifecycle_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_link_libraries(application_lifecycle_test PRIVATE Threads::Threads)
+    add_test(
+        NAME application_lifecycle
+        COMMAND application_lifecycle_test
+    )
+
+    add_executable(task_manager_test
+        src/app/task_manager.cpp
+        tests/unit/task_manager_test.cpp
+    )
+    target_include_directories(task_manager_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_link_libraries(task_manager_test PRIVATE Threads::Threads)
+    add_test(
+        NAME task_manager
+        COMMAND task_manager_test
+    )
+endif()
+
 # ==========================================
 # 5. 测试目标配置
 # ==========================================

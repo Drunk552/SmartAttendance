@@ -243,7 +243,12 @@ int main(int argc, char* argv[]) {
     // 2. Application 统一准备运行目录并初始化数据层。
     const auto runtimeDirectory = executableDirectory(argv[0]) / "runtime";
     smart_attendance::app::Application application(
-        {data_init, data_close}, runtimeDirectory);
+        {data_init, data_close},
+        {business_init},
+        {business_run_capture_task, nullptr},
+        {business_run_database_writer_task,
+         business_wake_database_writer_task},
+        runtimeDirectory);
 
     std::cout << ">>> 初始化数据层..." << std::endl;
     const auto initResult = application.initialize();
@@ -264,17 +269,9 @@ int main(int argc, char* argv[]) {
 
     // 5. 后初始化业务层 (再启动线程，确保发出的第一个事件都能被收到)
     std::cout << ">>> 初始化业务层..." << std::endl;
-    if (!business_init()) {
-        std::cerr << "[Error] 业务层初始化失败。" << std::endl;
-        application.requestStop();
-        application.stop();
-        return EXIT_FAILURE;
-    }
-
     if (!application.markRunning()) {
-        std::cerr << "[Fatal] 应用生命周期状态异常，无法进入运行状态。" << std::endl;
+        std::cerr << "[Fatal] 业务层初始化失败或应用生命周期状态异常。" << std::endl;
         application.requestStop();
-        business_quit();
         application.stop();
         return EXIT_FAILURE;
     }
@@ -296,10 +293,9 @@ int main(int argc, char* argv[]) {
     std::cout << ">>> 系统安全退出 (Main Loop Ended)" << std::endl;
     
     application.requestStop();
-    business_quit();// 清理业务层资源
 
     if (!application.stop()) {
-        std::cerr << "[Error] 数据库关闭失败。" << std::endl;
+        std::cerr << "[Error] 后台任务或数据库关闭失败。" << std::endl;
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
