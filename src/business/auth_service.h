@@ -18,7 +18,7 @@ enum class AuthResult {
 /**
  * @brief 认证服务类
  * @details 只负责身份认证（密码/指纹验证）。
- *          认证成功后的考勤记录逻辑由 AttendanceRule::recordAttendance 负责。
+ *          若认证入口需要打卡，调用方必须将请求交给 PunchService。
  */
 class AuthService {
 public:

@@ -14,7 +14,7 @@
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
 #include "../../ui_controller.h"
-#include "../../../business/event_bus.h"
+#include "../../../business/face_demo.h"
 #include "../menu/ui_scr_menu.h"
 
 // 在命名空间外部声明，确保链接到 main.cpp 中的全局变量
@@ -76,8 +76,8 @@ static void screen_cleanup_cb(lv_event_t * e) {
     // screen 指针由 UiManager 管理，但在这里置空也无妨
     screen = nullptr;
 
-    // 通知业务层：主页被销毁，关闭人脸识别打卡
-    EventBus::getInstance().publish(EventType::LEAVE_HOME_SCREEN, nullptr);
+    // 页面生命周期使用同步调用，保证业务状态在页面销毁完成前停止接收新输入。
+    business_leave_home_screen();
 
     printf("[Home] Resources cleaned up safely.\n");
 }
@@ -92,8 +92,7 @@ static void screen_event_cb(lv_event_t * e) {
         if (key == LV_KEY_ENTER) {
             // 等待按键释放以防连跳
             lv_indev_wait_release(lv_indev_get_act());
-            // 通知业务层：离开主页，关闭人脸识别打卡
-            EventBus::getInstance().publish(EventType::LEAVE_HOME_SCREEN, nullptr);
+            business_leave_home_screen();
             // 跳转到菜单页逻辑
             ui::menu::load_menu_screen();
         }
@@ -206,6 +205,18 @@ static void create_screen() {
     lv_obj_set_style_border_color(img_camera, lv_color_hex(0x66CCFF), 0);
     lv_obj_set_style_border_side(img_camera, (lv_border_side_t)(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM), 0);
 
+    // 磁盘空间不足时覆盖在预览区右上角，避免挤压 240px Header 布局。
+    lbl_disk_warn = lv_label_create(parts.content);
+    lv_label_set_text(lbl_disk_warn, LV_SYMBOL_WARNING);
+    lv_obj_set_style_text_color(lbl_disk_warn,
+                                lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_bg_color(lbl_disk_warn, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(lbl_disk_warn, LV_OPA_70, 0);
+    lv_obj_set_style_pad_all(lbl_disk_warn, 3, 0);
+    lv_obj_set_style_radius(lbl_disk_warn, 3, 0);
+    lv_obj_align(lbl_disk_warn, LV_ALIGN_TOP_RIGHT, -6, 6);
+    lv_obj_add_flag(lbl_disk_warn, LV_OBJ_FLAG_HIDDEN);
+
     // 3. 自定义 Header 内容 (覆盖/添加标准内容)
 
     // 底部提示语 (覆盖默认的 "退出-ESC 确认-ENTER")
@@ -237,32 +248,35 @@ void load_screen(void) {
     UiManager::getInstance()->addObjToGroup(screen);
     lv_group_focus_obj(screen);
 
-    // 页面订阅逻辑 (异步更新)
-    auto& bus = EventBus::getInstance();
-    bus.subscribe(EventType::TIME_UPDATE, [](void* data) {
-        std::string* t = static_cast<std::string*>(data);
-        lv_async_call([](void* d){
-            std::string* time_str_ptr = (std::string*)d;
-                if(lbl_time && time_str_ptr && !time_str_ptr->empty()) {
-                lv_label_set_text(lbl_time, time_str_ptr->c_str());
-            }
-        }, new std::string(*t));
-    });
-
-    bus.subscribe(EventType::DISK_FULL, [](void*){
-        lv_async_call([](void*){ if(lbl_disk_warn) lv_obj_remove_flag(lbl_disk_warn, LV_OBJ_FLAG_HIDDEN); }, nullptr);
-    });
-
     // 启动定时器刷新摄像头
     if (!timer_cam) {
         timer_cam = lv_timer_create(timer_cam_cb, 16, nullptr);// 16ms (1000/16 ≈ 60 FPS)
     }
 
-    // 通知业务层：进入主页，开启人脸识别打卡
-    EventBus::getInstance().publish(EventType::ENTER_HOME_SCREEN, nullptr);
+    business_enter_home_screen();
 
     lv_screen_load(screen);
     UiManager::getInstance()->destroyAllScreensExcept(screen);
+}
+
+void update_time(const std::string& time_str, const std::string& date_str) {
+    if (lbl_time && !time_str.empty()) {
+        lv_label_set_text(lbl_time, time_str.c_str());
+    }
+    if (lbl_date && !date_str.empty()) {
+        lv_label_set_text(lbl_date, date_str.c_str());
+    }
+}
+
+void update_disk_status(bool is_full) {
+    if (!lbl_disk_warn) {
+        return;
+    }
+    if (is_full) {
+        lv_obj_remove_flag(lbl_disk_warn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(lbl_disk_warn, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 } // namespace home

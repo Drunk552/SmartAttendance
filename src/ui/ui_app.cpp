@@ -5,17 +5,21 @@
  */
 
 #include "ui_app.h"
+#include "app/ui_background_job_queue.h"
+#include "app/ui_system_status_mailbox.h"
 #include <lvgl.h>
 #include <cstdio>
 #include <cstdlib>
 
 // 模块接口
 #include "managers/ui_manager.h"
-#include "ui_controller.h"
 #include "common/ui_style.h"
+#include "common/ui_widgets.h"
 
 // 引入主页头文件
 #include "screens/home/ui_scr_home.h"
+#include "screens/record_query/ui_scr_record_query.h"
+#include "screens/att_stats/ui_scr_att_stats.h"
 
 // 屏幕宏定义 (默认 240x320，可按需修改)
 #ifndef SCREEN_W
@@ -29,6 +33,60 @@
 // 全局退出标志 (定义在 main.cpp)
 extern "C" {
     extern volatile bool g_program_should_exit;
+}
+
+namespace {
+
+smart_attendance::app::UiBackgroundJobQueue* g_backgroundJobs = nullptr;
+smart_attendance::app::UiSystemStatusMailbox* g_systemStatus = nullptr;
+
+} // namespace
+
+void ui_configure_background_jobs(
+    smart_attendance::app::UiBackgroundJobQueue& backgroundJobs) noexcept {
+    g_backgroundJobs = &backgroundJobs;
+    ui::record_query::configureBackgroundJobs(backgroundJobs);
+    ui::att_stats::configureBackgroundJobs(backgroundJobs);
+}
+
+void ui_configure_system_status(
+    smart_attendance::app::UiSystemStatusMailbox& systemStatus) noexcept {
+    g_systemStatus = &systemStatus;
+}
+
+void ui_process_background_results() {
+    if (g_backgroundJobs == nullptr) {
+        return;
+    }
+
+    smart_attendance::app::UiBackgroundJobResult result{};
+    while (g_backgroundJobs->tryPopResult(result)) {
+        switch (result.owner) {
+        case smart_attendance::app::UiBackgroundJobOwner::RecordQuery:
+            ui::record_query::handleBackgroundJobResult(result);
+            break;
+        case smart_attendance::app::UiBackgroundJobOwner::AttendanceStatistics:
+            ui::att_stats::handleBackgroundJobResult(result);
+            break;
+        }
+    }
+}
+
+void ui_process_system_status() {
+    if (g_systemStatus == nullptr) {
+        return;
+    }
+
+    smart_attendance::app::UiSystemStatusSnapshot snapshot{};
+    if (!g_systemStatus->tryConsume(snapshot)) {
+        return;
+    }
+
+    update_base_screen_time(snapshot.timeText, snapshot.weekdayText);
+    ui::home::update_time(snapshot.timeText, {});
+    if (snapshot.diskStatusKnown) {
+        ui::home::update_disk_status(snapshot.diskFull);
+    }
 }
 
 void ui_init(void) {
@@ -83,12 +141,19 @@ void ui_init(void) {
     // ============================================================
     // 5. 启动业务与加载主页
     // ============================================================
-    UiController::getInstance()->startBackgroundServices();
-
     printf("[UI] Loading Home Screen...\n");
     // 直接调用模块加载函数
     ui::home::load_screen();
 
-    UiController::getInstance()->startBackgroundServices();
     printf("[UI] Initialization Completed.\n");
+}
+
+void ui_shutdown(void) {
+    printf(">>> [UI] 正在释放 LVGL/SDL 资源...\n");
+    g_backgroundJobs = nullptr;
+    g_systemStatus = nullptr;
+    ui::record_query::resetBackgroundJobs();
+    ui::att_stats::resetBackgroundJobs();
+    lv_deinit();
+    printf(">>> [UI] LVGL/SDL 资源已释放。\n");
 }

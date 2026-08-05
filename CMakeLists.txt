@@ -89,6 +89,11 @@ file(GLOB_RECURSE SRC_FILES
 
     # 应用生命周期层
     "src/app/*.cpp"
+
+    # 核心打卡规则与阶段三过渡服务
+    "src/core/attendance/punch_rule.cpp"
+    "src/services/punch_service.cpp"
+    "src/storage/sqlite/legacy_punch_repositories.cpp"
     
     # UI 层 - 显式列出需要的文件
     "src/ui/common/ui_style.cpp"
@@ -110,7 +115,6 @@ file(GLOB_RECURSE SRC_FILES
     "src/ui/*.c"
 
     # 业务层
-    "src/business/event_bus.cpp"
     "src/business/*.cpp"
 
     # 数据层
@@ -173,20 +177,56 @@ message(STATUS "Compile Commands Export: ${CMAKE_EXPORT_COMPILE_COMMANDS}")
 if(BUILD_TESTING)
     add_executable(application_lifecycle_test
         src/app/application.cpp
+        src/app/application_services.cpp
         src/app/task_manager.cpp
+        src/app/ui_background_job_queue.cpp
+        src/app/ui_system_status_mailbox.cpp
+        src/core/attendance/punch_rule.cpp
+        src/services/punch_service.cpp
+        src/storage/sqlite/legacy_punch_repositories.cpp
+        src/data/db_storage.cpp
         tests/unit/application_lifecycle_test.cpp
     )
     target_include_directories(application_lifecycle_test PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
     )
-    target_link_libraries(application_lifecycle_test PRIVATE Threads::Threads)
+    target_link_libraries(application_lifecycle_test PRIVATE
+        SQLite::SQLite3
+        ${OpenCV_LIBS}
+        Threads::Threads
+    )
     add_test(
         NAME application_lifecycle
         COMMAND application_lifecycle_test
     )
 
+    add_executable(application_services_test
+        src/app/application_services.cpp
+        src/core/attendance/punch_rule.cpp
+        src/services/punch_service.cpp
+        src/storage/sqlite/legacy_punch_repositories.cpp
+        src/data/db_storage.cpp
+        tests/unit/application_services_test.cpp
+    )
+    target_include_directories(application_services_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(application_services_test PRIVATE
+        SQLite::SQLite3
+        ${OpenCV_LIBS}
+        Threads::Threads
+    )
+    add_test(
+        NAME application_services
+        COMMAND application_services_test
+    )
+
     add_executable(task_manager_test
         src/app/task_manager.cpp
+        src/app/ui_background_job_queue.cpp
+        src/app/ui_system_status_mailbox.cpp
         tests/unit/task_manager_test.cpp
     )
     target_include_directories(task_manager_test PRIVATE
@@ -197,6 +237,114 @@ if(BUILD_TESTING)
         NAME task_manager
         COMMAND task_manager_test
     )
+
+    add_executable(ui_background_job_queue_test
+        src/app/ui_background_job_queue.cpp
+        tests/unit/ui_background_job_queue_test.cpp
+    )
+    target_include_directories(ui_background_job_queue_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_link_libraries(ui_background_job_queue_test PRIVATE Threads::Threads)
+    add_test(
+        NAME ui_background_job_queue
+        COMMAND ui_background_job_queue_test
+    )
+
+    add_executable(ui_system_status_mailbox_test
+        src/app/ui_system_status_mailbox.cpp
+        tests/unit/ui_system_status_mailbox_test.cpp
+    )
+    target_include_directories(ui_system_status_mailbox_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_link_libraries(ui_system_status_mailbox_test PRIVATE Threads::Threads)
+    add_test(
+        NAME ui_system_status_mailbox
+        COMMAND ui_system_status_mailbox_test
+    )
+
+    add_executable(punch_service_test
+        src/core/attendance/punch_rule.cpp
+        src/services/punch_service.cpp
+        tests/unit/punch_service_test.cpp
+    )
+    target_include_directories(punch_service_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(punch_service_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME punch_service
+        COMMAND punch_service_test
+    )
+
+    add_executable(attendance_rule_compat_test
+        src/business/attendance_rule.cpp
+        src/core/attendance/punch_rule.cpp
+        tests/unit/attendance_rule_compat_test.cpp
+    )
+    target_include_directories(attendance_rule_compat_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(attendance_rule_compat_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME attendance_rule_compat
+        COMMAND attendance_rule_compat_test
+    )
+
+    add_executable(punch_request_queue_test
+        src/business/punch_request_queue.cpp
+        tests/unit/punch_request_queue_test.cpp
+    )
+    target_include_directories(punch_request_queue_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_link_libraries(punch_request_queue_test PRIVATE Threads::Threads)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(punch_request_queue_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME punch_request_queue
+        COMMAND punch_request_queue_test
+    )
+
+    add_executable(legacy_punch_repositories_test
+        src/core/attendance/punch_rule.cpp
+        src/services/punch_service.cpp
+        src/storage/sqlite/legacy_punch_repositories.cpp
+        src/data/db_storage.cpp
+        tests/integration/legacy_punch_repositories_test.cpp
+    )
+    target_include_directories(legacy_punch_repositories_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(legacy_punch_repositories_test PRIVATE
+        SQLite::SQLite3
+        ${OpenCV_LIBS}
+        Threads::Threads
+    )
+    add_test(
+        NAME legacy_punch_repositories
+        COMMAND legacy_punch_repositories_test
+    )
+
 endif()
 
 # ==========================================

@@ -10,7 +10,7 @@
 #include "../business/face_demo.h"
 #include "../business/report_generator.h"
 #include "../business/attendance_rule.h"
-#include "../business/event_bus.h"
+#include "../app/ui_system_status_mailbox.h"
 #include "managers/ui_manager.h"
 #include <sys/statvfs.h>
 #include <algorithm>
@@ -23,10 +23,36 @@
 #include <fstream>
 #include <regex>
 #include <iostream> 
+#include <chrono>
+#include <condition_variable>
 
 namespace fs = std::filesystem;// C++17 引入的文件系统库
 
 static UiController* s_instance = nullptr;
+
+namespace {
+
+std::mutex g_monitorWaitMutex;
+std::condition_variable g_monitorWaitCondition;
+
+bool isDiskFull() {
+    struct statvfs stat;
+    if (statvfs(".", &stat) != 0) return false;
+    unsigned long long free_bytes = stat.f_bavail * stat.f_frsize;
+    unsigned long long free_mb = free_bytes / (1024 * 1024);
+    return (free_mb < 100);
+}
+
+std::string currentTimeString() {
+    std::time_t rawtime = std::time(nullptr);
+    std::tm timeinfo{};
+    localtime_r(&rawtime, &timeinfo);
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%H:%M", &timeinfo);
+    return std::string(buf);
+}
+
+} // namespace
 
 UiController* UiController::getInstance() {
     if (!s_instance) {
@@ -37,20 +63,12 @@ UiController* UiController::getInstance() {
 
 // 移入原 check_disk_low 逻辑
 bool UiController::isDiskFull() {
-    struct statvfs stat;
-    if (statvfs(".", &stat) != 0) return false;
-    unsigned long long free_bytes = stat.f_bavail * stat.f_frsize;
-    unsigned long long free_mb = free_bytes / (1024 * 1024);
-    return (free_mb < 100);
+    return ::isDiskFull();
 }
 
 // 移入原 get_current_time_str 逻辑
 std::string UiController::getCurrentTimeStr() {
-    std::time_t rawtime = std::time(nullptr);
-    std::tm *timeinfo = std::localtime(&rawtime);
-    char buf[16];
-    std::strftime(buf, sizeof(buf), "%H:%M", timeinfo);
-    return std::string(buf);
+    return currentTimeString();
 }
 
 // 获取当前星期几字符串实现
@@ -247,16 +265,8 @@ bool UiController::registerNewUser(const std::string& name, int deptId) {
 }
 
 int UiController::getUserRoleById(int userId) {
-    // 1. Controller 层调用数据层，拿到一个 optional "盒子"
-    auto user_opt = db_get_user_info(userId);
-    
-    // 2. 检查盒子是否为空（找不到该用户）
-    if (!user_opt.has_value()) {
-        return -1; // 如果为空，返回 -1
-    }
-    
-    // 3. 拆盒取数据并返回权限值
-    return user_opt.value().role;
+    auto userOpt = db_get_user_info(userId);
+    return userOpt.has_value() ? userOpt->role : -1;
 }
 
 // 验证用户密码是否正确（哈希验证）
@@ -326,11 +336,7 @@ UserData UiController::getUserInfo(int uid) {
 
 // 检查用户是否存在 (用于 UI 导出报表前的同步校验)
 bool UiController::checkUserExists(int user_id) {
-    // 1. 获取 optional "盒子"
-    auto user_opt = db_get_user_info(user_id);
-    
-    // 2. 直接判断盒子是否有值即可，有值代表存在，没值代表不存在
-    return user_opt.has_value();
+    return db_get_user_info(user_id).has_value();
 }
 
 std::vector<AttendanceRecord> UiController::getRecords(int userId, time_t start, time_t end) {
@@ -531,37 +537,32 @@ bool UiController::exportEmployeeSettings() {
     return generator.exportSettingsReport(export_path);
 }
 
-// 后台服务与事件总线
-void UiController::startBackgroundServices() {
-    if (m_running) return;
-    m_running = true;
+void uiRunMonitorTask(
+    const std::atomic<bool>& stopRequested,
+    smart_attendance::app::UiSystemStatusMailbox& statusMailbox) {
+    int diskCheckCounter = 0;
+    while (!stopRequested.load()) {
+        // 单槽邮箱只保留最新状态；后台线程不接触 LVGL。
+        statusMailbox.publishTime(
+            currentTimeString(),
+            UiController::getInstance()->getCurrentWeekdayStr());
 
-    // 1. 启动系统监控线程
-    m_monitor_thread = std::thread(&UiController::monitorThreadFunc, this);
-    m_monitor_thread.detach();
-
-    // 2. 启动摄像头采集线程
-    m_capture_thread = std::thread(&UiController::captureThreadFunc, this);
-    m_capture_thread.detach();
-}
-
-// 监控线程实现
-void UiController::monitorThreadFunc() {
-    while (m_running) {
-        // A. 时间事件 (每秒)
-        std::string timeStr = getCurrentTimeStr();
-        EventBus::getInstance().publish(EventType::TIME_UPDATE, &timeStr);
-
-        // B. 磁盘监控 (每 5 秒)
-        static int disk_check_counter = 0;
-        if (++disk_check_counter >= 5) {
-            disk_check_counter = 0;
-            if (isDiskFull()) EventBus::getInstance().publish(EventType::DISK_FULL);
-            else EventBus::getInstance().publish(EventType::DISK_NORMAL);
+        // 磁盘状态同样按当前值合并，避免积压过期告警。
+        if (++diskCheckCounter >= 5) {
+            diskCheckCounter = 0;
+            statusMailbox.publishDiskStatus(::isDiskFull());
         }
 
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::unique_lock<std::mutex> lock(g_monitorWaitMutex);
+        g_monitorWaitCondition.wait_for(
+            lock,
+            std::chrono::seconds(1),
+            [&stopRequested]() { return stopRequested.load(); });
     }
+}
+
+void uiWakeMonitorTask() {
+    g_monitorWaitCondition.notify_all();
 }
 
 // ============================================================
@@ -875,17 +876,16 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
     return ok;
 }
 
-// 摄像头采集线程
-void UiController::captureThreadFunc() {
+void uiRunFrameDeliveryTask(const std::atomic<bool>& stopRequested) {
     const int W = 240; 
     const int H = 260; 
 
-    printf("[Controller] 采集线程启动: 目标尺寸 %dx%d\n", W, H);
+    printf("[Controller] UI 帧投递线程启动: 目标尺寸 %dx%d\n", W, H);
 
     // 局部临时缓冲区，用于从业务层接收数据
     std::vector<uint8_t> temp_buf(W * H * 3);
 
-    while (m_running) {
+    while (!stopRequested.load()) {
         // 1. 从业务层获取数据 (存入局部 temp_buf)
         bool ret = business_get_display_frame(temp_buf.data(), W, H);
         

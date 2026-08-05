@@ -204,7 +204,7 @@ struct AttendanceRecord {
     long long timestamp;
     
     /// @brief 考勤状态 
-    /// @note 0:正常, 1:迟到, 2:早退, 3:加班, 4:缺卡
+    /// @note 0:正常, 1:迟到, 2:早退, 3:旷工
     int status;             
     
     /// @brief 现场抓拍图片的文件路径
@@ -252,6 +252,12 @@ struct CompanyInfo {
  * @return false 初始化失败 (如文件权限问题、SQL错误)
  */
 bool data_init();
+
+/**
+ * @brief 返回数据库连接是否已初始化；不转移连接所有权。
+ * @note 线程安全且不阻塞数据库 IO；不得用它替代 Application 的生命周期控制。
+ */
+bool data_is_open();
 
 // [辅助函数] 简单哈希转换
 std::string db_hash_password(const std::string& raw_pwd);
@@ -534,6 +540,17 @@ std::vector<UserData> db_get_all_users_light();
  * @return true 记录成功
  */
 bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int status);
+
+/**
+ * @brief 使用调用方提供的时间戳记录考勤。
+ * @details 供统一打卡服务的存储适配器使用，数据库表结构与图片格式保持不变。
+ * @note 线程安全，但可能执行图片和数据库 IO；调用期间数据库必须保持已初始化。
+ */
+bool db_log_attendance_at(int user_id,
+                          int shift_id,
+                          const cv::Mat& image,
+                          int status,
+                          long long timestamp);
 
 /**
  * @brief 查询考勤记录
