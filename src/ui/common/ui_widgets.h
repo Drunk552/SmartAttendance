@@ -23,6 +23,10 @@ struct BaseScreenParts {
  */
 BaseScreenParts create_base_screen(const char* title);
 
+/** @brief 由 UI 主线程更新所有基础页面共享的最新时间状态。 */
+void update_base_screen_time(const std::string& time_text,
+                             const std::string& weekday_text);
+
 /**
  * @brief 设置底部提示语
  */

@@ -1,12 +1,14 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/face.hpp>
 #include <iostream>
 #include <vector>
 #include <string>
+#include <utility>
 #include <filesystem>
 #include <algorithm>
 #include <fstream>
@@ -15,8 +17,7 @@
 #include <mutex>// 互斥锁支持
 #include <chrono>//time.h>
 #include <map>// 字典支持
-#include <queue>// 队列支持
-#include <condition_variable>// 条件变量支持
+#include <optional>
 #include <cerrno>
 #include <cstdint>
 #include <poll.h>
@@ -26,8 +27,8 @@
 #include "face_demo.h" // 人脸识别演示模块的头文件
 #include "lvgl.h" // 嵌入式图形库头文件（预留接口，当前未使用）
 #include "db_storage.h"//数据层头文件
-#include "attendance_rule.h"
-#include "event_bus.h"// 事件总线头文件
+#include "business/punch_request_queue.h"
+#include "services/punch_service.h"
 #include "../ui/ui_controller.h"
 
 using namespace cv;
@@ -47,24 +48,63 @@ static bool trained = false;// 标识是否已完成训练
 static bool show_recognition = true;// 控制是否显示识别结果
 static std::mutex g_names_mutex;// 保护 names 变量的互斥锁
 
-// 1. 定义打卡任务包
-struct PunchTask {
-    int user_id;
-    int shift_id;
-    cv::Mat snapshot; // 抓拍照片
-    int status;       // 考勤状态
-    std::string user_name; // 仅用于日志打印
-    int minutes_diff;      // 仅用于日志打印
-};
-// 2. 队列与同步原语
-static std::queue<PunchTask> g_punch_queue;      // 任务队列
-static std::mutex g_queue_mutex;                 // 保护队列的锁
-static std::condition_variable g_queue_cv;       // 信号量
+constexpr std::size_t kPunchQueueCapacity = 10;
+constexpr std::size_t kMaxPunchSnapshotBytes = 512U * 1024U;
+static smart_attendance::business::PunchRequestQueue g_punch_queue{
+    kPunchQueueCapacity};
+static smart_attendance::services::PunchService* g_punch_service = nullptr;
 
-// ============== [新增：考勤配置全局缓存] ==============
-static RuleConfig g_rule_cfg;              // 全局规则配置
-static std::vector<ShiftInfo> g_shifts;    // 全局班次列表
-static bool g_is_config_loaded = false;    // 是否已加载标志位
+static std::optional<smart_attendance::services::PunchRequest>
+makePunchRequest(int userId,
+                 std::time_t timestamp,
+                 const cv::Mat& snapshot) {
+    std::tm local_time{};
+    if (::localtime_r(&timestamp, &local_time) == nullptr) {
+        return std::nullopt;
+    }
+
+    std::vector<uchar> snapshot_jpeg;
+    if (!snapshot.empty()) {
+        try {
+            const std::vector<int> encode_parameters{
+                cv::IMWRITE_JPEG_QUALITY, 85};
+            if (!cv::imencode(".jpg", snapshot, snapshot_jpeg, encode_parameters) ||
+                snapshot_jpeg.size() > kMaxPunchSnapshotBytes) {
+                std::cerr << "[Warn] Punch snapshot unavailable or exceeds 512 KiB; "
+                             "attendance will continue without image."
+                          << std::endl;
+                snapshot_jpeg.clear();
+            }
+        } catch (const cv::Exception& error) {
+            std::cerr << "[Warn] Punch snapshot encode failed: "
+                      << error.what() << std::endl;
+            snapshot_jpeg.clear();
+        }
+    }
+
+    return smart_attendance::services::PunchRequest{
+        userId,
+        static_cast<std::int64_t>(timestamp),
+        local_time.tm_hour * 60 + local_time.tm_min,
+        std::move(snapshot_jpeg)};
+}
+
+static const char* punchErrorName(
+    smart_attendance::services::PunchError error) noexcept {
+    using smart_attendance::services::PunchError;
+    switch (error) {
+        case PunchError::InvalidRequest: return "InvalidRequest";
+        case PunchError::ScheduleReadFailed: return "ScheduleReadFailed";
+        case PunchError::NoShift: return "NoShift";
+        case PunchError::RulesReadFailed: return "RulesReadFailed";
+        case PunchError::AttendanceReadFailed: return "AttendanceReadFailed";
+        case PunchError::DuplicatePunch: return "DuplicatePunch";
+        case PunchError::InvalidRules: return "InvalidRules";
+        case PunchError::InvalidShift: return "InvalidShift";
+        case PunchError::WriteFailed: return "WriteFailed";
+    }
+    return "Unknown";
+}
 
 static Mat current_frame;// [Eoic4新增] 用于在函数间共享最新一帧画面
 // [Epic 4.4 新增] 保护 current_frame 的互斥锁
@@ -311,50 +351,42 @@ static VideoCapture open_sdp_stream(const std::string& /*unused*/) {
 }
 
 /**
- * @brief 数据库写入专用线程 (消费者)
- * @note 从队列取任务并串行写入，彻底解决 SQLite 多线程竞争问题
+ * @brief 统一打卡专用 Worker（消费者）。
+ * @note 从有界队列取请求并串行调用 PunchService，采集 Worker 不访问数据库。
  */
 void business_run_database_writer_task(
     const std::atomic<bool>& stopRequested) {
     std::cout << ">>> [Business] DB Writer thread started." << std::endl;
     while (true) {
-        std::unique_lock<std::mutex> lock(g_queue_mutex);
-        
-        // 等待条件：队列不为空 OR 收到停止信号
-        g_queue_cv.wait(lock, [&stopRequested]{
-            return !g_punch_queue.empty() || stopRequested.load();
-        });
-
-        // 如果停止了且队列处理完了，就退出
-        if (stopRequested.load() && g_punch_queue.empty()) {
+        auto pending = g_punch_queue.waitPop(stopRequested);
+        if (!pending) {
             break;
         }
 
-        // 取出一个任务
-        if (!g_punch_queue.empty()) {
-            PunchTask task = g_punch_queue.front();
-            g_punch_queue.pop();
-            
-            // 关键：取完数据立刻解锁，让生产者(识别线程)能继续塞数据，不用等我写完库
-            lock.unlock(); 
-
-            // 添加 try-catch 防止因单次写入失败导致整个程序崩溃退出
-            try {
-                bool logged = db_log_attendance(task.user_id, task.shift_id, task.snapshot, task.status);
-                if(logged) {
-                    std::cout << "[Async] Save OK -> User: " << task.user_name 
-                               << " | Status: " << task.status 
-                               << " | Diff: " << task.minutes_diff << "m" << std::endl;
-                }else {
-                    std::cerr << "[Async] Save Failed -> User: " << task.user_name << std::endl;
-                }
-            } catch (const std::exception& e) {
-                std::cerr << "[Error] DB Write Exception: " << e.what() << std::endl;
-                // 捕获错误，不要让线程退出！
-            } catch (...) {
-                std::cerr << "[Error] DB Write Unknown Error!" << std::endl;
+        // 添加 try-catch 防止因单次写入失败导致整个 Worker 退出。
+        try {
+            if (g_punch_service == nullptr) {
+                std::cerr << "[Error] PunchService is not configured." << std::endl;
+                continue;
             }
 
+            const auto result = g_punch_service->punch(
+                std::move(pending->request));
+            if (result) {
+                std::cout << "[Async] Save OK -> User: " << pending->userName
+                          << " | Status: "
+                          << static_cast<int>(result.value().status)
+                          << " | Diff: " << result.value().minutesDifference
+                          << "m" << std::endl;
+            } else {
+                std::cerr << "[Async] Punch rejected -> User: "
+                          << pending->userName << " | Error: "
+                          << punchErrorName(result.error()) << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[Error] Punch Worker Exception: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "[Error] Punch Worker Unknown Error!" << std::endl;
         }
     }
     std::cout << ">>> [Business] DB Writer thread stopped." << std::endl;
@@ -362,7 +394,11 @@ void business_run_database_writer_task(
 
 void business_wake_database_writer_task() {
     std::cout << ">>> [Business] Stopping DB Writer thread..." << std::endl;
-    g_queue_cv.notify_all();
+    g_punch_queue.wakeAll();
+}
+
+void business_wake_capture_task() {
+    g_punch_queue.wakeAll();
 }
 
 /**
@@ -382,10 +418,6 @@ void business_run_capture_task(const std::atomic<bool>& stopRequested) {
     
     // 识别冷却时间控制
     std::map<int, std::chrono::steady_clock::time_point> user_cooldowns; 
-
-    // 业务防抖缓存 (防止重复写入数据库)
-    // Key: UserID, Value: 上次打卡的时间戳 (秒)
-    std::map<int, time_t> last_punch_cache;
 
     auto last_ui_update_time = std::chrono::steady_clock::now();// 上次UI更新的时间点
     
@@ -498,75 +530,18 @@ void business_run_capture_task(const std::atomic<bool>& stopRequested) {
                             }
                         }
 
-                        // 只有不在冷却中，才执行打卡逻辑
+                        // 只有不在识别冷却中，才向统一打卡 Worker 投递请求。
                         if (!in_cooldown) {
-                                
-                            // =====================  1. 业务防抖检查 =================
-                            // 获取当前系统时间 (秒)
-                            time_t now_sec = std::time(nullptr);
-                            time_t last_p = 0;
-
-                            // 先查内存缓存 (最快)
-                            if (last_punch_cache.find(label) != last_punch_cache.end()) {
-                                last_p = last_punch_cache[label];
-                            } 
-                            // 内存没有查数据库 (兜底)
-                            else {
-                                // 确保 db_storage.h 中声明了此函数，如果没有请添加
-                                last_p = db_getLastPunchTime(label);
-                                last_punch_cache[label] = last_p;
+                            const std::time_t now_sec = std::time(nullptr);
+                            auto request = makePunchRequest(
+                                label, now_sec, process_frame);
+                            bool queued = false;
+                            if (request) {
+                                queued = g_punch_queue.push(
+                                    {std::move(*request), name}, stopRequested);
                             }
 
-                            // 判断时间间隔 (例如 60秒 内禁止重复打卡)
-                            if (now_sec - last_p < 60) {
-                                // --- 情况 A: 重复打卡 ---
-                                // 仅在界面显示提示，不执行任何写库操作
-                                text += " [Repeat]"; 
-                            }
-                            else {
-                                // --- 情况 B: 有效打卡  ---
-                                    
-                                // ===== 考勤规则计算 =====
-                                    
-                                // 1. 构建班次配置
-                                ShiftConfig default_shift;
-                                default_shift.start_time = "09:00";
-                                default_shift.end_time = "18:00";
-                                default_shift.late_threshold_min = g_rule_cfg.late_threshold; 
-                                    
-                                // 2. 计算状态
-                                PunchResult result = AttendanceRule::calculatePunchStatus(now_sec, default_shift, true); 
-                                    
-                                // 3. 准备数据
-                                cv::Mat snapshot = process_frame.clone();
-                                int uid = label;
-                                int sid = 0; 
-                                int sts = 0; 
-                                if (result.status == PunchStatus::LATE) sts = 1;
-                                else if (result.status == PunchStatus::EARLY) sts = 2;
-                                else if (result.status == PunchStatus::ABSENT) sts = 4;
-                                    
-                                int diff = result.minutes_diff;
-                                std::string user_n = name;
-
-                                // 4. 异步队列推送
-                                {
-                                    std::lock_guard<std::mutex> lock(g_queue_mutex);
-                                    // 控制队列长度，防止内存占用过高
-                                    if (g_punch_queue.size() > 10) { 
-                                        std::cerr << "[Warn] DB Queue Full! Drop." << std::endl;
-                                    } else {
-                                        g_punch_queue.push({uid, sid, snapshot, sts, user_n, diff});
-                                        g_queue_cv.notify_one(); 
-                                    }
-                                }
-
-                                // 5. UI 反馈
-                                text += " [OK]";
-
-                                //  打卡成功后，立即更新内存缓存
-                                last_punch_cache[label] = now_sec;
-                            }
+                            text += queued ? " [OK]" : " [Unavailable]";
 
                             // 更新视觉冷却时间 (保证提示语显示 2秒)
                             user_cooldowns[label] = now;
@@ -589,23 +564,18 @@ void business_run_capture_task(const std::atomic<bool>& stopRequested) {
                 process_frame.copyTo(current_frame);
             }
 
-            // 3. 更新 UI 显示缓存(带限流保护)
+            // 3. 限流更新共享显示帧；UI 帧投递 Worker 会从该缓冲读取。
             auto now = std::chrono::steady_clock::now();
             // 计算时间差 (毫秒)
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_ui_update_time).count();
 
-            //  只有距离上次刷新超过 40ms (约 25 FPS) 才通知 UI
-            // 这样既保证了识别是 60 FPS (高精度)，又防止了 UI 队列爆炸
-            // 将限制从 40ms 改为 16ms (约 60 FPS)，让预览画面丝滑顺畅
+            // 最多约 60 FPS，避免对共享 cv::Mat 进行无上限复制。
             if (elapsed_ms >= 16) {
                 {
                     std::lock_guard<std::mutex> lock(g_display_mutex);
                     current_frame.copyTo(g_display_frame_buffer);
                 }
 
-                // 发送刷新信号
-                EventBus::getInstance().publish(EventType::CAMERA_FRAME_READY, nullptr);
-                
                 // 更新最后刷新时间
                 last_ui_update_time = now;
             }
@@ -642,17 +612,11 @@ void business_run_capture_task(const std::atomic<bool>& stopRequested) {
  */
 
 bool business_init() {
-    // 订阅屏幕切换事件，控制识别状态
-    auto& bus = EventBus::getInstance();
-    bus.subscribe(EventType::ENTER_HOME_SCREEN, [](void*){
-        show_recognition = true;
-        std::cout << "[Business] 进入主页，开启人脸识别打卡" << std::endl;
-    });
-    
-    bus.subscribe(EventType::LEAVE_HOME_SCREEN, [](void*){
-        show_recognition = false;
-        std::cout << "[Business] 离开主页，关闭人脸识别打卡" << std::endl;
-    });
+    if (g_punch_service == nullptr) {
+        std::cerr << "[Business] PunchService must be configured before initialization."
+                  << std::endl;
+        return false;
+    }
 
     // 加载人脸检测器（Haar级联分类器）
     std::string cascade_path = find_cascade();
@@ -760,6 +724,56 @@ bool business_init() {
     return true;
 }
 
+void business_enter_home_screen() {
+    show_recognition = true;
+    std::cout << "[Business] 进入主页，开启人脸识别打卡" << std::endl;
+}
+
+void business_leave_home_screen() {
+    show_recognition = false;
+    std::cout << "[Business] 离开主页，关闭人脸识别打卡" << std::endl;
+}
+
+void business_configure_punch_service(
+    smart_attendance::services::PunchService& punchService) noexcept {
+    g_punch_service = &punchService;
+}
+
+void business_shutdown() {
+    std::cout << ">>> [Business] 正在释放识别模型和业务缓存..." << std::endl;
+
+    // 采集 Worker 已经 join；再次 release 可覆盖初始化失败留下的部分句柄。
+    cap.release();
+    recog.release();
+    face_cas = cv::CascadeClassifier{};
+
+    std::vector<cv::Mat>().swap(face_samples);
+    std::vector<int>().swap(labels);
+    {
+        std::lock_guard<std::mutex> lock(g_names_mutex);
+        std::vector<std::string>().swap(names);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_data_mutex);
+        current_frame.release();
+        std::vector<UserData>().swap(g_user_cache);
+        std::vector<AttendanceRecord>().swap(g_record_cache);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_display_mutex);
+        g_display_frame_buffer.release();
+    }
+    g_punch_queue.clear();
+    g_punch_service = nullptr;
+
+    current_id = 0;
+    trained = false;
+    show_recognition = false;
+    preprocess_config = PreprocessConfig{};
+    std::cout << ">>> [Business] 识别模型和业务缓存已释放。" << std::endl;
+}
+
 /**
  * @brief 将BGR图像转换为灰度图像
  * @param inputImage 输入图像（BGR或BGRA格式）
@@ -863,221 +877,16 @@ bool business_get_recognition_enabled(void) {
 // ==========================================
 
 /**
- * @brief 业务单次运行函数（Epic 4 修改版）
- * @return cv::Mat 处理后的图像（带有人脸框和文字），用于 UI 显示
- * @note 移除了 imshow 和 waitKey，不再阻塞，不再直接处理键盘
+ * @brief 获取采集 Worker 最近发布的处理后画面。
+ * @return 当前帧的独立副本；尚无画面时返回空 Mat。
+ * @note 线程安全，不读取摄像头、不执行识别或打卡。
  */
-cv::Mat business_get_frame() {// 函数名建议修改，原名 business_run_once 也可以保留但返回值要改
-
-    //  加锁，防止写入时被其他线程读取
+cv::Mat business_get_frame() {
     std::lock_guard<std::mutex> lock(g_data_mutex);
-    if (current_frame.empty()) return cv::Mat();
+    if (current_frame.empty()) {
+        return cv::Mat();
+    }
     return current_frame.clone();
-
-    // 1. 读取一帧
-    if (!cap.read(current_frame) || current_frame.empty()) {
-        return Mat(); 
-    }
-
-    // 2. 检测人脸
-    Rect face;
-    bool has = detect_face(current_frame, face, face_cas);
-    if (has) rectangle(current_frame, face, Scalar(0,255,0), 2);
-
-    // ================== 【新增调试日志】 ==================
-    // 每 100 帧打印一次当前状态，帮助定位问题
-    // 观察终端输出的 status 字段
-    static int debug_counter = 0;
-    if (debug_counter++ % 100 == 0) {
-        std::cout << "[Debug] 状态检查 -> "
-                  << "识别开关: " << (show_recognition ? "ON" : "OFF")
-                  << " | 模型已训练: " << (trained ? "YES" : "NO")
-                  << " | 检测到人脸: " << (has ? "YES" : "NO") 
-                  << std::endl;
-    }
-
-    // 3. 识别逻辑 (如果开启)
-    if (show_recognition && trained && has) {
-        Mat f = preprocess_face(current_frame, face);
-        int pred_label = -1; double conf = 0.0;
-        recog->predict(f, pred_label, conf);
-
-        std::string text;
-        if (pred_label >= 0 && pred_label < names.size()) {
-            // 识别成功 (置信度阈值可调，越低越匹配)
-            // 这里将原来 80.0 改为100.0，放宽一些识别条件
-            if (conf <= 100.0) {
-                text = names[pred_label];
-                
-                // === [Phase 05 修改] 考勤核心逻辑 ===
-                
-                // 1. 获取当前时间
-                time_t now = std::time(nullptr);
-                
-                // 2. [Story 1.3] 检查重复打卡 (数据库校验)
-                // 只有当距离上次打卡超过 5分钟 (300秒) 才允许入库
-                time_t last_punch = db_getLastPunchTime(pred_label);
-                
-                if (now - last_punch < 300) {
-                    // --- 重复打卡分支 ---
-                    text += " [Repeat]"; // 在人脸上方显示提示
-                    // 可选：在这里调用 UI 弹窗接口，例如 ui_show_toast("5分钟内已打卡");
-                } 
-                else {
-                    // --- 有效打卡分支 ---
-                    
-                    // 调用考勤规则引擎计算状态
-                    // --- 步骤 A: 准备全局配置 (懒加载) ---
-                    static RuleConfig rule_cfg;
-                    static std::vector<ShiftInfo> all_shifts;
-                    
-                    if (!g_is_config_loaded || g_shifts.empty()) {
-                        g_rule_cfg = db_get_global_rules();
-                        g_shifts = db_get_shifts(); // 加载所有班次供智能匹配使用
-                        g_is_config_loaded = true;
-                    }
-
-                    // --- 步骤 B: 确定目标班次 ---
-                    ShiftConfig target_config;
-                    bool is_check_in = true; // 判定是上班卡还是下班卡
-                    int shift_id_for_log = 0; // 用于记录到数据库的班次ID
-
-                    // [新增逻辑] 1. 优先检查用户是否绑定了“固定班次”
-                    // 注意：需确保 db_storage.h 中已声明 db_get_user_shift
-                    ShiftInfo user_fixed_shift = db_get_user_shift(pred_label);
-
-                    if (user_fixed_shift.id > 0) {
-                        // === 分支 1: 用户有固定排班 (如: 保安夜班) ===
-                        std::cout << "[Rule] 用户 " << names[pred_label] << " 绑定班次: " << user_fixed_shift.name << std::endl;
-                        
-                        target_config.start_time = user_fixed_shift.s1_start; 
-                        target_config.end_time   = user_fixed_shift.s1_end;
-                        target_config.late_threshold_min = g_rule_cfg.late_threshold;
-                        shift_id_for_log = user_fixed_shift.id;
-
-                        // 简单的“距离判定法”决定是上班还是下班：
-                        // 看当前时间离“上班点”近，还是离“下班点”近
-                        int now_mins = (localtime(&now)->tm_hour * 60) + localtime(&now)->tm_min;
-                        int start_mins = AttendanceRule::timeStringToMinutes(user_fixed_shift.s1_start);
-                        int end_mins   = AttendanceRule::timeStringToMinutes(user_fixed_shift.s1_end);
-
-                        // 简单的跨天处理 (如果跨天，下班时间的分钟数应+1440)
-                        if (user_fixed_shift.cross_day) {
-                             if (end_mins < start_mins) end_mins += 1440;
-                             if (now_mins < start_mins) now_mins += 1440; // 假设打卡也是次日
-                        }
-
-                        int dist_start = std::abs(now_mins - start_mins);
-                        int dist_end = std::abs(now_mins - end_mins);
-                        
-                        is_check_in = (dist_start <= dist_end);
-                    } 
-                    else {
-                        // === 分支 2: 无固定排班，使用原来的“智能匹配” (AM/PM 通排) ===
-                        ShiftConfig shift_am, shift_pm;
-                        int id_am = 0, id_pm = 0;
-
-                        // 默认取前两个班次作为早/晚班
-                        if (g_shifts.size() >= 2) {
-                            if (!g_shifts.empty()) {
-                                // 上午规则：取 s1_start, s1_end
-                                shift_am = {g_shifts[0].s1_start, g_shifts[0].s1_end, g_rule_cfg.late_threshold};
-                                
-                                // 下午规则：取 s2_start, s2_end
-                                shift_pm = {g_shifts[0].s2_start, g_shifts[0].s2_end, g_rule_cfg.late_threshold};
-                            }
-                        } else {
-                            // 兜底默认值
-                            shift_am = {"09:00", "12:00", g_rule_cfg.late_threshold};
-                            shift_pm = {"13:00", "18:00", g_rule_cfg.late_threshold};
-                        }
-
-                        // 使用折中原则判断归属
-                        int shift_owner = AttendanceRule::determineShiftOwner(now, shift_am, shift_pm);
-                        
-                        if (shift_owner == 1) {
-                            target_config = shift_am;
-                            shift_id_for_log = id_am;
-                            is_check_in = true; // 上午班 -> 算上班
-                        } else {
-                            target_config = shift_pm;
-                            shift_id_for_log = id_pm;
-                            is_check_in = false; // 下午班 -> 算下班
-                        }
-                    }
-
-                    // --- 步骤 C: 计算最终状态 (迟到/早退/正常) ---
-                    PunchResult result = AttendanceRule::calculatePunchStatus(now, target_config, is_check_in);
-                    
-                    // 4. 入库保存 (记录详细状态)
-                    // 转换状态枚举到 int (0:Normal, 1:Late, 2:Early, 3:Absent)
-                    int db_status = 0;
-                    if (result.status == PunchStatus::LATE) db_status = 1;
-                    else if (result.status == PunchStatus::EARLY) db_status = 2;
-                    else if (result.status == PunchStatus::ABSENT) db_status = 4;
-                    
-                    // ===================== [异步打卡] =================
-
-                    // 1. 关键：必须克隆当前帧！
-                    // 因为 current_frame 是全局复用的，下一帧采集会覆盖它。
-                    // 如果直接传 current_frame 给子线程，子线程保存的可能是下一帧的画面或损坏的数据。
-                    cv::Mat snapshot = current_frame.clone();
-
-                    // 2. 捕获必要的局部变量 (值拷贝)
-                    // 这些变量在下一轮循环会变，所以必须拷贝一份传给 Lambda
-                    int uid = pred_label;
-                    int sid = shift_id_for_log;
-                    int sts = db_status;
-                    int diff = result.minutes_diff;
-                    std::string user_n = names[pred_label]; // 用于日志
-
-                    // 3. 推送任务到队列，而不是启动新线程
-                    {
-                        std::lock_guard<std::mutex> lock(g_queue_mutex);
-                        
-                        // [Epic 4.4 优化] 防护：如果积压超过 50 条，说明写入速度严重滞后
-                        // 此时选择丢弃当前最新的打卡任务，优先保命（防止内存耗尽崩溃）
-                        if (g_punch_queue.size() > 50) {
-                            std::cerr << "[Warn] DB Writer Queue FULL (>50)! Dropping record for: " << user_n << std::endl;
-                            
-                            // 可选：你也可以在这里加一行代码，让界面显示一个红色的 "Busy" 图标提醒用户
-                        } 
-                        else {
-                            // 队列未满，正常入队
-                            g_punch_queue.push({uid, sid, snapshot, sts, user_n, diff});
-                            g_queue_cv.notify_one(); // 唤醒后台写库线程
-                        }
-                    }
-
-                    // 4. UI 立即反馈 (乐观更新)
-                    // 不需要等数据库返回，直接告诉用户“识别成功”，体验最流畅
-                    text += " [OK]";
-                }
-                // ======================================
-            } else {
-                text = "unknown"; // 置信度不够
-            }
-            text += " " + cv::format("%.0f", conf);
-        } else {
-            text = "unknown";
-        }
-
-        putText(current_frame, text, Point(face.x, std::max(0, face.y-10)),
-                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0,255,0), 2);
-    }
-
-    // 4. 在图像上绘制状态信息 (OSD)
-    // 注意：在更高级的集成中，这些文字应该由 LVGL 绘制在 Label 控件上，而不是画在图里。
-    // 但为了 Epic 4 的过渡，我们先保留在图上绘制。
-    std::string status = "User: " + names[current_id];
-    status += trained ? " [Trained]" : " [No Model]";
-    status += show_recognition ? " [Recog ON]" : "";
-    
-    putText(current_frame, status, Point(10, 30), FONT_HERSHEY_SIMPLEX, 
-            0.6, Scalar(0, 255, 255), 2);
-
-    // 5. 返回图像给 UI 层
-    return current_frame;
 }
 
 /**
@@ -1467,13 +1276,10 @@ void business_set_roi_enhance(bool enable, float contrast, float brightness){
 }
 
 /**
- * @brief 强制刷新考勤配置
- * @note 将加载标志位置为 false，下次 business_get_frame 运行时会自动从数据库重新拉取
+ * @brief 保留给旧 UI 调用方的配置刷新兼容入口。
+ * @note PunchService 每次打卡都会读取当前规则，因此不再维护业务层规则缓存。
  */
 void business_reload_config() {
-    // [Epic 4.4] 建议加锁 (如果你有多线程隐患)
-    std::lock_guard<std::mutex> lock(g_data_mutex); 
-    
-    g_is_config_loaded = false;
-    std::cout << ">>> [Business] 配置已过期，将在下一帧自动刷新。" << std::endl;
+    std::cout << ">>> [Business] 打卡规则由 PunchService 按请求读取，无需刷新缓存。"
+              << std::endl;
 }

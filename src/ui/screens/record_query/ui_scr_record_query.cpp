@@ -3,12 +3,14 @@
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
 #include "../../ui_controller.h"
+#include "../../../app/ui_background_job_queue.h"
 #include "../menu/ui_scr_menu.h"
 #include <cstdio>
 #include <string>
 #include <vector>
 #include <ctime>
 #include <cctype> // 需要用到 isdigit
+#include <unordered_map>
 
 namespace ui {
 namespace record_query {
@@ -109,30 +111,39 @@ static time_t convert_date_to_timestamp(const std::string& date_str, bool end_of
 
 // ====================== 异步导出相关 =================
 
-// 1. 定义上下文结构体
-struct AsyncExportCtx {
-    lv_obj_t* spinner; // 加载圈指针
-    bool success;      // 导出结果
-};
+static smart_attendance::app::UiBackgroundJobQueue* g_background_jobs = nullptr;
+static std::unordered_map<std::uint64_t, lv_obj_t*> g_background_spinners;
 
-// 2. UI线程回调函数 (由 lv_async_call 触发)
-static void ui_on_export_complete(void* data) {
-    AsyncExportCtx* ctx = (AsyncExportCtx*)data;
-    
-    // 移除加载圈
-    if (ctx->spinner && lv_obj_is_valid(ctx->spinner)) {
-        lv_obj_delete(ctx->spinner);
+static void show_export_result(lv_obj_t* spinner, bool success) {
+    if (spinner && lv_obj_is_valid(spinner)) {
+        lv_obj_delete(spinner);
     }
-    
-    // 显示结果弹窗
-    if (ctx->success) {
+
+    if (success) {
         show_popup_msg("下载考勤报表失败", "报表下载成功!\n报表已下载至U盘!", nullptr, "我知道了");
     } else {
         show_popup_msg("下载考勤报表成功", "报表下载失败!\n请检查设备!", nullptr, "我知道了");
     }
-    
-    // 释放堆内存
-    delete ctx;
+}
+
+void configureBackgroundJobs(
+    smart_attendance::app::UiBackgroundJobQueue& backgroundJobs) noexcept {
+    g_background_jobs = &backgroundJobs;
+}
+
+void resetBackgroundJobs() noexcept {
+    g_background_jobs = nullptr;
+    g_background_spinners.clear();
+}
+
+void handleBackgroundJobResult(
+    const smart_attendance::app::UiBackgroundJobResult& result) {
+    const auto spinner = g_background_spinners.find(result.requestId);
+    if (spinner == g_background_spinners.end()) {
+        return;
+    }
+    show_export_result(spinner->second, result.success);
+    g_background_spinners.erase(spinner);
 }
 
 
@@ -757,15 +768,25 @@ static void download_job_query_event_cb(lv_event_t *e) {
                 return;
             }
 
-            // 4. 创建加载圈并启动后台导出线程
+            // 4. 创建加载圈并提交给有界后台队列
             lv_obj_t* spin = lv_spinner_create(lv_screen_active());
             lv_obj_center(spin);
-            
-            std::thread([uid, s_txt, e_txt, spin](){
-                bool ret = UiController::getInstance()->exportUserReport(uid, s_txt.c_str(), e_txt.c_str());
-                AsyncExportCtx* ctx = new AsyncExportCtx{spin, ret};
-                lv_async_call(ui_on_export_complete, ctx);
-            }).detach();
+
+            std::uint64_t requestId = 0;
+            const auto submitResult = g_background_jobs == nullptr
+                ? smart_attendance::app::UiBackgroundJobSubmitError::Stopped
+                : g_background_jobs->submitUserReport(
+                      smart_attendance::app::UiBackgroundJobOwner::RecordQuery,
+                      uid, s_txt, e_txt, requestId);
+            if (submitResult != smart_attendance::app::UiBackgroundJobSubmitError::None) {
+                lv_obj_delete(spin);
+                show_popup_msg("下载个人考勤报表失败",
+                               "后台任务繁忙或正在退出，请稍后重试!",
+                               nullptr,
+                               "我知道了");
+                return;
+            }
+            g_background_spinners.emplace(requestId, spin);
         }
     }
 }
@@ -1323,15 +1344,25 @@ static void download_time_query_event_cb(lv_event_t *e) {
                 return;
             }
 
-            // 创建加载圈并启动后台导出线程
+            // 创建加载圈并提交给同一个有界报表队列
             lv_obj_t* spin = lv_spinner_create(lv_screen_active());
             lv_obj_center(spin);
-            
-            std::thread([s_txt, e_txt, spin](){
-                bool ret = UiController::getInstance()->exportCustomReport(s_txt.c_str(), e_txt.c_str());
-                AsyncExportCtx* ctx = new AsyncExportCtx{spin, ret};
-                lv_async_call(ui_on_export_complete, ctx);
-            }).detach();
+
+            std::uint64_t requestId = 0;
+            const auto submitResult = g_background_jobs == nullptr
+                ? smart_attendance::app::UiBackgroundJobSubmitError::Stopped
+                : g_background_jobs->submitCustomReport(
+                      smart_attendance::app::UiBackgroundJobOwner::RecordQuery,
+                      s_txt, e_txt, requestId);
+            if (submitResult != smart_attendance::app::UiBackgroundJobSubmitError::None) {
+                lv_obj_delete(spin);
+                show_popup_msg("下载考勤报表失败",
+                               "后台任务繁忙或正在退出，请稍后重试!",
+                               nullptr,
+                               "我知道了");
+                return;
+            }
+            g_background_spinners.emplace(requestId, spin);
         }
     }
 }

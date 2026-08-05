@@ -15,15 +15,6 @@
 #include <db_storage.h>// 调用数据层接口
 #include "attendance_rule.h"
 
-// 辅助函数：判断新打卡记录的状态是否比旧记录更“好” (正常优先原则)
-// 返回 true 表示新记录优先级更高，应该替换旧记录
-bool isStatusBetter(int new_status, int old_status) {
-    // 假设状态枚举：STATUS_NORMAL = 0, STATUS_LATE = 1, STATUS_EARLY = 2, STATUS_ABSENT = 3
-    // 状态值越小，代表考勤越正常 (0是最高优)
-    // 如果都是异常（比如都是迟到），优先级一样，由时间早晚来决定
-    return new_status < old_status; 
-}
-
 /**
  * @brief 将时间字符串 "HH:MM" 转换为分钟数
  * 根据规则 Q5：实施容错清洗，处理以下异常情况：
@@ -1793,5 +1784,4 @@ std::string ReportGenerator::formatDateString(int year, int month, int day){
        <<std::setw(2) << std::setfill('0') <<day;
     return ss.str();
 }
-
 

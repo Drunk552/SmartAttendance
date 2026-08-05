@@ -82,7 +82,6 @@ SmartAttendance/
 │   ├── business/               # 业务层核心逻辑
 │   │   ├── attendance_rule     # 考勤规则引擎（状态判定、迟到早退计算）
 │   │   ├── auth_service        # 身份认证（登录、权限校验）
-│   │   ├── event_bus           # 事件总线（组件间解耦通信）
 │   │   ├── face_demo           # 人脸识别流程（采集 -> 检测 -> 识别）
 │   │   └── report_generator    # Excel 报表生成器
 │   ├── data/
@@ -330,22 +329,32 @@ make analyze_stability
 ```mermaid
 graph TD
     A[main.cpp 程序入口] --> B[Application 生命周期]
-    B --> C[data_init/data_close 数据库生命周期]
-    A --> D[ui_init UI层初始化]
+    B --> AS[ApplicationServices 服务资源生命周期]
+    AS --> C[data_init/data_close 数据库生命周期]
+    AS --> S[业务模型和缓存生命周期]
+    B --> D[UI 初始化/关闭生命周期]
     B --> E[TaskManager 后台任务生命周期]
+    B --> F[Application::run 主循环]
 
-    D --> F[LVGL + SDL2 主循环]
-    E --> G[采集 Worker]
-    E --> H[数据库异步写入 Worker]
+    F --> R[LVGL tick + UI结果消费]
+    E --> G[时间与磁盘监控 Worker]
+    E --> H[有界 UI 后台任务 Worker]
+    E --> I[UI 帧投递 Worker]
+    E --> J[摄像头采集 Worker]
+    E --> K[数据库异步写入 Worker]
 
-    I[Windows FFmpeg 推流] --> J[UDP 5004]
-    J --> K[OpenCV GStreamer 管道]
-    K --> G
+    L[Windows FFmpeg 推流] --> M[UDP 5004]
+    M --> N[OpenCV GStreamer 管道]
+    N --> J
+    J --> I
 
-    G -->|EventBus 事件| D
-    D -->|用户操作| L[attendance_rule 考勤规则引擎]
-    L --> M[db_storage SQLite DAO]
-    L --> N[report_generator Excel 报表]
+    G -->|单槽系统状态邮箱| R
+    I -->|线程安全帧缓冲| R
+    R -->|有界请求/结果| H
+    R -->|用户操作| O[attendance_rule 考勤规则引擎]
+    O --> P[db_storage SQLite DAO]
+    O --> Q[report_generator Excel 报表]
+    H --> Q
 ```
 
 ---

@@ -335,6 +335,11 @@ bool data_init() {
     
 }
 
+bool data_is_open() {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+    return db != nullptr;
+}
+
 // [辅助函数] 检查表中是否有数据
 static bool is_table_empty(const char* table_name) {
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
@@ -1143,7 +1148,6 @@ std::optional<UserData> db_get_user_info(int user_id) {
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) == SQLITE_OK) {
         sqlite3_bind_int(stmt.get(), 1, user_id);
-        
         if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
             UserData u; // 将对象定义移到这里，查到了才创建
             
@@ -1192,14 +1196,12 @@ std::optional<UserData> db_get_user_info(int user_id) {
             const char* avatar = (const char*)sqlite3_column_text(stmt.get(), 9);
             u.avatar_path = avatar ? avatar : ""; // 如果数据库里存了路径就取出来，没有就是空字符串
 
-            return u; // 查到了数据，直接返回，C++会自动把它装进 optional 的“盒子”里
+            return u;
         }
     } else {
         std::cerr << "[Data] Get User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
     }
-    
-    // 走到这里说明要么 prepare 失败，要么没查到(step 不是 ROW)
-    return std::nullopt; 
+    return std::nullopt;
 }
 
 bool db_delete_user(int user_id) {
@@ -1517,16 +1519,27 @@ std::vector<UserData> db_get_all_users_light() {
     return users;
 }
 
-
 // ================= 4. 考勤记录 DAO =================
 
 bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int status) {
-    long long now = std::time(nullptr);
+    return db_log_attendance_at(
+        user_id, shift_id, image, status, static_cast<long long>(std::time(nullptr)));
+}
+
+bool db_log_attendance_at(int user_id,
+                          int shift_id,
+                          const cv::Mat& image,
+                          int status,
+                          long long timestamp) {
+    if (timestamp < 0) {
+        return false;
+    }
+
     std::string path_str = "";
     
     // 1. 无需数据库的操作 (保存图片到磁盘) —— 不加锁，不阻塞别人！
     if (!image.empty()) {
-        std::string fname = std::to_string(now) + "_" + std::to_string(user_id) + ".jpg";
+        std::string fname = std::to_string(timestamp) + "_" + std::to_string(user_id) + ".jpg";
         fs::path p = fs::path(IMAGE_DIR) / fname;
         try {
             if (cv::imwrite(p.string(), image)) {
@@ -1558,7 +1571,7 @@ bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int stat
             sqlite3_bind_null(g_stmt_log_attendance, 2);
             
         sqlite3_bind_text(g_stmt_log_attendance, 3, path_str.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int64(g_stmt_log_attendance, 4, now);
+        sqlite3_bind_int64(g_stmt_log_attendance, 4, timestamp);
         sqlite3_bind_int(g_stmt_log_attendance, 5, status);
 
         ok = (sqlite3_step(g_stmt_log_attendance) == SQLITE_DONE);
@@ -1566,7 +1579,7 @@ bool db_log_attendance(int user_id, int shift_id, const cv::Mat& image, int stat
     
     if(ok) {
         std::cout << "[Data] Attendance Logged -> User: " << user_id 
-                  << " Time: " << now << " Status: " << static_cast<int>(status) << std::endl;
+                  << " Time: " << timestamp << " Status: " << static_cast<int>(status) << std::endl;
     } else {
         std::cerr << "[Data] Attendance Logged Failed: " << sqlite3_errmsg(db) << std::endl;
     }
@@ -2841,4 +2854,3 @@ std::vector<UserData> db_get_users_by_dept(int dept_id) {
 
     return users;
 }
-

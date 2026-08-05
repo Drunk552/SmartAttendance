@@ -6,8 +6,6 @@
 #include <string>
 #include <utility>//用于 std::pair
 
-#include "../../business/event_bus.h"// 用于时间更新订阅
-#include "../../ui/ui_controller.h"// 用于获取当前时间字符串
 #include "../../ui/managers/ui_manager.h"
 
 // 静态变量：用于保存和恢复输入组，实现物理隔离
@@ -17,7 +15,6 @@ static lv_group_t * g_prev_group = nullptr;
 // ====== 全局时间状态和回调函数 ======
 static std::string g_latest_time_str = "00:00"; // 统一保存最新的时间字符串
 static std::string g_latest_weekday_str = "Mon";// 统一保存最新的星期字符串
-static bool g_time_subscribed = false;          // 确保只订阅一次 EventBus
 
 // 专门定义一个结构体，用来向异步任务传递上下文数据
 struct PopupContext {
@@ -51,6 +48,16 @@ static void time_label_del_cb(lv_event_t * e) {
     lv_timer_t * timer = (lv_timer_t *)lv_event_get_user_data(e);
     if (timer) {
         lv_timer_delete(timer);
+    }
+}
+
+void update_base_screen_time(const std::string& time_text,
+                             const std::string& weekday_text) {
+    if (!time_text.empty()) {
+        g_latest_time_str = time_text;
+    }
+    if (!weekday_text.empty()) {
+        g_latest_weekday_str = weekday_text;
     }
 }
 
@@ -113,27 +120,9 @@ BaseScreenParts create_base_screen(const char* title) {
     lv_obj_set_width(parts.lbl_time, 60); 
     lv_obj_set_style_text_align(parts.lbl_time, LV_TEXT_ALIGN_RIGHT, 0);
     
-    // ====== 时间自动化绑定逻辑 ======
-    
-    // (1) 保证全局仅订阅一次 EventBus
-    if (!g_time_subscribed) {
-        auto& bus = EventBus::getInstance();
-        bus.subscribe(EventType::TIME_UPDATE, [](void* data) {
-            std::string* t = static_cast<std::string*>(data);
-            lv_async_call([](void* d){
-                std::string* time_str = (std::string*)d;
-                if (time_str && !time_str->empty()) {
-                    g_latest_time_str = *time_str; // 更新全局最新时间
-                    g_latest_weekday_str = UiController::getInstance()->getCurrentWeekdayStr(); // 同步更新全局最新星期
-                }
-                delete time_str; // 释放内存
-            }, new std::string(*t));
-        });
-        g_time_subscribed = true;
-    }
-    // (2) 为当前创建的这个 lbl_time 分配一个刷新定时器 (每 500ms 检查一次)
+    // 最新状态由 UI 主循环写入；定时器只负责同步当前页面控件。
     lv_timer_t * sync_timer = lv_timer_create(time_sync_timer_cb, 500, parts.lbl_time);
-    // (3) 监听 lbl_time 的销毁事件，当离开或销毁该界面时，自动销毁定时器
+    // 页面销毁时同步销毁定时器，避免保留控件裸指针。
     lv_obj_add_event_cb(parts.lbl_time, time_label_del_cb, LV_EVENT_DELETE, sync_timer);
 
 
@@ -757,4 +746,3 @@ void show_popup_msg(const char* title, const char* msg, lv_obj_t* focus_back_obj
         indev = lv_indev_get_next(indev);
     }
 }
-

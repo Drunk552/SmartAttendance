@@ -11,12 +11,26 @@
 #include <vector>
 #include <ctime>
 #include <mutex>
-#include <thread>
 #include <atomic>
+
+namespace smart_attendance::app {
+class UiSystemStatusMailbox;
+}
 
 // 这里为了简化，我们暂时复用 data 层的结构体定义
 // 理想情况下应该定义 UI 专用的 Struct，但为了第一阶段快速重构，先复用
 #include "../data/db_storage.h" 
+
+/** @brief 运行由 Application/TaskManager 持有的时间与磁盘监控任务。 */
+void uiRunMonitorTask(
+    const std::atomic<bool>& stopRequested,
+    smart_attendance::app::UiSystemStatusMailbox& statusMailbox);
+
+/** @brief 唤醒正在等待下一次监控周期的任务，以便及时退出。 */
+void uiWakeMonitorTask();
+
+/** @brief 将业务层最新帧缩放后投递到 UI 管理器的线程安全缓冲区。 */
+void uiRunFrameDeliveryTask(const std::atomic<bool>& stopRequested);
 
 class UiController {
 public:
@@ -64,7 +78,6 @@ public:
     // --- 5. 摄像头图像获取  ---
     bool getDisplayFrame(uint8_t* buffer, int width, int height);
 
-    void startBackgroundServices(); // 启动所有后台线程
     // 更新用户名称
     bool updateUserName(int userId, const std::string& newName);
     //更新用户部门
@@ -117,14 +130,6 @@ public:
 private:
     UiController() = default; // 私有构造
     ~UiController() = default;
-
-    void monitorThreadFunc(); // 监控时间与磁盘
-    void captureThreadFunc(); // 监控摄像头 (从 ui_app.cpp 移入)
-    
-    // 线程控制
-    std::atomic<bool> m_running{false};
-    std::thread m_monitor_thread;
-    std::thread m_capture_thread;
 
     // 线程安全相关的成员
     std::mutex m_frame_mutex;            // 保护图像数据的锁

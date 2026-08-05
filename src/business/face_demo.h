@@ -16,6 +16,17 @@
 
 #include <opencv2/core.hpp> // 包含 cv::Mat 定义,只有 C++ 编译器才引入 OpenCV
 
+namespace smart_attendance::services {
+class PunchService;
+}
+
+/**
+ * @brief 注入由 ApplicationServices 持有的统一打卡服务。
+ * @note 必须在 business_init 前由主线程调用；不转移所有权。
+ */
+void business_configure_punch_service(
+    smart_attendance::services::PunchService& punchService) noexcept;
+
 typedef cv::Size CvSizeCompat; // C++用 OpenCV 的 cv::Size 类型
 
 #else
@@ -39,6 +50,24 @@ extern "C" {
  * @return false 初始化失败 (如模型文件丢失、摄像头无法打开)
  */
 bool business_init();
+
+/**
+ * @brief 通知业务模块主页已经进入，允许人脸识别打卡。
+ * @note 由 UI 主线程同步调用，不经过异步消息分发。
+ */
+void business_enter_home_screen();
+
+/**
+ * @brief 通知业务模块主页已经离开，停止人脸识别打卡。
+ * @note 由 UI 主线程同步调用；重复调用是安全的。
+ */
+void business_leave_home_screen();
+
+/**
+ * @brief 在采集和写库 Worker 全部退出、UI 页面销毁后释放业务模块资源。
+ * @note 由 Application 主线程调用；调用后不得再访问本模块业务接口。
+ */
+void business_shutdown();
 
 typedef enum {
     HIST_EQ_NONE = 0,     // 禁用
@@ -82,7 +111,8 @@ void business_set_histogram_equalization(bool enable, int method);// 设置直�
 void business_set_crop_settings(bool enable, int margin_percent);// 设置裁剪选项（UI）
 void business_set_clahe_parameters(float clip_limit, int grid_width, int grid_height);// 设置CLAHE参数（UI）
 void business_set_roi_enhance(bool enable, float contrast, float brightness);// 设置ROI增强参数
-void business_reload_config();// 强制刷新考勤配置 (供 UI 设置保存后调用)
+/** @brief 兼容旧 UI；PunchService 已按请求读取最新考勤规则。 */
+void business_reload_config();
 
 
 // ==========================================
@@ -210,14 +240,17 @@ cv::Mat convertToGrayscale(const cv::Mat& inputImage);
 void business_run_capture_task(
     const std::atomic<bool>& stopRequested);
 
+/** @brief 唤醒可能因打卡队列已满而等待的采集 Worker。 */
+void business_wake_capture_task();
+
 /**
- * @brief TaskManager 拥有的数据库写 Worker 入口。
- * @param stopRequested 停止后继续排空已入队任务，再退出。
+ * @brief TaskManager 拥有的统一打卡 Worker 入口。
+ * @param stopRequested 停止后继续排空已入队请求，再退出。
  */
 void business_run_database_writer_task(
     const std::atomic<bool>& stopRequested);
 
-/** @brief 唤醒等待队列的数据库写 Worker。 */
+/** @brief 唤醒等待打卡队列的 Worker。 */
 void business_wake_database_writer_task();
 #endif
 

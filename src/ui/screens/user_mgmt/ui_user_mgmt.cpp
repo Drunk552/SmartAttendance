@@ -4,7 +4,6 @@
 #include "../../common/ui_widgets.h"
 #include "../../ui_controller.h"
 #include "../menu/ui_scr_menu.h" // 用于返回主菜单
-#include "../../../business/event_bus.h"// 用于弹窗通知
 
 #include <string>
 #include <vector>
@@ -53,6 +52,7 @@ static lv_obj_t *g_btn_confirm = nullptr;//员工注册按钮
 static lv_obj_t* g_btn_del_confirm = nullptr;// 确认删除按钮
 static bool s_dept_ready_to_jump = false; // 记录下拉框状态：是否准备跳转
 static lv_obj_t* g_btn_role_confirm = nullptr; // 权限修改-确认按钮
+static lv_timer_t* g_face_preview_timer = nullptr;
 
 // ================= [内部状态: 注册临时数据暂存] =================
 static int g_reg_user_id = 0;
@@ -1366,6 +1366,21 @@ void load_user_register_form() {
 // 2.1 人脸录入与更新 (face_photograph/updata) (三级界面)
 // =========================================================
 
+static void face_preview_timer_cb(lv_timer_t*) {
+    if (img_face_reg && lv_obj_is_valid(img_face_reg)) {
+        lv_obj_invalidate(img_face_reg);
+    }
+}
+
+static void face_camera_screen_delete_cb(lv_event_t*) {
+    if (g_face_preview_timer) {
+        lv_timer_delete(g_face_preview_timer);
+        g_face_preview_timer = nullptr;
+    }
+    img_face_reg = nullptr;
+    scr_camera = nullptr;
+}
+
 //人脸拍照界面事件回调
 static void face_photograph_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -1439,9 +1454,8 @@ void load_face_photograph_screen() {
     UiManager::getInstance()->registerScreen(ScreenType::REGISTER_CAMERA, &scr_camera);
 
     // 绑定销毁回调
-    lv_obj_add_event_cb(scr_camera, [](lv_event_t * e) {
-        scr_camera = nullptr;
-    }, LV_EVENT_DELETE, NULL);
+    lv_obj_add_event_cb(scr_camera, face_camera_screen_delete_cb,
+                        LV_EVENT_DELETE, nullptr);
 
     UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
     
@@ -1493,14 +1507,8 @@ void load_face_photograph_screen() {
     lv_group_add_obj(group, img_face_reg);
     lv_group_focus_obj(img_face_reg);
 
-    // 订阅摄像头刷新事件，让画面动起来
-    EventBus::getInstance().subscribe(EventType::CAMERA_FRAME_READY, [](void* data) {
-       lv_async_call([](void* d) {
-           if (img_face_reg && lv_obj_is_valid(img_face_reg)) {
-               lv_obj_invalidate(img_face_reg);
-           }
-       }, nullptr);
-    });
+    // 帧投递 Worker 写入固定缓冲；控件重绘只由 UI 线程定时触发。
+    g_face_preview_timer = lv_timer_create(face_preview_timer_cb, 33, nullptr);
 
     lv_screen_load(scr_camera);
     UiManager::getInstance()->destroyAllScreensExcept(scr_camera);

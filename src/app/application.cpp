@@ -1,6 +1,6 @@
 /**
  * @file application.cpp
- * @brief 实现运行目录准备和数据库生命周期管理。
+ * @brief 实现运行目录、主循环和资源生命周期管理。
  */
 
 #include "application.h"
@@ -11,21 +11,37 @@
 namespace smart_attendance::app {
 
 Application::Application(DatabaseLifecycle databaseLifecycle,
-                         TaskInitializer taskInitializer,
+                         UiLifecycle uiLifecycle,
+                         ApplicationLoop applicationLoop,
+                         BusinessLifecycle businessLifecycle,
+                         UserReportExporter userReportExporter,
+                         CustomReportExporter customReportExporter,
+                         EmployeeSettingsExporter employeeSettingsExporter,
+                         EmployeeSettingsImporter employeeSettingsImporter,
+                         MonitorWorkerLifecycle monitorWorkerLifecycle,
+                         WorkerLifecycle frameDeliveryWorkerLifecycle,
                          WorkerLifecycle captureWorkerLifecycle,
                          WorkerLifecycle databaseWriterWorkerLifecycle,
                          std::filesystem::path runtimeDirectory)
-    : databaseLifecycle_(databaseLifecycle),
-      taskManager_(taskInitializer,
-                   captureWorkerLifecycle,
-                   databaseWriterWorkerLifecycle),
+    : uiLifecycle_(uiLifecycle),
+      applicationLoop_(applicationLoop),
+      services_(databaseLifecycle, businessLifecycle),
+      taskManager_(userReportExporter,
+                   customReportExporter,
+                   employeeSettingsExporter,
+                   employeeSettingsImporter,
+                   std::move(monitorWorkerLifecycle),
+                   std::move(frameDeliveryWorkerLifecycle),
+                   std::move(captureWorkerLifecycle),
+                   std::move(databaseWriterWorkerLifecycle)),
       runtimeDirectory_(std::move(runtimeDirectory)) {}
 
 Application::~Application() noexcept {
     (void)taskManager_.requestStop();
     (void)taskManager_.join();
     if (taskManager_.state() == TaskManagerState::Joined) {
-        closeDatabaseNoexcept();
+        (void)shutdownUiNoexcept();
+        (void)services_.shutdownBusiness();
     }
 }
 
@@ -34,9 +50,19 @@ ApplicationInitError Application::initialize() noexcept {
         return ApplicationInitError::InvalidState;
     }
 
-    if (databaseLifecycle_.initialize == nullptr ||
-        databaseLifecycle_.close == nullptr) {
+    if (!services_.hasValidDatabaseLifecycle()) {
         return ApplicationInitError::InvalidDatabaseLifecycle;
+    }
+    if (uiLifecycle_.initialize == nullptr ||
+        uiLifecycle_.shutdown == nullptr) {
+        return ApplicationInitError::InvalidUiLifecycle;
+    }
+    if (applicationLoop_.shouldStop == nullptr ||
+        applicationLoop_.runOnce == nullptr) {
+        return ApplicationInitError::InvalidApplicationLoop;
+    }
+    if (!services_.hasValidBusinessLifecycle()) {
+        return ApplicationInitError::InvalidBusinessLifecycle;
     }
 
     std::error_code error;
@@ -50,17 +76,17 @@ ApplicationInitError Application::initialize() noexcept {
         return ApplicationInitError::RuntimeDirectoryUnavailable;
     }
 
-    // 旧 data_init() 可能在返回 false 前已经创建部分资源，因此失败路径也必须关闭。
-    databaseInitialized_ = true;
-    try {
-        if (!databaseLifecycle_.initialize()) {
-            closeDatabaseNoexcept();
-            return ApplicationInitError::DatabaseInitializationFailed;
-        }
-    } catch (...) {
-        closeDatabaseNoexcept();
+    if (!services_.initializeDatabase()) {
         return ApplicationInitError::DatabaseInitializationFailed;
     }
+
+    try {
+        uiLifecycle_.initialize();
+    } catch (...) {
+        (void)services_.shutdownDatabase();
+        return ApplicationInitError::UiInitializationFailed;
+    }
+    uiInitialized_ = true;
 
     state_ = ApplicationState::Initialized;
     return ApplicationInitError::None;
@@ -71,12 +97,30 @@ bool Application::markRunning() noexcept {
         return false;
     }
 
+    if (!services_.initializeBusiness()) {
+        return false;
+    }
     if (!taskManager_.start()) {
         return false;
     }
 
     state_ = ApplicationState::Running;
     return true;
+}
+
+ApplicationRunError Application::run() noexcept {
+    if (state_ != ApplicationState::Running) {
+        return ApplicationRunError::InvalidState;
+    }
+
+    try {
+        while (!applicationLoop_.shouldStop()) {
+            applicationLoop_.runOnce();
+        }
+    } catch (...) {
+        return ApplicationRunError::LoopFailed;
+    }
+    return ApplicationRunError::None;
 }
 
 bool Application::requestStop() noexcept {
@@ -102,15 +146,13 @@ bool Application::stop() noexcept {
         return false;
     }
 
-    if (databaseInitialized_) {
-        try {
-            databaseLifecycle_.close();
-        } catch (...) {
-            return false;
-        }
-        databaseInitialized_ = false;
-    }
+    const bool uiSucceeded = shutdownUiNoexcept();
+    const bool businessSucceeded = services_.shutdownBusiness();
+    const bool databaseSucceeded = services_.shutdownDatabase();
 
+    if (!uiSucceeded || !businessSucceeded || !databaseSucceeded) {
+        return false;
+    }
     state_ = ApplicationState::Stopped;
     return tasksSucceeded;
 }
@@ -123,16 +165,31 @@ const std::filesystem::path& Application::runtimeDirectory() const noexcept {
     return runtimeDirectory_;
 }
 
-void Application::closeDatabaseNoexcept() noexcept {
-    if (!databaseInitialized_ || databaseLifecycle_.close == nullptr) {
-        return;
+UiBackgroundJobQueue& Application::uiBackgroundJobs() noexcept {
+    return taskManager_.uiBackgroundJobs();
+}
+
+UiSystemStatusMailbox& Application::uiSystemStatus() noexcept {
+    return taskManager_.uiSystemStatus();
+}
+
+services::PunchService& Application::punchService() noexcept {
+    return services_.punchService();
+}
+
+bool Application::shutdownUiNoexcept() noexcept {
+    if (!uiInitialized_) {
+        return true;
     }
 
+    // 关闭回调即使失败也不重试，避免对部分销毁的 LVGL/SDL 状态重复释放。
+    uiInitialized_ = false;
     try {
-        databaseLifecycle_.close();
+        uiLifecycle_.shutdown();
     } catch (...) {
+        return false;
     }
-    databaseInitialized_ = false;
+    return true;
 }
 
 } // namespace smart_attendance::app

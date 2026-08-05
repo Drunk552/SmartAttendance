@@ -3,8 +3,24 @@
 
 #include <lvgl.h>
 
+namespace smart_attendance::app {
+class UiBackgroundJobQueue;
+struct UiBackgroundJobResult;
+}
+
 namespace ui {
 namespace att_stats {
+
+/** @brief 注入由 Application/TaskManager 持有的 UI 后台任务队列。 */
+void configureBackgroundJobs(
+    smart_attendance::app::UiBackgroundJobQueue& backgroundJobs) noexcept;
+
+/** @brief UI 关闭前清除任务队列观察指针和页面加载圈记录。 */
+void resetBackgroundJobs() noexcept;
+
+/** @brief 由 UI 主循环调用，处理属于考勤统计页面的报表结果。 */
+void handleBackgroundJobResult(
+    const smart_attendance::app::UiBackgroundJobResult& result);
 
 /**
  * @brief 考勤统计主菜单界面

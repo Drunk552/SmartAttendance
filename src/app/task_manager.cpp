@@ -5,10 +5,30 @@
 
 #include "task_manager.h"
 
+#include <utility>
+
 namespace smart_attendance::app {
 
+namespace {
+
+WorkerLifecycle bindMonitorWorker(MonitorWorkerLifecycle lifecycle,
+                                  UiSystemStatusMailbox& mailbox) {
+    if (!lifecycle.run) {
+        return {};
+    }
+
+    return {
+        [&mailbox, run = std::move(lifecycle.run)](
+            const std::atomic<bool>& stopRequested) {
+            run(stopRequested, mailbox);
+        },
+        std::move(lifecycle.wake)};
+}
+
+} // namespace
+
 ThreadWorker::ThreadWorker(WorkerLifecycle lifecycle) noexcept
-    : lifecycle_(lifecycle) {}
+    : lifecycle_(std::move(lifecycle)) {}
 
 ThreadWorker::~ThreadWorker() noexcept {
     requestStop();
@@ -16,7 +36,7 @@ ThreadWorker::~ThreadWorker() noexcept {
 }
 
 bool ThreadWorker::isValid() const noexcept {
-    return lifecycle_.run != nullptr;
+    return static_cast<bool>(lifecycle_.run);
 }
 
 bool ThreadWorker::start() noexcept {
@@ -45,7 +65,7 @@ void ThreadWorker::requestStop() noexcept {
         return;
     }
     stopRequested_.store(true);
-    if (lifecycle_.wake != nullptr) {
+    if (lifecycle_.wake) {
         try {
             lifecycle_.wake();
         } catch (...) {
@@ -68,12 +88,28 @@ bool ThreadWorker::join() noexcept {
 }
 
 TaskManager::TaskManager(
-    TaskInitializer initializer,
+    UserReportExporter userReportExporter,
+    CustomReportExporter customReportExporter,
+    EmployeeSettingsExporter employeeSettingsExporter,
+    EmployeeSettingsImporter employeeSettingsImporter,
+    MonitorWorkerLifecycle monitorWorkerLifecycle,
+    WorkerLifecycle frameDeliveryWorkerLifecycle,
     WorkerLifecycle captureWorkerLifecycle,
     WorkerLifecycle databaseWriterWorkerLifecycle) noexcept
-    : initializer_(initializer),
-      captureWorker_(captureWorkerLifecycle),
-      databaseWriterWorker_(databaseWriterWorkerLifecycle) {}
+    : uiBackgroundJobQueue_(userReportExporter,
+                        customReportExporter,
+                        employeeSettingsExporter,
+                        employeeSettingsImporter),
+      uiBackgroundJobWorker_({
+          [this](const std::atomic<bool>& stopRequested) {
+              uiBackgroundJobQueue_.run(stopRequested);
+          },
+          [this]() { uiBackgroundJobQueue_.requestStop(); }}),
+      monitorWorker_(bindMonitorWorker(std::move(monitorWorkerLifecycle),
+                                       uiSystemStatusMailbox_)),
+      frameDeliveryWorker_(std::move(frameDeliveryWorkerLifecycle)),
+      captureWorker_(std::move(captureWorkerLifecycle)),
+      databaseWriterWorker_(std::move(databaseWriterWorkerLifecycle)) {}
 
 TaskManager::~TaskManager() noexcept {
     stopAndJoinNoexcept();
@@ -81,24 +117,28 @@ TaskManager::~TaskManager() noexcept {
 
 bool TaskManager::start() noexcept {
     if (state_ != TaskManagerState::Created ||
-        initializer_.initialize == nullptr ||
+        !uiBackgroundJobQueue_.isValid() ||
+        !uiBackgroundJobWorker_.isValid() ||
+        !monitorWorker_.isValid() ||
+        !frameDeliveryWorker_.isValid() ||
         !captureWorker_.isValid() ||
         !databaseWriterWorker_.isValid()) {
         return false;
     }
 
-    // 旧启动函数可能在返回失败或抛出异常前创建部分资源。
     tasksStarted_ = true;
-    try {
-        if (!initializer_.initialize()) {
-            stopAndJoinNoexcept();
-            return false;
-        }
-    } catch (...) {
+    if (!uiBackgroundJobWorker_.start()) {
         stopAndJoinNoexcept();
         return false;
     }
-
+    if (!monitorWorker_.start()) {
+        stopAndJoinNoexcept();
+        return false;
+    }
+    if (!frameDeliveryWorker_.start()) {
+        stopAndJoinNoexcept();
+        return false;
+    }
     if (!captureWorker_.start()) {
         stopAndJoinNoexcept();
         return false;
@@ -123,6 +163,9 @@ bool TaskManager::requestStop() noexcept {
         return true;
     }
 
+    uiBackgroundJobWorker_.requestStop();
+    monitorWorker_.requestStop();
+    frameDeliveryWorker_.requestStop();
     captureWorker_.requestStop();
     state_ = TaskManagerState::StopRequested;
     return true;
@@ -137,10 +180,15 @@ bool TaskManager::join() noexcept {
     }
 
     if (tasksStarted_) {
+        const bool uiBackgroundJobSucceeded = uiBackgroundJobWorker_.join();
+        const bool monitorSucceeded = monitorWorker_.join();
+        const bool frameDeliverySucceeded = frameDeliveryWorker_.join();
         const bool captureSucceeded = captureWorker_.join();
         databaseWriterWorker_.requestStop();
         const bool databaseWriterSucceeded = databaseWriterWorker_.join();
-        joinSucceeded_ = captureSucceeded && databaseWriterSucceeded;
+        joinSucceeded_ = uiBackgroundJobSucceeded && monitorSucceeded &&
+                         frameDeliverySucceeded && captureSucceeded &&
+                         databaseWriterSucceeded;
         tasksStarted_ = false;
     }
 
@@ -150,6 +198,14 @@ bool TaskManager::join() noexcept {
 
 TaskManagerState TaskManager::state() const noexcept {
     return state_;
+}
+
+UiBackgroundJobQueue& TaskManager::uiBackgroundJobs() noexcept {
+    return uiBackgroundJobQueue_;
+}
+
+UiSystemStatusMailbox& TaskManager::uiSystemStatus() noexcept {
+    return uiSystemStatusMailbox_;
 }
 
 void TaskManager::stopAndJoinNoexcept() noexcept {

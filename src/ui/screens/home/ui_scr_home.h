@@ -13,7 +13,7 @@ namespace home {
 void load_screen();
 
 /**
- * @brief 更新时间显示的接口 (供 EventBus 回调使用)
+ * @brief 由 UI 主循环更新主页时间显示。
  */
 void update_time(const std::string& time_str, const std::string& date_str);
 
