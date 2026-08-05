@@ -11,6 +11,7 @@
 #include "../business/report_generator.h"
 #include "../business/attendance_rule.h"
 #include "../app/ui_system_status_mailbox.h"
+#include "presenters/employee_lookup_presenter.h"
 #include "managers/ui_manager.h"
 #include <sys/statvfs.h>
 #include <algorithm>
@@ -264,9 +265,16 @@ bool UiController::registerNewUser(const std::string& name, int deptId) {
     return business_register_user(name.c_str(), deptId);
 }
 
+void UiController::configureEmployeeLookupPresenter(
+    smart_attendance::ui::EmployeeLookupPresenter* presenter) noexcept {
+    employeeLookupPresenter_ = presenter;
+}
+
 int UiController::getUserRoleById(int userId) {
-    auto userOpt = db_get_user_info(userId);
-    return userOpt.has_value() ? userOpt->role : -1;
+    if (employeeLookupPresenter_ == nullptr) {
+        return -1;
+    }
+    return employeeLookupPresenter_->roleValueById(userId);
 }
 
 // 验证用户密码是否正确（哈希验证）
@@ -336,7 +344,8 @@ UserData UiController::getUserInfo(int uid) {
 
 // 检查用户是否存在 (用于 UI 导出报表前的同步校验)
 bool UiController::checkUserExists(int user_id) {
-    return db_get_user_info(user_id).has_value();
+    return employeeLookupPresenter_ != nullptr &&
+           employeeLookupPresenter_->existsById(user_id);
 }
 
 std::vector<AttendanceRecord> UiController::getRecords(int userId, time_t start, time_t end) {

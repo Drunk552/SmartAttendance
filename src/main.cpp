@@ -34,6 +34,25 @@ extern "C" {
 
 namespace {
 
+class UiEmployeeLookupPresenterBinding final {
+public:
+    explicit UiEmployeeLookupPresenterBinding(
+        smart_attendance::ui::EmployeeLookupPresenter& presenter)
+        : controller_(*UiController::getInstance()) {
+        controller_.configureEmployeeLookupPresenter(&presenter);
+    }
+
+    ~UiEmployeeLookupPresenterBinding() {
+        controller_.configureEmployeeLookupPresenter(nullptr);
+    }
+
+    UiEmployeeLookupPresenterBinding(const UiEmployeeLookupPresenterBinding&) = delete;
+    UiEmployeeLookupPresenterBinding& operator=(const UiEmployeeLookupPresenterBinding&) = delete;
+
+private:
+    UiController& controller_;
+};
+
 std::filesystem::path executableDirectory(const char* executablePath) {
     std::error_code error;
     const auto procExecutable = std::filesystem::read_symlink("/proc/self/exe", error);
@@ -241,6 +260,9 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "[OK] 运行时文件目录: "
               << application.runtimeDirectory().string() << std::endl;
+    UiEmployeeLookupPresenterBinding employeeLookupPresenterBinding(
+        application.employeeLookupPresenter());
+
     // 3. 后初始化业务层 (再启动线程，确保发出的第一个请求都有消费者)
     std::cout << ">>> 初始化业务层..." << std::endl;
     if (!application.markRunning()) {

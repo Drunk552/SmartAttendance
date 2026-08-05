@@ -1,9 +1,9 @@
 /**
- * @file legacy_punch_repositories.cpp
- * @brief 实现 db_storage 到打卡 Repository 抽象的过渡映射。
+ * @file legacy_attendance_repository.cpp
+ * @brief 实现旧考勤 DAO 到 Repository 的映射。
  */
 
-#include "legacy_punch_repositories.h"
+#include "legacy_attendance_repository.h"
 
 #include "data/db_storage.h"
 
@@ -25,44 +25,18 @@ int toLegacyStatus(core::PunchStatus status) noexcept {
 
 } // namespace
 
-Result<std::optional<ScheduledShift>, RepositoryError>
-LegacyScheduleRepository::findForUserAt(int userId, std::int64_t timestamp) {
-    if (!data_is_open()) {
-        return Result<std::optional<ScheduledShift>, RepositoryError>::failure(
-            RepositoryError::ReadFailed);
-    }
-
-    try {
-        const auto shift = db_get_user_shift_smart(userId, timestamp);
-        if (!shift || shift->id <= 0) {
-            return Result<std::optional<ScheduledShift>, RepositoryError>::success(
-                std::nullopt);
-        }
-        return Result<std::optional<ScheduledShift>, RepositoryError>::success(
-            ScheduledShift{
-                shift->id,
-                {shift->s1_start, shift->s1_end},
-                {shift->s2_start, shift->s2_end}});
-    } catch (...) {
-        return Result<std::optional<ScheduledShift>, RepositoryError>::failure(
-            RepositoryError::ReadFailed);
-    }
-}
-
 Result<AttendanceRules, RepositoryError>
 LegacyAttendanceRuleRepository::load() {
+    using ResultType = Result<AttendanceRules, RepositoryError>;
     if (!data_is_open()) {
-        return Result<AttendanceRules, RepositoryError>::failure(
-            RepositoryError::ReadFailed);
+        return ResultType::failure(RepositoryError::ReadFailed);
     }
-
     try {
         const RuleConfig rules = db_get_global_rules();
-        return Result<AttendanceRules, RepositoryError>::success(
+        return ResultType::success(
             {rules.late_threshold, rules.duplicate_punch_limit});
     } catch (...) {
-        return Result<AttendanceRules, RepositoryError>::failure(
-            RepositoryError::ReadFailed);
+        return ResultType::failure(RepositoryError::ReadFailed);
     }
 }
 
@@ -73,7 +47,6 @@ Result<bool, RepositoryError> LegacyAttendanceRepository::hasRecordInRange(
     if (!data_is_open()) {
         return Result<bool, RepositoryError>::failure(RepositoryError::ReadFailed);
     }
-
     try {
         return Result<bool, RepositoryError>::success(
             !db_get_records_by_user(userId, startTimestamp, endTimestamp).empty());
@@ -87,7 +60,6 @@ LegacyAttendanceRepository::save(const AttendanceEntry& entry) {
     if (!data_is_open()) {
         return Result<void, RepositoryError>::failure(RepositoryError::WriteFailed);
     }
-
     try {
         cv::Mat snapshot;
         if (!entry.snapshotJpeg.empty()) {
@@ -102,7 +74,8 @@ LegacyAttendanceRepository::save(const AttendanceEntry& entry) {
                                   snapshot,
                                   toLegacyStatus(entry.status),
                                   entry.timestamp)) {
-            return Result<void, RepositoryError>::failure(RepositoryError::WriteFailed);
+            return Result<void, RepositoryError>::failure(
+                RepositoryError::WriteFailed);
         }
         return Result<void, RepositoryError>::success();
     } catch (...) {

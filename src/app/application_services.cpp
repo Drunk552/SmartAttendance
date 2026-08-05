@@ -12,6 +12,7 @@ ApplicationServices::ApplicationServices(
     BusinessLifecycle businessLifecycle) noexcept
     : databaseLifecycle_(databaseLifecycle),
       businessLifecycle_(businessLifecycle),
+      employeeService_(employeeRepository_),
       punchService_(scheduleRepository_,
                     attendanceRuleRepository_,
                     attendanceRepository_) {}
@@ -93,6 +94,14 @@ bool ApplicationServices::shutdownDatabase() noexcept {
 
 services::PunchService& ApplicationServices::punchService() noexcept {
     return punchService_;
+}
+
+services::EmployeeService& ApplicationServices::employeeService() noexcept {
+    return employeeService_;
+}
+
+storage::IConfigRepository& ApplicationServices::configRepository() noexcept {
+    return configRepository_;
 }
 
 void ApplicationServices::cleanupFailedDatabaseInitialization() noexcept {

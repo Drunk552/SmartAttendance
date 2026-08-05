@@ -7,7 +7,10 @@
 #ifndef DB_STORAGE_H
 #define DB_STORAGE_H
 
+#include "storage/database.h"
+
 #include <opencv2/core.hpp>
+#include <cstddef>
 #include <string> // 需要处理字符串
 #include <vector>
 #include <utility> // for std::pair
@@ -184,6 +187,47 @@ struct UserData {
 };
 
 /**
+ * @brief 单个用户查询的底层结果状态。
+ * @details 供 Repository 过渡适配器区分“未找到”和数据库读取失败；
+ *          旧调用方可继续使用 db_get_user_info() 的 optional 语义。
+ */
+enum class DbUserLookupStatus {
+    Found,
+    NotFound,
+    ReadError
+};
+
+struct DbUserLookupResult {
+    DbUserLookupStatus status;
+    std::optional<UserData> user;
+};
+
+enum class DbUserPageStatus {
+    Success,
+    InvalidArgument,
+    ReadError
+};
+
+constexpr std::size_t kMaxDbUserBasicPageSize = 64;
+
+struct DbUserPageResult {
+    DbUserPageStatus status;
+    std::vector<UserData> users;
+    bool has_more;
+};
+
+enum class DbTextLookupStatus {
+    Found,
+    NotFound,
+    ReadError
+};
+
+struct DbTextLookupResult {
+    DbTextLookupStatus status;
+    std::optional<std::string> value;
+};
+
+/**
  * @brief 考勤记录结构体 (视图模型)
  * @details 包含打卡时的详细信息，已关联查询出姓名和部门名
  */
@@ -241,41 +285,6 @@ struct CompanyInfo {
     
     CompanyInfo() : id(0) {}
 };
-
-
-// ================= 核心接口声明 =================
-
-/**
- * @brief 初始化数据层
- * @details 连接数据库，并自动创建所有必要的表结构 (users, departments, shifts, attendance, rules)
- * @return true 初始化成功
- * @return false 初始化失败 (如文件权限问题、SQL错误)
- */
-bool data_init();
-
-/**
- * @brief 返回数据库连接是否已初始化；不转移连接所有权。
- * @note 线程安全且不阻塞数据库 IO；不得用它替代 Application 的生命周期控制。
- */
-bool data_is_open();
-
-// [辅助函数] 简单哈希转换
-std::string db_hash_password(const std::string& raw_pwd);
-
-/**
- * @brief  数据播种 (Seeding)
- * @details 检查数据库是否为空，若为空则插入默认的部门、班次和管理员用户。
- * 通常在 data_init() 成功后自动调用。
- * @return true 播种成功或无需播种
- */
-bool data_seed();
-
-/**
- * @brief 关闭数据层
- * * 释放数据库连接句柄及相关资源。
- * 建议在程序退出前 (如 main 函数末尾) 显式调用。
- */
-void data_close();
 
 
 // ================= 1. 部门管理接口 (Department DAO) =================
@@ -456,10 +465,19 @@ bool db_batch_update_user_schedules(int year, int month, const std::vector<UserD
 bool db_delete_user(int user_id);
 
 /**
- * @brief 获取单个用户详情
- * @details 包含基本信息。人脸特征数据按需加载（当前实现默认不加载BLOB以优化性能，如需加载请在cpp中调整SQL）。
+ * @brief 获取单个用户详情并保留读取错误状态。
+ * @details 这是迁移 Repository 时使用的兼容接口；执行同步数据库读取，不取得连接所有权。
  * @param user_id 工号
- * @return UserData 用户信息结构体 (若不存在，ID为0)
+ * @return Found 时 user 包含用户；NotFound 时 user 为空；ReadError 表示数据库不可用或 SQL 执行失败。
+ */
+DbUserLookupResult db_find_user_info(int user_id);
+
+/**
+ * @brief 获取单个用户详情。
+ * @details 保留给旧调用方的兼容接口；不存在和读取失败均返回 std::nullopt。
+ *          需要区分两者的新代码应调用 db_find_user_info()。
+ * @param user_id 工号
+ * @return 找到时返回用户，否则返回 std::nullopt
  */
 std::optional<UserData> db_get_user_info(int user_id);
 
@@ -526,6 +544,15 @@ bool db_update_user_fingerprint(int user_id, const std::vector<uint8_t>& fingerp
  * @return std::vector<UserData> 用户列表 (仅填充 id 和 name 字段)
  */
 std::vector<UserData> db_get_all_users_light();
+
+/**
+ * @brief 按工号升序读取一页不含认证和生物特征的用户基础信息。
+ * @param offset 从零开始的结果偏移量。
+ * @param limit 本页条数上限，必须在 1..kMaxDbUserBasicPageSize 范围内；
+ *              函数额外读取一行以计算 has_more。
+ * @return 明确区分成功、非法参数和数据库读取失败的分页结果。
+ */
+DbUserPageResult db_find_user_basics_page(std::size_t offset, std::size_t limit);
 
 
 // ================= 4. 考勤记录接口 (Attendance DAO) =================
@@ -733,6 +760,9 @@ SystemStats db_get_system_stats();
  */
 std::string db_get_system_config(const std::string& key, const std::string& default_value = "");
 
+/** @brief 查询配置并区分不存在与 SQLite 读取失败。 */
+DbTextLookupResult db_find_system_config(const std::string& key);
+
 /**
  * @brief 设置系统全局配置值 (存在则更新，不存在则插入)
  * @param key 配置项的键名
@@ -765,6 +795,9 @@ bool db_delete_holiday(const std::string& date_str);
  * @return 如果是，返回节日名称(如"中秋节")；如果不是，返回 std::nullopt
  */
 std::optional<std::string> db_get_holiday(const std::string& date_str);
+
+/** @brief 查询节假日并区分不存在与 SQLite 读取失败。 */
+DbTextLookupResult db_find_holiday(const std::string& date_str);
 
 
 // ================= 考勤设置与排班管理接口 =================

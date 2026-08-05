@@ -6,7 +6,10 @@
 #ifndef SMART_ATTENDANCE_APP_APPLICATION_SERVICES_H
 #define SMART_ATTENDANCE_APP_APPLICATION_SERVICES_H
 
+#include "services/employee_service.h"
 #include "services/punch_service.h"
+#include "storage/sqlite/legacy_employee_repository.h"
+#include "storage/sqlite/legacy_config_repository.h"
 #include "storage/sqlite/legacy_punch_repositories.h"
 
 namespace smart_attendance::app {
@@ -26,8 +29,9 @@ struct BusinessLifecycle {
 /**
  * @brief 显式持有服务和基础设施资源，不创建线程或提供通用查询接口。
  *
- * 当前接管旧数据库与业务模块的生命周期状态，并显式持有统一打卡服务及其
- * 过渡 Repository。后续可逐个替换适配器，无需改变 TaskManager 的线程职责。
+ * 当前接管旧数据库与业务模块的生命周期状态，并显式持有统一打卡服务、员工
+ * 查询服务及其过渡 Repository。后续可逐个替换适配器，无需改变 TaskManager
+ * 的线程职责。
  */
 class ApplicationServices final {
 public:
@@ -61,12 +65,24 @@ public:
      */
     services::PunchService& punchService() noexcept;
 
+    /**
+     * @brief 返回由本对象持有的员工查询服务。
+     * @note 不转移所有权；调用前数据库必须已初始化，且不得跨越本对象生命周期保存引用。
+     */
+    services::EmployeeService& employeeService() noexcept;
+
+    /** @brief 返回由组合根持有的配置 Repository，供后续配置 Service 迁移使用。 */
+    storage::IConfigRepository& configRepository() noexcept;
+
 private:
     void cleanupFailedDatabaseInitialization() noexcept;
     void shutdownDatabaseNoexcept() noexcept;
 
     DatabaseLifecycle databaseLifecycle_;
     BusinessLifecycle businessLifecycle_;
+    storage::sqlite::LegacyEmployeeRepository employeeRepository_;
+    services::EmployeeService employeeService_;
+    storage::sqlite::LegacyConfigRepository configRepository_;
     storage::sqlite::LegacyScheduleRepository scheduleRepository_;
     storage::sqlite::LegacyAttendanceRuleRepository attendanceRuleRepository_;
     storage::sqlite::LegacyAttendanceRepository attendanceRepository_;

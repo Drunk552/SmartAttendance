@@ -26,6 +26,7 @@ Application::Application(DatabaseLifecycle databaseLifecycle,
     : uiLifecycle_(uiLifecycle),
       applicationLoop_(applicationLoop),
       services_(databaseLifecycle, businessLifecycle),
+      employeeLookupPresenter_(services_.employeeService()),
       taskManager_(userReportExporter,
                    customReportExporter,
                    employeeSettingsExporter,
@@ -175,6 +176,10 @@ UiSystemStatusMailbox& Application::uiSystemStatus() noexcept {
 
 services::PunchService& Application::punchService() noexcept {
     return services_.punchService();
+}
+
+ui::EmployeeLookupPresenter& Application::employeeLookupPresenter() noexcept {
+    return employeeLookupPresenter_;
 }
 
 bool Application::shutdownUiNoexcept() noexcept {

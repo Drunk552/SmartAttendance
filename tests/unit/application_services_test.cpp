@@ -90,6 +90,19 @@ int main() {
         auto& second = services.punchService();
         require(&first == &second,
                 "ApplicationServices must own one stable PunchService instance");
+        auto& firstEmployeeService = services.employeeService();
+        auto& secondEmployeeService = services.employeeService();
+        require(&firstEmployeeService == &secondEmployeeService,
+                "ApplicationServices must own one stable EmployeeService instance");
+        auto& firstConfigRepository = services.configRepository();
+        auto& secondConfigRepository = services.configRepository();
+        require(&firstConfigRepository == &secondConfigRepository,
+                "ApplicationServices must own one stable config Repository instance");
+        const auto employeeUnavailable = firstEmployeeService.findById(1);
+        require(!employeeUnavailable &&
+                    employeeUnavailable.error() ==
+                        smart_attendance::services::EmployeeError::ReadFailed,
+                "EmployeeService must observe a closed database without opening it");
         const auto unavailable = first.punch({1, 1000, 8 * 60});
         require(!unavailable &&
                     unavailable.error() ==

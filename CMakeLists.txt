@@ -83,6 +83,43 @@ endif()
 # ==========================================
 # 4. 主程序配置
 # ==========================================
+add_library(smartattendance_storage STATIC
+    src/storage/database.cpp
+    src/storage/sqlite/legacy_organization_dao.cpp
+    src/storage/sqlite/legacy_employee_dao.cpp
+    src/storage/sqlite/legacy_attendance_dao.cpp
+    src/storage/sqlite/legacy_schedule_dao.cpp
+    src/storage/sqlite/legacy_config_dao.cpp
+)
+target_include_directories(smartattendance_storage PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(smartattendance_storage PUBLIC
+    SQLite::SQLite3
+    ${OpenCV_LIBS}
+    Threads::Threads
+)
+
+add_library(smartattendance_repositories STATIC
+    src/storage/sqlite/legacy_employee_repository.cpp
+    src/storage/sqlite/legacy_config_repository.cpp
+    src/storage/sqlite/legacy_schedule_repository.cpp
+    src/storage/sqlite/legacy_attendance_repository.cpp
+)
+target_include_directories(smartattendance_repositories PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(smartattendance_repositories PUBLIC
+    smartattendance_storage
+)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(smartattendance_storage PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(smartattendance_repositories PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # 自动查找 src 下的源文件 (实际开发建议显式列出以避免遗漏)
 file(GLOB_RECURSE SRC_FILES
     "src/main.cpp"
@@ -92,8 +129,9 @@ file(GLOB_RECURSE SRC_FILES
 
     # 核心打卡规则与阶段三过渡服务
     "src/core/attendance/punch_rule.cpp"
+    "src/services/employee_service.cpp"
     "src/services/punch_service.cpp"
-    "src/storage/sqlite/legacy_punch_repositories.cpp"
+    "src/ui/presenters/employee_lookup_presenter.cpp"
     
     # UI 层 - 显式列出需要的文件
     "src/ui/common/ui_style.cpp"
@@ -117,8 +155,6 @@ file(GLOB_RECURSE SRC_FILES
     # 业务层
     "src/business/*.cpp"
 
-    # 数据层
-    "src/data/db_storage.cpp"  
 )
 
 add_executable(attendance_app ${SRC_FILES})
@@ -155,6 +191,7 @@ target_link_libraries(attendance_app PRIVATE
     ${SDL2_LIBRARIES}   # 驱动支持
     ${XLSXWRITER_LIBRARIES}  # 链接 libxlsxwriter
     Threads::Threads  # 链接线程库
+    smartattendance_repositories
     # Deleted: wiringPi
 )
 
@@ -182,9 +219,9 @@ if(BUILD_TESTING)
         src/app/ui_background_job_queue.cpp
         src/app/ui_system_status_mailbox.cpp
         src/core/attendance/punch_rule.cpp
+        src/services/employee_service.cpp
         src/services/punch_service.cpp
-        src/storage/sqlite/legacy_punch_repositories.cpp
-        src/data/db_storage.cpp
+        src/ui/presenters/employee_lookup_presenter.cpp
         tests/unit/application_lifecycle_test.cpp
     )
     target_include_directories(application_lifecycle_test PRIVATE
@@ -195,6 +232,7 @@ if(BUILD_TESTING)
         SQLite::SQLite3
         ${OpenCV_LIBS}
         Threads::Threads
+        smartattendance_repositories
     )
     add_test(
         NAME application_lifecycle
@@ -204,9 +242,8 @@ if(BUILD_TESTING)
     add_executable(application_services_test
         src/app/application_services.cpp
         src/core/attendance/punch_rule.cpp
+        src/services/employee_service.cpp
         src/services/punch_service.cpp
-        src/storage/sqlite/legacy_punch_repositories.cpp
-        src/data/db_storage.cpp
         tests/unit/application_services_test.cpp
     )
     target_include_directories(application_services_test PRIVATE
@@ -217,6 +254,7 @@ if(BUILD_TESTING)
         SQLite::SQLite3
         ${OpenCV_LIBS}
         Threads::Threads
+        smartattendance_repositories
     )
     add_test(
         NAME application_services
@@ -284,6 +322,45 @@ if(BUILD_TESTING)
         COMMAND punch_service_test
     )
 
+    add_executable(employee_service_test
+        src/services/employee_service.cpp
+        tests/unit/employee_service_test.cpp
+    )
+    target_include_directories(employee_service_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(employee_service_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME employee_service
+        COMMAND employee_service_test
+    )
+
+    add_executable(employee_lookup_presenter_test
+        src/services/employee_service.cpp
+        src/ui/presenters/employee_lookup_presenter.cpp
+        tests/unit/employee_lookup_presenter_test.cpp
+    )
+    target_include_directories(employee_lookup_presenter_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(employee_lookup_presenter_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME employee_lookup_presenter
+        COMMAND employee_lookup_presenter_test
+    )
+
     add_executable(attendance_rule_compat_test
         src/business/attendance_rule.cpp
         src/core/attendance/punch_rule.cpp
@@ -327,8 +404,6 @@ if(BUILD_TESTING)
     add_executable(legacy_punch_repositories_test
         src/core/attendance/punch_rule.cpp
         src/services/punch_service.cpp
-        src/storage/sqlite/legacy_punch_repositories.cpp
-        src/data/db_storage.cpp
         tests/integration/legacy_punch_repositories_test.cpp
     )
     target_include_directories(legacy_punch_repositories_test PRIVATE
@@ -339,12 +414,55 @@ if(BUILD_TESTING)
         SQLite::SQLite3
         ${OpenCV_LIBS}
         Threads::Threads
+        smartattendance_repositories
     )
     add_test(
         NAME legacy_punch_repositories
         COMMAND legacy_punch_repositories_test
     )
 
+    add_executable(legacy_employee_repository_test
+        tests/integration/legacy_employee_repository_test.cpp
+    )
+    target_include_directories(legacy_employee_repository_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(legacy_employee_repository_test PRIVATE
+        SQLite::SQLite3
+        ${OpenCV_LIBS}
+        Threads::Threads
+        smartattendance_repositories
+    )
+    add_test(
+        NAME legacy_employee_repository
+        COMMAND legacy_employee_repository_test
+    )
+
+    add_executable(legacy_config_repository_test
+        tests/integration/legacy_config_repository_test.cpp
+    )
+    target_include_directories(legacy_config_repository_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(legacy_config_repository_test PRIVATE
+        SQLite::SQLite3
+        ${OpenCV_LIBS}
+        Threads::Threads
+        smartattendance_repositories
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(legacy_config_repository_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME legacy_config_repository
+        COMMAND legacy_config_repository_test
+    )
 endif()
 
 # ==========================================

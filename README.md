@@ -84,8 +84,12 @@ SmartAttendance/
 │   │   ├── auth_service        # 身份认证（登录、权限校验）
 │   │   ├── face_demo           # 人脸识别流程（采集 -> 检测 -> 识别）
 │   │   └── report_generator    # Excel 报表生成器
+│   ├── storage/                # 数据库生命周期、Repository 抽象与 SQLite 实现
+│   │   ├── database            # SQLite 初始化、Schema、播种和关闭
+│   │   ├── repository/         # 员工、考勤、排班和配置抽象接口
+│   │   └── sqlite/             # 按职责拆分的 SQLite DAO 与过渡适配器
 │   ├── data/
-│   │   └── db_storage          # SQLite DAO 封装
+│   │   └── db_storage.h        # 旧调用方兼容 API；不再承载 SQL 实现
 │   └── ui/
 │       ├── common/             # 通用组件（样式、控件、T9 键盘）
 │       ├── managers/           # UI 管理器（页面跳转、按键组）
@@ -330,7 +334,8 @@ make analyze_stability
 graph TD
     A[main.cpp 程序入口] --> B[Application 生命周期]
     B --> AS[ApplicationServices 服务资源生命周期]
-    AS --> C[data_init/data_close 数据库生命周期]
+    AS --> C[storage/database SQLite 生命周期]
+    AS --> P[Repository 抽象与 SQLite 实现]
     AS --> S[业务模型和缓存生命周期]
     B --> D[UI 初始化/关闭生命周期]
     B --> E[TaskManager 后台任务生命周期]
@@ -352,7 +357,7 @@ graph TD
     I -->|线程安全帧缓冲| R
     R -->|有界请求/结果| H
     R -->|用户操作| O[attendance_rule 考勤规则引擎]
-    O --> P[db_storage SQLite DAO]
+    O --> P
     O --> Q[report_generator Excel 报表]
     H --> Q
 ```
