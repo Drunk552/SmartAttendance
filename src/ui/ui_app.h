@@ -7,10 +7,18 @@ class UiBackgroundJobQueue;
 class UiSystemStatusMailbox;
 }
 
+namespace smart_attendance::hal {
+class IDisplay;
+class IKeypad;
+}
+
 void ui_configure_background_jobs(
     smart_attendance::app::UiBackgroundJobQueue& backgroundJobs) noexcept;
 void ui_configure_system_status(
     smart_attendance::app::UiSystemStatusMailbox& systemStatus) noexcept;
+void ui_configure_platform(
+    smart_attendance::hal::IDisplay& display,
+    smart_attendance::hal::IKeypad& keypad) noexcept;
 void ui_process_background_results();
 void ui_process_system_status();
 

@@ -66,7 +66,7 @@ static bool is_valid_date_format(const std::string& date) {
 
 // 辅助函数：获取当前系统日期，格式为 YYYY-MM-DD
 static std::string get_current_date_str() {
-    time_t now = time(nullptr);
+    time_t now = UiController::getInstance()->getCurrentUnixTime();
     struct tm tstruct;
     char buf[20];
     tstruct = *localtime(&now);
@@ -261,7 +261,7 @@ static void stats_menu_btn_cb(lv_event_t *e) {
         }
         else if (index == 3) {
             // D: 上传员工设置表
-            // 流程：从 output/usb_settings/员工设置表.xlsx 解析员工信息并导入数据库
+            // 流程：从当前模拟/真实存储的 usb_settings/员工设置表.xlsx 导入数据库
 
             // 1. 显示加载圈，告知用户正在处理
             lv_obj_t* spin = lv_spinner_create(lv_screen_active());

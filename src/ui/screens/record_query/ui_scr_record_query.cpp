@@ -84,7 +84,7 @@ static bool is_valid_date_format(const std::string& date) {
 
 // 辅助函数：获取当前系统日期，格式为 YYYY-MM-DD
 static std::string get_current_date_str() {
-    time_t now = time(nullptr);
+    time_t now = UiController::getInstance()->getCurrentUnixTime();
     struct tm tstruct;
     char buf[20];
     tstruct = *localtime(&now);

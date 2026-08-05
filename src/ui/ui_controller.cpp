@@ -11,9 +11,10 @@
 #include "../business/report_generator.h"
 #include "../business/attendance_rule.h"
 #include "../app/ui_system_status_mailbox.h"
+#include "hal/rtc.h"
+#include "hal/storage_device.h"
 #include "presenters/employee_lookup_presenter.h"
 #include "managers/ui_manager.h"
-#include <sys/statvfs.h>
 #include <algorithm>
 #include <set>
 #include <cstdio>
@@ -35,17 +36,47 @@ namespace {
 
 std::mutex g_monitorWaitMutex;
 std::condition_variable g_monitorWaitCondition;
+smart_attendance::hal::IRtc* g_rtc = nullptr;
+smart_attendance::hal::IStorageDevice* g_storage = nullptr;
+
+std::time_t currentUnixTime() {
+    if (g_rtc != nullptr) {
+        const auto result = g_rtc->now();
+        if (result) {
+            return static_cast<std::time_t>(result.value().unixSeconds);
+        }
+    }
+    return 0;
+}
+
+std::filesystem::path storageDirectory(
+    const std::filesystem::path& relativePath) {
+    if (g_storage != nullptr) {
+        auto result = g_storage->ensureDirectory(relativePath);
+        if (result) {
+            return result.value();
+        }
+    }
+    return {};
+}
 
 bool isDiskFull() {
-    struct statvfs stat;
-    if (statvfs(".", &stat) != 0) return false;
-    unsigned long long free_bytes = stat.f_bavail * stat.f_frsize;
-    unsigned long long free_mb = free_bytes / (1024 * 1024);
-    return (free_mb < 100);
+    if (g_storage != nullptr) {
+        const auto root = g_storage->ensureDirectory(".");
+        if (!root) {
+            return false;
+        }
+        const auto storageSpace = g_storage->space();
+        if (storageSpace) {
+            return storageSpace.value().availableBytes <
+                   100ULL * 1024ULL * 1024ULL;
+        }
+    }
+    return false;
 }
 
 std::string currentTimeString() {
-    std::time_t rawtime = std::time(nullptr);
+    std::time_t rawtime = currentUnixTime();
     std::tm timeinfo{};
     localtime_r(&rawtime, &timeinfo);
     char buf[16];
@@ -54,6 +85,18 @@ std::string currentTimeString() {
 }
 
 } // namespace
+
+void uiConfigureDeviceServices(
+    smart_attendance::hal::IRtc& rtc,
+    smart_attendance::hal::IStorageDevice& storage) noexcept {
+    g_rtc = &rtc;
+    g_storage = &storage;
+}
+
+void uiResetDeviceServices() noexcept {
+    g_rtc = nullptr;
+    g_storage = nullptr;
+}
 
 UiController* UiController::getInstance() {
     if (!s_instance) {
@@ -67,6 +110,10 @@ bool UiController::isDiskFull() {
     return ::isDiskFull();
 }
 
+std::time_t UiController::getCurrentUnixTime() {
+    return currentUnixTime();
+}
+
 // 移入原 get_current_time_str 逻辑
 std::string UiController::getCurrentTimeStr() {
     return currentTimeString();
@@ -74,7 +121,7 @@ std::string UiController::getCurrentTimeStr() {
 
 // 获取当前星期几字符串实现
 std::string UiController::getCurrentWeekdayStr() {
-    time_t now = time(0);
+    time_t now = currentUnixTime();
     struct tm tstruct;
     char buf[16];
     localtime_r(&now, &tstruct);
@@ -365,18 +412,22 @@ bool UiController::exportReportToUsb() {
     // 包括创建目录、计算日期、调用 Generator
     // 这里只保留纯业务，不包含 lv_msgbox 等 UI 弹窗代码
     // 可以返回一个状态码或 bool 给 UI 层去决定弹窗内容
-    try {
-        std::filesystem::create_directories("output/usb_sim");
-    } catch (...) { return false; }
+    const auto directory = storageDirectory("usb_sim");
+    std::error_code directoryError;
+    std::filesystem::create_directories(directory, directoryError);
+    if (directoryError) return false;
 
-    std::time_t t = std::time(nullptr);
+    std::time_t t = currentUnixTime();
     std::tm* now = std::localtime(&t);
     char start_date[16], end_date[16];
     std::strftime(start_date, sizeof(start_date), "%Y-%m-01", now);
     std::strftime(end_date, sizeof(end_date), "%Y-%m-%d", now);
 
     ReportGenerator generator;
-    return generator.exportAllAttendanceReport(start_date, end_date, "output/usb_sim/attendance_report.xlsx");
+    return generator.exportAllAttendanceReport(
+        start_date,
+        end_date,
+        (directory / "attendance_report.xlsx").string());
 }
 
 bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
@@ -461,7 +512,9 @@ bool UiController::deleteUser(int userId) {
 
 // 导出自定义全体员工报表实现
 bool UiController::exportCustomReport(const std::string& start, const std::string& end) {
-    std::string dir = "output/usb_sim";
+    const auto directory = storageDirectory("usb_sim");
+    if (directory.empty()) return false;
+    std::string dir = directory.string();
     
     // 强制创建目录，如果目录不存在
     if (!fs::exists(dir)) {
@@ -475,7 +528,9 @@ bool UiController::exportCustomReport(const std::string& start, const std::strin
 
 // 导出个人报表实现
 bool UiController::exportUserReport(int user_id, const std::string& start, const std::string& end) {
-    std::string dir = "output/usb_sim";
+    const auto directory = storageDirectory("usb_sim");
+    if (directory.empty()) return false;
+    std::string dir = directory.string();
 
     // 强制创建目录，如果目录不存在
     if (!fs::exists(dir)) {
@@ -532,7 +587,9 @@ void UiController::clearAllData() {
 
 // 实现导出员工设置表功能Set the table
 bool UiController::exportEmployeeSettings() {
-    std::string dir = "output/usb_settings";
+    const auto directory = storageDirectory("usb_settings");
+    if (directory.empty()) return false;
+    std::string dir = directory.string();
 
     // 强制创建目录，如果目录不存在
     if (!fs::exists(dir)) {
@@ -576,13 +633,17 @@ void uiWakeMonitorTask() {
 
 // ============================================================
 // 上传员工设置表实现
-// 流程：解压 output/usb_settings/员工设置表.xlsx
+// 流程：从当前 IStorageDevice 的 usb_settings/员工设置表.xlsx 解压导入
 //       → 读取 sharedStrings.xml 建立字符串索引
 //       → 读取 sheet1.xml 第6行起解析员工数据(工号/姓名/部门/权限)
 //       → 调用 db_batch_add_users 写入数据库
 // ============================================================
 bool UiController::importEmployeeSettings(int* invalid_time_count) {
-    const std::string xlsx_path = "output/usb_settings/员工设置表.xlsx";
+    const auto settingsDirectory =
+        storageDirectory("usb_settings");
+    if (settingsDirectory.empty()) return false;
+    const std::string xlsx_path =
+        (settingsDirectory / "员工设置表.xlsx").string();
     const std::string tmp_dir   = "output/.xlsx_import_tmp";
 
     // 1. 检查文件是否存在
@@ -668,7 +729,7 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
 
     // 用于保存提取到的年份和月份，兜底使用当前年月
     int import_year = 0, import_month = 0;
-    time_t now = time(0);
+    time_t now = currentUnixTime();
     tm *ltm = localtime(&now);
     import_year = 1900 + ltm->tm_year;
     import_month = 1 + ltm->tm_mon;

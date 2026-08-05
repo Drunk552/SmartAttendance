@@ -4,6 +4,7 @@
  */
 
 #include "app/application.h"
+#include "../mocks/mock_platform_devices.h"
 
 #include <atomic>
 #include <chrono>
@@ -268,6 +269,30 @@ int main() {
 
     resetFakes(true);
     {
+        Application invalidPlatformApplication(
+            databaseLifecycle,
+            uiLifecycle,
+            applicationLoop,
+            businessLifecycle,
+            fakeUserReportExporter,
+            fakeCustomReportExporter,
+            fakeEmployeeSettingsExporter,
+            fakeEmployeeSettingsImporter,
+            monitorLifecycle,
+            frameDeliveryLifecycle,
+            captureLifecycle,
+            writerLifecycle,
+            {},
+            runtimeDirectory);
+        require(invalidPlatformApplication.initialize() ==
+                    ApplicationInitError::InvalidPlatformDevices,
+                "incomplete platform devices must be rejected");
+        require(databaseInitializeCount == 0 && uiInitializeCount == 0,
+                "invalid platform devices must not initialize resources");
+    }
+
+    resetFakes(true);
+    {
         Application invalidUiApplication(
             databaseLifecycle,
             {fakeUiInitialize, nullptr},
@@ -281,6 +306,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(invalidUiApplication.initialize() ==
                     ApplicationInitError::InvalidUiLifecycle,
@@ -304,6 +330,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(invalidLoopApplication.initialize() ==
                     ApplicationInitError::InvalidApplicationLoop,
@@ -327,6 +354,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(invalidBusinessApplication.initialize() ==
                     ApplicationInitError::InvalidBusinessLifecycle,
@@ -351,6 +379,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(failedApplication.initialize() ==
                     ApplicationInitError::DatabaseInitializationFailed,
@@ -385,6 +414,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(failedUiApplication.initialize() ==
                     ApplicationInitError::UiInitializationFailed,
@@ -422,6 +452,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(failedBusinessApplication.initialize() ==
                     ApplicationInitError::None,
@@ -457,6 +488,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
 
         require(application.state() == ApplicationState::Created,
@@ -566,6 +598,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(failedLoopApplication.initialize() ==
                     ApplicationInitError::None &&
@@ -603,6 +636,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(failedUiShutdownApplication.initialize() ==
                     ApplicationInitError::None &&
@@ -638,6 +672,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(failedBusinessShutdownApplication.initialize() ==
                     ApplicationInitError::None &&
@@ -672,6 +707,7 @@ int main() {
             frameDeliveryLifecycle,
             captureLifecycle,
             writerLifecycle,
+            smart_attendance::test::makeMockPlatformDevices(),
             runtimeDirectory);
         require(failedWorkerApplication.initialize() ==
                     ApplicationInitError::None,

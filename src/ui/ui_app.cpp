@@ -7,28 +7,23 @@
 #include "ui_app.h"
 #include "app/ui_background_job_queue.h"
 #include "app/ui_system_status_mailbox.h"
+#include "hal/display.h"
+#include "hal/keypad.h"
 #include <lvgl.h>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 
 // 模块接口
 #include "managers/ui_manager.h"
 #include "common/ui_style.h"
 #include "common/ui_widgets.h"
+#include "ui_controller.h"
 
 // 引入主页头文件
 #include "screens/home/ui_scr_home.h"
 #include "screens/record_query/ui_scr_record_query.h"
 #include "screens/att_stats/ui_scr_att_stats.h"
-
-// 屏幕宏定义 (默认 240x320，可按需修改)
-#ifndef SCREEN_W
-#define SCREEN_W 240
-#endif
-
-#ifndef SCREEN_H
-#define SCREEN_H 320
-#endif
 
 // 全局退出标志 (定义在 main.cpp)
 extern "C" {
@@ -39,6 +34,8 @@ namespace {
 
 smart_attendance::app::UiBackgroundJobQueue* g_backgroundJobs = nullptr;
 smart_attendance::app::UiSystemStatusMailbox* g_systemStatus = nullptr;
+smart_attendance::hal::IDisplay* g_display = nullptr;
+smart_attendance::hal::IKeypad* g_keypad = nullptr;
 
 } // namespace
 
@@ -52,6 +49,13 @@ void ui_configure_background_jobs(
 void ui_configure_system_status(
     smart_attendance::app::UiSystemStatusMailbox& systemStatus) noexcept {
     g_systemStatus = &systemStatus;
+}
+
+void ui_configure_platform(
+    smart_attendance::hal::IDisplay& display,
+    smart_attendance::hal::IKeypad& keypad) noexcept {
+    g_display = &display;
+    g_keypad = &keypad;
 }
 
 void ui_process_background_results() {
@@ -100,19 +104,18 @@ void ui_init(void) {
     // ============================================================
     lv_init();
 
-    // 创建 SDL 窗口 (模拟显示屏)
-    // 这一步需要在 lv_conf.h 中启用 LV_USE_SDL
-    lv_display_t * disp = lv_sdl_window_create(SCREEN_W, SCREEN_H);
-    if (disp) {
-        printf("[UI] SDL Window Created (%dx%d).\n", SCREEN_W, SCREEN_H);
-    } else {
-        printf("[UI] [FATAL] 无法创建 SDL 窗口！请检查环境或 lv_conf.h 配置。\n");
-        // 如果这里失败，通常是因为 WSLg 没配置好，或者没装 libsdl2-dev
+    if (g_display == nullptr || !g_display->initialize()) {
+        lv_deinit();
+        throw std::runtime_error("platform display initialization failed");
     }
+    printf("[UI] Display initialized (%dx%d).\n",
+           g_display->width(), g_display->height());
 
-    // 创建 SDL 输入设备 (鼠标 + 键盘)
-    lv_indev_t * mouse = lv_sdl_mouse_create();
-    lv_indev_t * kbd   = lv_sdl_keyboard_create();
+    if (g_keypad == nullptr || !g_keypad->initialize()) {
+        g_display->shutdown();
+        lv_deinit();
+        throw std::runtime_error("platform keypad initialization failed");
+    }
 
     // ============================================================
     // 3. 管理器初始化 (创建 Group)
@@ -123,19 +126,17 @@ void ui_init(void) {
     // ============================================================
     // 4. 绑定键盘到 UI (解决无法操作菜单的问题)
     // ============================================================
-    if (kbd) {
-        // [关键] 必须设为 KEYPAD 模式
-        lv_indev_set_type(kbd, LV_INDEV_TYPE_KEYPAD);
-        
-        // 获取全局 Group 并绑定
-        lv_group_t * g = UiManager::getInstance()->getKeypadGroup();
-        if (g) {
-            lv_indev_set_group(kbd, g);
-            lv_group_set_wrap(g, true); // 开启循环跳转
-            printf("[UI] Keyboard bound to Manager Group.\n");
+    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+    if (group != nullptr) {
+        lv_indev_t* input = lv_indev_get_next(nullptr);
+        while (input != nullptr) {
+            if (lv_indev_get_type(input) == LV_INDEV_TYPE_KEYPAD) {
+                lv_indev_set_group(input, group);
+            }
+            input = lv_indev_get_next(input);
         }
-    } else {
-        printf("[UI] [Error] Failed to create SDL Keyboard!\n");
+        lv_group_set_wrap(group, true);
+        printf("[UI] Platform keypad bound to Manager Group.\n");
     }
 
     // ============================================================
@@ -154,6 +155,15 @@ void ui_shutdown(void) {
     g_systemStatus = nullptr;
     ui::record_query::resetBackgroundJobs();
     ui::att_stats::resetBackgroundJobs();
+    if (g_keypad != nullptr) {
+        g_keypad->shutdown();
+    }
+    if (g_display != nullptr) {
+        g_display->shutdown();
+    }
     lv_deinit();
+    uiResetDeviceServices();
+    g_keypad = nullptr;
+    g_display = nullptr;
     printf(">>> [UI] LVGL/SDL 资源已释放。\n");
 }

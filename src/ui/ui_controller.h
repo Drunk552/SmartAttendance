@@ -21,6 +21,11 @@ namespace smart_attendance::ui {
 class EmployeeLookupPresenter;
 }
 
+namespace smart_attendance::hal {
+class IRtc;
+class IStorageDevice;
+}
+
 // 这里为了简化，我们暂时复用 data 层的结构体定义
 // 理想情况下应该定义 UI 专用的 Struct，但为了第一阶段快速重构，先复用
 #include "../data/db_storage.h" 
@@ -33,6 +38,12 @@ void uiRunMonitorTask(
 /** @brief 唤醒正在等待下一次监控周期的任务，以便及时退出。 */
 void uiWakeMonitorTask();
 
+/** @brief 注入组合根持有的系统时钟和模拟/真实存储目录，不转移所有权。 */
+void uiConfigureDeviceServices(
+    smart_attendance::hal::IRtc& rtc,
+    smart_attendance::hal::IStorageDevice& storage) noexcept;
+void uiResetDeviceServices() noexcept;
+
 /** @brief 将业务层最新帧缩放后投递到 UI 管理器的线程安全缓冲区。 */
 void uiRunFrameDeliveryTask(const std::atomic<bool>& stopRequested);
 
@@ -43,6 +54,7 @@ public:
 
     // --- 1. 系统状态类 ---
     bool isDiskFull();             // 替换原来的 check_disk_low
+    std::time_t getCurrentUnixTime(); // 读取组合根注入的RTC/系统时钟
     std::string getCurrentTimeStr(); // 替换原来的 get_current_time_str
     std::string getCurrentWeekdayStr();// 获取当前星期几字符串 (例如 "周一")
 

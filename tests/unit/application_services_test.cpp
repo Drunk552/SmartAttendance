@@ -1,4 +1,5 @@
 #include "app/application_services.h"
+#include "../mocks/mock_platform_devices.h"
 
 #include "services/punch_service.h"
 
@@ -75,7 +76,8 @@ int main() {
     {
         ApplicationServices invalidServices(
             {nullptr, closeDatabase},
-            {initializeBusiness, nullptr});
+            {initializeBusiness, nullptr},
+            smart_attendance::test::makeMockPlatformDevices());
         require(!invalidServices.hasValidDatabaseLifecycle() &&
                     !invalidServices.hasValidBusinessLifecycle(),
                 "incomplete lifecycle adapters must be rejected");
@@ -85,7 +87,8 @@ int main() {
     {
         ApplicationServices services(
             {initializeDatabase, closeDatabase},
-            {initializeBusiness, shutdownBusiness});
+            {initializeBusiness, shutdownBusiness},
+            smart_attendance::test::makeMockPlatformDevices());
         auto& first = services.punchService();
         auto& second = services.punchService();
         require(&first == &second,
@@ -103,6 +106,10 @@ int main() {
         require(&firstFaceEngine == &secondFaceEngine &&
                     !firstFaceEngine.isTrained(),
                 "ApplicationServices must own one stable face engine instance");
+        require(services.hasCompletePlatformDevices() &&
+                    &services.camera() == &services.camera() &&
+                    &services.rtc() == &services.rtc(),
+                "ApplicationServices must own one complete stable platform set");
         const auto employeeUnavailable = firstEmployeeService.findById(1);
         require(!employeeUnavailable &&
                     employeeUnavailable.error() ==
@@ -122,7 +129,8 @@ int main() {
     {
         ApplicationServices services(
             {initializeDatabase, closeDatabase},
-            {initializeBusiness, shutdownBusiness});
+            {initializeBusiness, shutdownBusiness},
+            smart_attendance::test::makeMockPlatformDevices());
         require(!services.initializeDatabase(),
                 "database initialization failure must propagate");
         require(databaseInitializeCount == 1 && databaseCloseCount == 1,
@@ -136,7 +144,8 @@ int main() {
     {
         ApplicationServices services(
             {initializeDatabase, closeDatabase},
-            {initializeBusiness, shutdownBusiness});
+            {initializeBusiness, shutdownBusiness},
+            smart_attendance::test::makeMockPlatformDevices());
         require(services.initializeDatabase(),
                 "database must initialize before business resources");
         require(!services.initializeBusiness(),
@@ -152,7 +161,8 @@ int main() {
     {
         ApplicationServices services(
             {initializeDatabase, closeDatabase},
-            {initializeBusiness, shutdownBusiness});
+            {initializeBusiness, shutdownBusiness},
+            smart_attendance::test::makeMockPlatformDevices());
         require(services.initializeDatabase() && services.initializeBusiness(),
                 "shutdown failure test must initialize services");
         require(!services.shutdownBusiness(),
@@ -167,7 +177,8 @@ int main() {
     {
         ApplicationServices services(
             {initializeDatabase, closeDatabase},
-            {initializeBusiness, shutdownBusiness});
+            {initializeBusiness, shutdownBusiness},
+            smart_attendance::test::makeMockPlatformDevices());
         require(services.initializeDatabase(),
                 "database close retry test must initialize the database");
         databaseCloseShouldThrow = true;

@@ -83,6 +83,33 @@ endif()
 # ==========================================
 # 4. 主程序配置
 # ==========================================
+set(SA_PLATFORM "pc" CACHE STRING "SmartAttendance platform implementation")
+set_property(CACHE SA_PLATFORM PROPERTY STRINGS pc raspberry_pi lowmem_linux)
+
+if(SA_PLATFORM STREQUAL "pc")
+    add_library(smartattendance_platform STATIC
+        src/platform/pc/gstreamer_camera.cpp
+        src/platform/pc/sdl_display.cpp
+        src/platform/pc/sdl_keypad.cpp
+        src/platform/pc/system_rtc.cpp
+        src/platform/pc/path_storage.cpp
+        src/platform/pc/platform_factory.cpp
+    )
+    target_compile_definitions(smartattendance_platform PUBLIC SA_PLATFORM_PC=1)
+else()
+    message(FATAL_ERROR
+        "SA_PLATFORM=${SA_PLATFORM} is not implemented: target board/BSP facts are not frozen")
+endif()
+target_include_directories(smartattendance_platform PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(smartattendance_platform PUBLIC
+    lvgl
+    ${OpenCV_LIBS}
+    Threads::Threads
+)
+
 add_library(smartattendance_biometric STATIC
     src/biometric/face/face_detector.cpp
     src/biometric/face/face_preprocessor.cpp
@@ -144,6 +171,7 @@ target_link_libraries(smartattendance_repositories PUBLIC
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(smartattendance_platform PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(smartattendance_biometric PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(smartattendance_face_workers PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(smartattendance_storage PRIVATE -Wall -Wextra -Wpedantic)
@@ -231,20 +259,13 @@ target_link_libraries(attendance_app PRIVATE
     smartattendance_repositories
     smartattendance_face_workers
     smartattendance_biometric
+    smartattendance_platform
     # Deleted: wiringPi
 )
 
-# 树莓派硬件构建时才链接 wiringPi 并定义 RPI_BUILD 宏
-if(RPI_BUILD)
-    target_link_libraries(attendance_app PRIVATE wiringPi)
-    target_compile_definitions(attendance_app PRIVATE RPI_BUILD)
-    message(STATUS "RPI_BUILD=ON: 链接 wiringPi，启用 GPIO 矩阵键盘")
-else()
-    message(STATUS "RPI_BUILD=OFF: 跳过 wiringPi，使用 SDL 模拟模式")
-endif()
-
 # 编译信息输出
 message(STATUS "Build Setup:")
+message(STATUS "  SA Platform: ${SA_PLATFORM}")
 message(STATUS "  OpenCV Dir: ${OpenCV_DIR}")
 message(STATUS "  SQLite3 Lib: ${SQLite3_LIBRARIES}")
 message(STATUS "  LVGL Conf: ${CMAKE_SOURCE_DIR}/lv_conf.h")
@@ -463,6 +484,52 @@ if(BUILD_TESTING)
     add_test(
         NAME face_recognition_engine
         COMMAND face_recognition_engine_test
+    )
+
+    add_executable(face_capture_worker_test
+        tests/unit/face_capture_worker_test.cpp
+    )
+    target_include_directories(face_capture_worker_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(face_capture_worker_test PRIVATE
+        smartattendance_face_workers
+        smartattendance_biometric
+        ${OpenCV_LIBS}
+        Threads::Threads
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(face_capture_worker_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME face_capture_worker
+        COMMAND face_capture_worker_test
+    )
+
+    add_executable(platform_factory_test
+        tests/unit/platform_factory_test.cpp
+    )
+    target_include_directories(platform_factory_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_link_libraries(platform_factory_test PRIVATE
+        smartattendance_platform
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(platform_factory_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME platform_factory
+        COMMAND platform_factory_test
     )
 
     add_executable(legacy_punch_repositories_test

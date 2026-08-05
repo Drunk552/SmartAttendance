@@ -84,11 +84,13 @@ SmartAttendance/
 │   ├── business/               # 业务层核心逻辑
 │   │   ├── attendance_rule     # 考勤规则引擎（状态判定、迟到早退计算）
 │   │   ├── auth_service        # 身份认证（登录、权限校验）
-│   │   ├── face_capture_worker # PC采集与识别任务（阶段六再接入Camera HAL）
+│   │   ├── face_capture_worker # 通过Camera/RTC HAL完成采集与识别任务
 │   │   ├── face_punch_worker   # 识别结果到PunchService的有界异步边界
 │   │   ├── face_demo           # 旧UI/C接口兼容门面
 │   │   └── report_generator    # Excel 报表生成器
 │   ├── services/               # 用例编排服务（员工查询、统一打卡）
+│   ├── hal/                    # 摄像头、显示、键盘、时钟和存储的最小平台接口
+│   ├── platform/pc/            # PC/WSL的SDL2、GStreamer、系统时钟和路径模拟实现
 │   ├── storage/                # 数据库生命周期、Repository 抽象与 SQLite 实现
 │   │   ├── database            # SQLite 初始化、Schema、播种和关闭
 │   │   ├── repository/         # 员工、考勤、排班和配置抽象接口
@@ -98,7 +100,6 @@ SmartAttendance/
 │   └── ui/
 │       ├── common/             # 通用组件（样式、控件、T9 键盘）
 │       ├── managers/           # UI 管理器（页面跳转、按键组）
-│       ├── porting/            # 输入设备适配层，当前支持 SDL 模拟/RPI_BUILD 条件编译
 │       ├── screens/            # 各业务页面
 │       │   ├── home/           # 待机主页（摄像头预览、时钟）
 │       │   ├── menu/           # 九宫格主菜单
@@ -203,10 +204,9 @@ source env/env.sh
 ### 3. 编译
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-make -j$(nproc)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSA_PLATFORM=pc
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
 如果已经加载 `env/env.sh`，也可以在项目根目录直接执行：
@@ -274,8 +274,8 @@ r
 | `build/runtime/face_model.xml` | OpenCV LBPH 人脸识别模型 |
 | `build/runtime/captured_images/` | 打卡抓拍图片 |
 | `build/runtime/registered_avatars/` | 员工注册头像 |
-| `build/runtime/output/usb_sim/` | 报表导出仿真目录 |
-| `build/runtime/output/usb_settings/` | 员工设置表导入/导出仿真目录 |
+| `build/runtime/output/usb_sim/` | 模拟U盘的报表导出目录 |
+| `build/runtime/output/usb_settings/` | 模拟U盘的员工设置表导入/导出目录 |
 
 这些文件用于本地仿真和调试，不属于板端烧录工程。
 
@@ -299,15 +299,15 @@ r
 
 当前 PC/WSL 仿真版本使用本地目录模拟 U 盘导入导出流程：
 
-- 考勤报表导出目录：`output/usb_sim/`
-- 员工设置表目录：`output/usb_settings/`
+- 考勤报表导出目录：`build/runtime/output/usb_sim/`
+- 员工设置表目录：`build/runtime/output/usb_settings/`
 - 员工设置表文件名：`员工设置表.xlsx`
 
 基本流程：
 
-1. 在设备菜单中导出员工设置表，程序会生成 `output/usb_settings/员工设置表.xlsx`
+1. 在设备菜单中导出员工设置表，程序会生成 `build/runtime/output/usb_settings/员工设置表.xlsx`
 2. 在电脑中填写或修改员工、部门、班次与排班信息
-3. 将修改后的 `员工设置表.xlsx` 放回 `output/usb_settings/`
+3. 将修改后的 `员工设置表.xlsx` 放回 `build/runtime/output/usb_settings/`
 4. 在程序菜单中执行上传，导入数据库
 
 时间格式要求：`HH:MM`，使用英文冒号，范围为 `00:00` 到 `23:59`，不要包含前导空格。

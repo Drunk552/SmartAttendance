@@ -7,11 +7,12 @@
 #define SMART_ATTENDANCE_BUSINESS_FACE_CAPTURE_WORKER_H
 
 #include "biometric/face/face_recognition_engine.h"
+#include "hal/camera.h"
+#include "hal/rtc.h"
 
 #include <atomic>
 #include <ctime>
 #include <functional>
-#include <opencv2/videoio.hpp>
 #include <string>
 
 namespace smart_attendance::business {
@@ -38,6 +39,8 @@ public:
      */
     FaceCaptureWorker(
         biometric::face::IFaceRecognitionEngine& recognitionEngine,
+        hal::ICamera& camera,
+        hal::IRtc& rtc,
         FaceCaptureWorkerCallbacks callbacks);
 
     /** @brief 在 TaskManager 所有线程中运行，观察停止标志后同步释放摄像头并返回。 */
@@ -47,13 +50,10 @@ public:
     void close() noexcept;
 
 private:
-    bool waitForSimulatorStream(
-        const std::atomic<bool>& stopRequested) const noexcept;
-    cv::VideoCapture openSimulatorStream() const;
-
     biometric::face::IFaceRecognitionEngine& recognitionEngine_;
+    hal::ICamera& camera_;
+    hal::IRtc& rtc_;
     FaceCaptureWorkerCallbacks callbacks_;
-    cv::VideoCapture capture_;
 };
 
 } // namespace smart_attendance::business

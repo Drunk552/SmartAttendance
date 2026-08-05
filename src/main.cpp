@@ -13,6 +13,7 @@
 #include <cstdlib>// 确保包含 system 和 setenv
 #include <filesystem>
 #include <system_error>
+#include <utility>
 
 // 1. 引入第三方库头文件
 #include "lvgl.h"
@@ -31,6 +32,7 @@ extern "C" {
 #include "business/face_demo.h" // 业务层
 #include "data/db_storage.h"    // 数据层
 #include "app/application.h"
+#include "app/platform_factory.h"
 
 namespace {
 
@@ -82,6 +84,8 @@ const char* initErrorMessage(smart_attendance::app::ApplicationInitError error) 
         return "应用主循环配置无效";
     case ApplicationInitError::InvalidBusinessLifecycle:
         return "业务生命周期配置无效";
+    case ApplicationInitError::InvalidPlatformDevices:
+        return "平台设备集合不完整";
     case ApplicationInitError::RuntimeDirectoryUnavailable:
         return "运行目录无法创建或访问";
     case ApplicationInitError::DatabaseInitializationFailed:
@@ -233,6 +237,15 @@ int main(int argc, char* argv[]) {
 
     // 2. Application 统一准备运行目录，并依次初始化数据层和 UI 层。
     const auto runtimeDirectory = executableDirectory(argv[0]) / "runtime";
+    smart_attendance::app::PlatformConfig platformConfig;
+    platformConfig.simulatedStorageRoot = runtimeDirectory / "output";
+    auto platformResult =
+        smart_attendance::app::createPlatformDevices(platformConfig);
+    if (!platformResult) {
+        std::cerr << "[Fatal] PC 平台设备创建失败，程序退出。" << std::endl;
+        return EXIT_FAILURE;
+    }
+
     smart_attendance::app::Application application(
         {data_init, data_close},
         {initializeUi, ui_shutdown},
@@ -247,10 +260,15 @@ int main(int argc, char* argv[]) {
         {business_run_capture_task, business_wake_capture_task},
         {business_run_database_writer_task,
          business_wake_database_writer_task},
+        std::move(platformResult).value(),
         runtimeDirectory);
     business_configure_punch_service(application.punchService());
     business_configure_face_recognition_engine(
         application.faceRecognitionEngine());
+    business_configure_platform_devices(
+        application.camera(), application.rtc());
+    ui_configure_platform(application.display(), application.keypad());
+    uiConfigureDeviceServices(application.rtc(), application.storage());
     ui_configure_background_jobs(application.uiBackgroundJobs());
     ui_configure_system_status(application.uiSystemStatus());
 
