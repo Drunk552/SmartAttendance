@@ -8,6 +8,7 @@
 
 #include "application_services.h"
 #include "task_manager.h"
+#include "ui/presenters/employee_lookup_presenter.h"
 
 #include <filesystem>
 
@@ -137,12 +138,16 @@ public:
     /** @brief 显式访问由 ApplicationServices 持有的统一打卡服务。 */
     services::PunchService& punchService() noexcept;
 
+    /** @brief 返回由组合根持有的员工角色 Presenter。 */
+    ui::EmployeeLookupPresenter& employeeLookupPresenter() noexcept;
+
 private:
     bool shutdownUiNoexcept() noexcept;
 
     UiLifecycle uiLifecycle_;
     ApplicationLoop applicationLoop_;
     ApplicationServices services_;
+    ui::EmployeeLookupPresenter employeeLookupPresenter_;
     TaskManager taskManager_;
     std::filesystem::path runtimeDirectory_;
     ApplicationState state_{ApplicationState::Created};

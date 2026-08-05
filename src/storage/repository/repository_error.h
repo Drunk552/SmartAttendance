@@ -9,6 +9,7 @@
 namespace smart_attendance::storage {
 
 enum class RepositoryError {
+    InvalidArgument,
     ReadFailed,
     WriteFailed
 };

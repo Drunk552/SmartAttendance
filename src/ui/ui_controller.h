@@ -17,6 +17,10 @@ namespace smart_attendance::app {
 class UiSystemStatusMailbox;
 }
 
+namespace smart_attendance::ui {
+class EmployeeLookupPresenter;
+}
+
 // 这里为了简化，我们暂时复用 data 层的结构体定义
 // 理想情况下应该定义 UI 专用的 Struct，但为了第一阶段快速重构，先复用
 #include "../data/db_storage.h" 
@@ -48,6 +52,13 @@ public:
     std::string getDeptNameById(int deptId);//通过部门ID获取部门名称
     bool registerNewUser(const std::string& name, int deptId);
     int getUserRoleById(int userId);// 获取指定用户的权限 (0:普通, 1:管理员, -1:未找到)
+
+    /**
+     * @brief 绑定由 Application 持有的员工角色 Presenter；传 nullptr 清除绑定。
+     * @note 不取得所有权，只能在 UI 主线程配置，且必须在服务销毁前清除。
+     */
+    void configureEmployeeLookupPresenter(
+        smart_attendance::ui::EmployeeLookupPresenter* presenter) noexcept;
 
     // 验证用户密码是否正确(校验哈希值)
     bool verifyUserPassword(int userId, const std::string& inputPassword);
@@ -136,6 +147,7 @@ private:
     std::vector<uint8_t> m_cached_frame; // 缓存最新的一帧图像
     std::string m_company_name;          // 公司名称缓存
     std::mutex m_company_mutex;          // 保护公司数据的锁
+    smart_attendance::ui::EmployeeLookupPresenter* employeeLookupPresenter_{nullptr};
 };
 
 #endif // UI_CONTROLLER_H
