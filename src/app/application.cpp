@@ -30,6 +30,11 @@ Application::Application(DatabaseLifecycle databaseLifecycle,
                 businessLifecycle,
                 std::move(platformDevices)),
       employeeLookupPresenter_(services_.employeeService()),
+      settingsPresenter_(services_.configService()),
+      departmentPresenter_(services_.departmentService()),
+      shiftPresenter_(services_.shiftService()),
+      attendanceQueryPresenter_(services_.attendanceQueryService()),
+      maintenancePresenter_(services_.maintenanceService()),
       taskManager_(userReportExporter,
                    customReportExporter,
                    employeeSettingsExporter,
@@ -212,6 +217,27 @@ hal::IStorageDevice& Application::storage() noexcept {
 ui::EmployeeLookupPresenter& Application::employeeLookupPresenter() noexcept {
     return employeeLookupPresenter_;
 }
+
+ui::SettingsPresenter& Application::settingsPresenter() noexcept {
+    return settingsPresenter_;
+}
+
+ui::DepartmentPresenter& Application::departmentPresenter() noexcept {
+    return departmentPresenter_;
+}
+
+ui::ShiftPresenter& Application::shiftPresenter() noexcept {
+    return shiftPresenter_;
+}
+
+ui::AttendanceQueryPresenter& Application::attendanceQueryPresenter() noexcept {
+    return attendanceQueryPresenter_;
+}
+
+ui::MaintenancePresenter& Application::maintenancePresenter() noexcept {
+    return maintenancePresenter_;
+}
+
 
 bool Application::shutdownUiNoexcept() noexcept {
     if (!uiInitialized_) {

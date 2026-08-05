@@ -261,6 +261,14 @@ struct AttendanceRecord {
     int minutes_early;
 };
 
+enum class DbAttendanceQueryStatus { Success, InvalidArgument, ReadError };
+constexpr std::size_t kMaxDbAttendanceQuerySize = 512;
+struct DbAttendanceQueryResult {
+    DbAttendanceQueryStatus status;
+    std::vector<AttendanceRecord> records;
+    bool has_more;
+};
+
 // 用于查询系统信息的结构体
 struct SystemStats {
     int total_employees;    // 员工注册数 (总人数)
@@ -489,6 +497,9 @@ std::optional<UserData> db_get_user_info(int user_id);
  */
 std::vector<UserData> db_get_all_users();
 
+/** @brief 返回指定部门员工数量；SQL 读取失败时返回空 optional。 */
+std::optional<int> db_count_users_by_department(int department_id);
+
 /**
  * @brief 给用户指定班次 (排班)
  * @param user_id 用户ID
@@ -587,6 +598,10 @@ bool db_log_attendance_at(int user_id,
  * @return std::vector<AttendanceRecord> 记录列表
  */
 std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_ts);
+
+DbAttendanceQueryResult db_query_records_limited(
+    int user_id, long long start_ts, long long end_ts, std::size_t limit,
+    std::size_t offset = 0);
 
 // 获取指定用户的最后一次打卡时间戳，如果没有记录返回 0
 time_t db_getLastPunchTime(int user_id);

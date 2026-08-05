@@ -17,6 +17,11 @@ ApplicationServices::ApplicationServices(
       businessLifecycle_(businessLifecycle),
       platformDevices_(std::move(platformDevices)),
       employeeService_(employeeRepository_),
+      configService_(configRepository_),
+      departmentService_(departmentRepository_),
+      shiftService_(shiftManagementRepository_),
+      attendanceQueryService_(attendanceQueryRepository_),
+      maintenanceService_(maintenanceRepository_),
       punchService_(scheduleRepository_,
                     attendanceRuleRepository_,
                     attendanceRepository_) {}
@@ -106,6 +111,26 @@ services::EmployeeService& ApplicationServices::employeeService() noexcept {
 
 storage::IConfigRepository& ApplicationServices::configRepository() noexcept {
     return configRepository_;
+}
+
+services::ConfigService& ApplicationServices::configService() noexcept {
+    return configService_;
+}
+
+services::DepartmentService& ApplicationServices::departmentService() noexcept {
+    return departmentService_;
+}
+
+services::ShiftService& ApplicationServices::shiftService() noexcept {
+    return shiftService_;
+}
+
+services::AttendanceQueryService& ApplicationServices::attendanceQueryService() noexcept {
+    return attendanceQueryService_;
+}
+
+services::MaintenanceService& ApplicationServices::maintenanceService() noexcept {
+    return maintenanceService_;
 }
 
 biometric::face::IFaceRecognitionEngine&

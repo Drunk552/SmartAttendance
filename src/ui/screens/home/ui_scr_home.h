@@ -2,6 +2,9 @@
 #define UI_SCR_HOME_H
 
 #include <lvgl.h>
+
+class UiController;
+namespace ui::home { void configureController(UiController& controller) noexcept; }
 #include <string> // [Fix] 需要 string 支持
 
 namespace ui {

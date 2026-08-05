@@ -19,12 +19,39 @@ namespace smart_attendance::services {
 enum class EmployeeError {
     InvalidEmployeeId,
     InvalidPageRequest,
-    ReadFailed
+    InvalidName,
+    InvalidDepartmentId,
+    InvalidRole,
+    InvalidPassword,
+    NotFound,
+    ReadFailed,
+    WriteFailed
 };
 
 struct EmployeePage {
-    std::vector<core::Employee> employees;
+    struct Entry {
+        core::Employee employee;
+        std::string departmentName;
+    };
+
+    std::vector<Entry> employees;
     bool hasMore;
+};
+
+struct EmployeeDisplayDetails {
+    core::Employee employee;
+    std::string departmentName;
+    bool faceRegistered;
+    bool fingerprintRegistered;
+    std::string cardId;
+    bool passwordRegistered;
+};
+
+enum class PasswordVerification {
+    Match,
+    Mismatch,
+    NotConfigured,
+    NotFound
 };
 
 /**
@@ -42,6 +69,26 @@ public:
      * @return 员工不存在时成功返回空 optional；存储失败时返回 ReadFailed。
      */
     Result<std::optional<core::Employee>, EmployeeError> findById(int employeeId);
+
+    /** @brief 查询详情页展示字段，不返回认证内容或生物特征数据。 */
+    Result<std::optional<EmployeeDisplayDetails>, EmployeeError>
+    findDisplayDetailsById(int employeeId);
+
+    Result<void, EmployeeError>
+    updateName(int employeeId, const std::string& name);
+
+    Result<void, EmployeeError>
+    updateDepartment(int employeeId, int departmentId);
+
+    Result<void, EmployeeError> updateRole(int employeeId, int role);
+
+    Result<PasswordVerification, EmployeeError>
+    verifyPassword(int employeeId, const std::string& password);
+
+    Result<void, EmployeeError>
+    updatePassword(int employeeId, const std::string& password);
+
+    Result<void, EmployeeError> remove(int employeeId);
 
     /**
      * @brief 按工号升序读取一页员工基础信息。

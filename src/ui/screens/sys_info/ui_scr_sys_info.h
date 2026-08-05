@@ -3,6 +3,9 @@
 
 #include <lvgl.h>
 
+class UiController;
+namespace ui::sys_info { void configureController(UiController& controller) noexcept; }
+
 namespace ui {
 namespace sys_info {
 

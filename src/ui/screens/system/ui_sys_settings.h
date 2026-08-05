@@ -3,6 +3,9 @@
 
 #include <lvgl.h>
 
+class UiController;
+namespace ui::system { void configureController(UiController& controller) noexcept; }
+
 namespace ui {
 namespace system {
 

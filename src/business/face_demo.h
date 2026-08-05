@@ -12,9 +12,11 @@
 #ifdef __cplusplus
 
 #include <atomic>
-#include "db_storage.h"//数据层头文件
-
 #include <opencv2/core.hpp> // 包含 cv::Mat 定义,只有 C++ 编译器才引入 OpenCV
+
+namespace smart_attendance::storage {
+class IFaceDataRepository;
+}
 
 namespace smart_attendance::services {
 class PunchService;
@@ -48,6 +50,10 @@ void business_configure_face_recognition_engine(
 void business_configure_platform_devices(
     smart_attendance::hal::ICamera& camera,
     smart_attendance::hal::IRtc& rtc) noexcept;
+
+/** @brief 注入人脸业务所需的员工、图片和考勤记录 Repository。 */
+void business_configure_face_data_repository(
+    smart_attendance::storage::IFaceDataRepository& repository) noexcept;
 
 typedef cv::Size CvSizeCompat; // C++用 OpenCV 的 cv::Size 类型
 

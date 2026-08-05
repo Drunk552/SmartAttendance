@@ -403,6 +403,22 @@ std::vector<UserData> db_get_all_users() {
     return users;
 }
 
+std::optional<int> db_count_users_by_department(int department_id) {
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+
+    const char* sql = "SELECT COUNT(*) FROM users WHERE dept_id = ?;";
+    ScopedSqliteStmt stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
+        return std::nullopt;
+    }
+
+    sqlite3_bind_int(stmt.get(), 1, department_id);
+    if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+        return std::nullopt;
+    }
+    return sqlite3_column_int(stmt.get(), 0);
+}
+
 bool db_assign_user_shift(int user_id, int shift_id) {
 
     std::unique_lock<std::shared_mutex> lock(g_db_mutex);//排他锁（写锁）
@@ -669,8 +685,10 @@ DbUserPageResult db_find_user_basics_page(std::size_t offset, std::size_t limit)
     }
 
     const char* sql =
-        "SELECT id, name, dept_id, privilege FROM users "
-        "ORDER BY id LIMIT ? OFFSET ?;";
+        "SELECT u.id, u.name, u.dept_id, u.privilege, d.name "
+        "FROM users u "
+        "LEFT JOIN departments d ON u.dept_id = d.id "
+        "ORDER BY u.id LIMIT ? OFFSET ?;";
     ScopedSqliteStmt stmt;
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
         std::cerr << "[Data] User Page SQL Error: " << sqlite3_errmsg(db) << std::endl;
@@ -696,6 +714,9 @@ DbUserPageResult db_find_user_basics_page(std::size_t offset, std::size_t limit)
             user.name = name ? name : "Unknown";
             user.dept_id = sqlite3_column_int(stmt.get(), 2);
             user.role = sqlite3_column_int(stmt.get(), 3);
+            const char* departmentName = reinterpret_cast<const char*>(
+                sqlite3_column_text(stmt.get(), 4));
+            user.dept_name = departmentName ? departmentName : "Unknown";
             users.push_back(std::move(user));
         }
 

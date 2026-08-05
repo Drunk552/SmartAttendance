@@ -3,6 +3,9 @@
 
 #include <lvgl.h>
 
+class UiController;
+namespace ui::record_query { void configureController(UiController& controller) noexcept; }
+
 namespace smart_attendance::app {
 class UiBackgroundJobQueue;
 struct UiBackgroundJobResult;

@@ -12,6 +12,16 @@
 namespace ui {
 namespace sys_info {
 
+static UiController* controller_ = nullptr;
+
+void configureController(UiController& controller) noexcept {
+    controller_ = &controller;
+}
+
+static UiController& controller() {
+    return *controller_;
+}
+
 
 // ================= [内部状态: 屏幕指针] =================
 static lv_obj_t *scr_sys = nullptr;//系统信息主菜单界面
@@ -179,7 +189,7 @@ void load_storage_info_screen() {
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
     //获取存储信息数
-    SystemStats stats = UiController::getInstance()->getSystemStatistics();
+    SystemStats stats = controller().getSystemStatistics();
 
     char buf[64];
     // 1. 员工注册数

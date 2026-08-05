@@ -65,6 +65,18 @@ void testConfigAndHolidayCrud() {
     require(value && value.value() && *value.value() == "value",
             "saved config should round trip");
 
+    require(static_cast<bool>(
+                repository.saveValue("company_name", "Phase Seven Company")),
+            "company name should save through the config repository");
+    const auto companyName = repository.findValue("company_name");
+    require(companyName && companyName.value() &&
+                *companyName.value() == "Phase Seven Company",
+            "company name should preserve the legacy companies table behavior");
+    std::string legacyCompanyName;
+    require(db_load_company_name(legacyCompanyName) &&
+                legacyCompanyName == "Phase Seven Company",
+            "legacy company API must observe the repository update");
+
     const auto noHoliday = repository.findHoliday("2099-01-02");
     require(noHoliday && !noHoliday.value(), "missing holiday should be successful and empty");
     require(static_cast<bool>(repository.saveHoliday("2099-01-02", "Test Holiday")),

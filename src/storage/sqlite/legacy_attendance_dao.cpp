@@ -222,6 +222,65 @@ std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_t
     return list;
 }
 
+DbAttendanceQueryResult db_query_records_limited(
+    int user_id, long long start_ts, long long end_ts, std::size_t limit,
+    std::size_t offset) {
+    if (start_ts > end_ts || limit == 0 || limit > kMaxDbAttendanceQuerySize) {
+        return {DbAttendanceQueryStatus::InvalidArgument, {}, false};
+    }
+
+    std::shared_lock<std::shared_mutex> lock(g_db_mutex);
+    if (!db) return {DbAttendanceQueryStatus::ReadError, {}, false};
+
+    const bool allUsers = user_id < 0;
+    const char* sqlAll =
+        "SELECT a.id, a.user_id, u.name, d.name, a.timestamp, a.status, a.image_path "
+        "FROM attendance a LEFT JOIN users u ON a.user_id = u.id "
+        "LEFT JOIN departments d ON u.dept_id = d.id "
+        "WHERE a.timestamp BETWEEN ? AND ? ORDER BY a.timestamp DESC LIMIT ? OFFSET ?;";
+    const char* sqlUser =
+        "SELECT a.id, a.user_id, u.name, d.name, a.timestamp, a.status, a.image_path "
+        "FROM attendance a LEFT JOIN users u ON a.user_id = u.id "
+        "LEFT JOIN departments d ON u.dept_id = d.id "
+        "WHERE a.user_id = ? AND a.timestamp BETWEEN ? AND ? "
+        "ORDER BY a.timestamp DESC LIMIT ? OFFSET ?;";
+
+    ScopedSqliteStmt stmt;
+    if (sqlite3_prepare_v2(db, allUsers ? sqlAll : sqlUser, -1, stmt.ptr(), 0) != SQLITE_OK) {
+        return {DbAttendanceQueryStatus::ReadError, {}, false};
+    }
+    int index = 1;
+    if (!allUsers) sqlite3_bind_int(stmt.get(), index++, user_id);
+    sqlite3_bind_int64(stmt.get(), index++, start_ts);
+    sqlite3_bind_int64(stmt.get(), index++, end_ts);
+    sqlite3_bind_int64(stmt.get(), index++, static_cast<sqlite3_int64>(limit + 1));
+    sqlite3_bind_int64(stmt.get(), index, static_cast<sqlite3_int64>(offset));
+
+    std::vector<AttendanceRecord> records;
+    records.reserve(limit + 1);
+    int step = SQLITE_ROW;
+    while ((step = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        AttendanceRecord record{};
+        record.id = sqlite3_column_int(stmt.get(), 0);
+        record.user_id = sqlite3_column_int(stmt.get(), 1);
+        const char* userName = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 2));
+        const char* departmentName = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 3));
+        record.user_name = userName ? userName : "Unknown";
+        record.dept_name = departmentName ? departmentName : "No Dept";
+        record.timestamp = sqlite3_column_int64(stmt.get(), 4);
+        record.status = sqlite3_column_int(stmt.get(), 5);
+        const char* imagePath = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 6));
+        record.image_path = imagePath ? imagePath : "";
+        record.minutes_late = 0;
+        record.minutes_early = 0;
+        records.push_back(std::move(record));
+    }
+    if (step != SQLITE_DONE) return {DbAttendanceQueryStatus::ReadError, {}, false};
+    const bool hasMore = records.size() > limit;
+    if (hasMore) records.resize(limit);
+    return {DbAttendanceQueryStatus::Success, std::move(records), hasMore};
+}
+
 //按工号和时间段查询个人的考勤记录
 std::vector<AttendanceRecord> db_get_records_by_user(int user_id, long long start_ts, long long end_ts) {
     std::shared_lock<std::shared_mutex> lock(g_db_mutex); // 读操作使用共享锁

@@ -395,6 +395,7 @@ bool db_clear_all_employee_data(bool keep_admin) {
         }
     } catch (const std::exception& e) {
         std::cerr << "[Data] Error clearing image files: " << e.what() << std::endl;
+        return false;
     }
 
     return true;

@@ -13,6 +13,16 @@
 namespace ui {
 namespace system {
 
+static UiController* controller_ = nullptr;
+
+void configureController(UiController& controller) noexcept {
+    controller_ = &controller;
+}
+
+static UiController& controller() {
+    return *controller_;
+}
+
 // =================菜单--系统设置==================
 static lv_obj_t *scr_sys = nullptr;//系统主屏幕
 static lv_obj_t *scr_basic = nullptr;//基础设置屏幕
@@ -397,7 +407,7 @@ static void show_time_confirm_dialog(const char* time_str) {
 }
 
 static void get_current_time(int &hour, int &min, int &sec){
-    time_t now = UiController::getInstance()->getCurrentUnixTime();
+    time_t now = controller().getCurrentUnixTime();
     struct tm *t =localtime(&now);
     hour = t->tm_hour;
     min = t->tm_min;
@@ -616,7 +626,7 @@ void load_sys_basic_date_screen() {
 
 // =================基础设置界面--日期设置（四级）================
 static void get_current_date(int &year, int &month, int &day) {
-    time_t now = UiController::getInstance()->getCurrentUnixTime();
+    time_t now = controller().getCurrentUnixTime();
     struct tm *t = localtime(&now);
     year = t->tm_year + 1900;
     month = t->tm_mon + 1;
@@ -2767,9 +2777,12 @@ static void clear_records_confirm_cb(lv_event_t *e) {
         
         if(strcmp(tag, "CONFIRM") == 0) {
             //通过UiController调用业务层接口
-            UiController::getInstance()->clearAllRecords();
-            show_popup_msg("成功", "所有考勤记录已清除", nullptr, "确定");
-            load_sys_settings_advanced_screen();
+            if (controller().clearAllRecords()) {
+                show_popup_msg("成功", "所有考勤记录已清除", nullptr, "确定");
+                load_sys_settings_advanced_screen();
+            } else {
+                show_popup_msg("失败", "考勤记录清除失败", nullptr, "确定");
+            }
  
         } 
         
@@ -2875,9 +2888,12 @@ static void clear_employees_confirm_cb(lv_event_t *e) {
         
         if(strcmp(tag, "CONFIRM") == 0) {
             //通过UiController调用业务层接口
-            UiController::getInstance()->clearAllEmployees();
-            show_popup_msg("成功", "所有员工数据已清除", nullptr, "确定");
-            load_sys_settings_advanced_screen();
+            if (controller().clearAllEmployees()) {
+                show_popup_msg("成功", "所有员工数据已清除", nullptr, "确定");
+                load_sys_settings_advanced_screen();
+            } else {
+                show_popup_msg("失败", "员工数据清除失败", nullptr, "确定");
+            }
             }
 
         else if(strcmp(tag, "CANCEL") == 0) {
@@ -2976,9 +2992,12 @@ static void clear_all_data_confirm_cb(lv_event_t *e) {
         
         if(strcmp(tag, "CONFIRM") == 0) {
             //通过UiController调用业务层接口
-            UiController::getInstance()->clearAllData();
-            show_popup_msg("成功", "所有数据已清除", nullptr, "确定");
-            load_sys_settings_advanced_screen();
+            if (controller().clearAllData()) {
+                show_popup_msg("成功", "所有数据已清除", nullptr, "确定");
+                load_sys_settings_advanced_screen();
+            } else {
+                show_popup_msg("失败", "全部数据清除失败", nullptr, "确定");
+            }
             
         } 
         
@@ -3078,9 +3097,12 @@ static void factory_reset_confirm_cb(lv_event_t *e) {
         
         if(strcmp(tag, "CONFIRM") == 0) {
             //通过UiController调用业务层接口
-            UiController::getInstance()->factoryReset();
-            show_popup_msg("成功", "已恢复出厂设置\n系统即将重启", nullptr, "确定");
-            load_sys_settings_advanced_screen(); 
+            if (controller().factoryReset()) {
+                show_popup_msg("成功", "已恢复出厂设置", nullptr, "确定");
+                load_sys_settings_advanced_screen();
+            } else {
+                show_popup_msg("失败", "恢复出厂设置失败", nullptr, "确定");
+            }
            
         } 
         

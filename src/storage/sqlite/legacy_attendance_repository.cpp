@@ -83,4 +83,28 @@ LegacyAttendanceRepository::save(const AttendanceEntry& entry) {
     }
 }
 
+Result<AttendanceQueryPage, RepositoryError>
+LegacyAttendanceQueryRepository::query(int employeeId,
+                                       std::int64_t startTimestamp,
+                                       std::int64_t endTimestamp,
+                                       std::size_t limit,
+                                       std::size_t offset) {
+    using Return = Result<AttendanceQueryPage, RepositoryError>;
+    const auto result = db_query_records_limited(
+        employeeId, startTimestamp, endTimestamp, limit, offset);
+    if (result.status == DbAttendanceQueryStatus::InvalidArgument) {
+        return Return::failure(RepositoryError::InvalidArgument);
+    }
+    if (result.status != DbAttendanceQueryStatus::Success) {
+        return Return::failure(RepositoryError::ReadFailed);
+    }
+    std::vector<core::AttendanceRecord> records;
+    records.reserve(result.records.size());
+    for (const auto& value : result.records) {
+        records.push_back({value.id, value.user_id, value.user_name, value.dept_name,
+                           value.timestamp, value.status, value.image_path});
+    }
+    return Return::success({std::move(records), result.has_more});
+}
+
 } // namespace smart_attendance::storage::sqlite

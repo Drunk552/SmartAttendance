@@ -9,6 +9,11 @@
 #include "application_services.h"
 #include "task_manager.h"
 #include "ui/presenters/employee_lookup_presenter.h"
+#include "ui/presenters/settings_presenter.h"
+#include "ui/presenters/department_presenter.h"
+#include "ui/presenters/shift_presenter.h"
+#include "ui/presenters/attendance_query_presenter.h"
+#include "ui/presenters/maintenance_presenter.h"
 
 #include <filesystem>
 
@@ -153,6 +158,16 @@ public:
     /** @brief 返回由组合根持有的员工角色 Presenter。 */
     ui::EmployeeLookupPresenter& employeeLookupPresenter() noexcept;
 
+    /** @brief 返回由组合根持有的系统设置 Presenter。 */
+    ui::SettingsPresenter& settingsPresenter() noexcept;
+
+    /** @brief 返回由组合根持有的部门设置 Presenter。 */
+    ui::DepartmentPresenter& departmentPresenter() noexcept;
+
+    ui::ShiftPresenter& shiftPresenter() noexcept;
+    ui::AttendanceQueryPresenter& attendanceQueryPresenter() noexcept;
+    ui::MaintenancePresenter& maintenancePresenter() noexcept;
+
 private:
     bool shutdownUiNoexcept() noexcept;
 
@@ -160,6 +175,11 @@ private:
     ApplicationLoop applicationLoop_;
     ApplicationServices services_;
     ui::EmployeeLookupPresenter employeeLookupPresenter_;
+    ui::SettingsPresenter settingsPresenter_;
+    ui::DepartmentPresenter departmentPresenter_;
+    ui::ShiftPresenter shiftPresenter_;
+    ui::AttendanceQueryPresenter attendanceQueryPresenter_;
+    ui::MaintenancePresenter maintenancePresenter_;
     TaskManager taskManager_;
     std::filesystem::path runtimeDirectory_;
     ApplicationState state_{ApplicationState::Created};
