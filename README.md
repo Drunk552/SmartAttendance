@@ -79,11 +79,16 @@ SmartAttendance/
 │   └── lvgl/                   # LVGL 第三方库
 ├── src/
 │   ├── main.cpp                # 程序入口（初始化 + 主循环）
+│   ├── app/                    # 组合根、应用生命周期与后台任务所有权
+│   ├── biometric/face/         # 人脸检测、预处理、LBPH识别与模型管理
 │   ├── business/               # 业务层核心逻辑
 │   │   ├── attendance_rule     # 考勤规则引擎（状态判定、迟到早退计算）
 │   │   ├── auth_service        # 身份认证（登录、权限校验）
-│   │   ├── face_demo           # 人脸识别流程（采集 -> 检测 -> 识别）
+│   │   ├── face_capture_worker # PC采集与识别任务（阶段六再接入Camera HAL）
+│   │   ├── face_punch_worker   # 识别结果到PunchService的有界异步边界
+│   │   ├── face_demo           # 旧UI/C接口兼容门面
 │   │   └── report_generator    # Excel 报表生成器
+│   ├── services/               # 用例编排服务（员工查询、统一打卡）
 │   ├── storage/                # 数据库生命周期、Repository 抽象与 SQLite 实现
 │   │   ├── database            # SQLite 初始化、Schema、播种和关闭
 │   │   ├── repository/         # 员工、考勤、排班和配置抽象接口

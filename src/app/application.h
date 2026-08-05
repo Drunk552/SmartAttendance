@@ -138,6 +138,9 @@ public:
     /** @brief 显式访问由 ApplicationServices 持有的统一打卡服务。 */
     services::PunchService& punchService() noexcept;
 
+    /** @brief 显式访问由 ApplicationServices 持有的人脸算法引擎。 */
+    biometric::face::IFaceRecognitionEngine& faceRecognitionEngine() noexcept;
+
     /** @brief 返回由组合根持有的员工角色 Presenter。 */
     ui::EmployeeLookupPresenter& employeeLookupPresenter() noexcept;
 

@@ -98,6 +98,11 @@ int main() {
         auto& secondConfigRepository = services.configRepository();
         require(&firstConfigRepository == &secondConfigRepository,
                 "ApplicationServices must own one stable config Repository instance");
+        auto& firstFaceEngine = services.faceRecognitionEngine();
+        auto& secondFaceEngine = services.faceRecognitionEngine();
+        require(&firstFaceEngine == &secondFaceEngine &&
+                    !firstFaceEngine.isTrained(),
+                "ApplicationServices must own one stable face engine instance");
         const auto employeeUnavailable = firstEmployeeService.findById(1);
         require(!employeeUnavailable &&
                     employeeUnavailable.error() ==

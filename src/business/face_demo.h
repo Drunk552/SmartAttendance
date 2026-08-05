@@ -20,12 +20,24 @@ namespace smart_attendance::services {
 class PunchService;
 }
 
+namespace smart_attendance::biometric::face {
+class IFaceRecognitionEngine;
+}
+
 /**
  * @brief 注入由 ApplicationServices 持有的统一打卡服务。
  * @note 必须在 business_init 前由主线程调用；不转移所有权。
  */
 void business_configure_punch_service(
     smart_attendance::services::PunchService& punchService) noexcept;
+
+/**
+ * @brief 注入由 ApplicationServices 持有的人脸算法引擎。
+ * @note 必须在 business_init 前由主线程调用；不转移所有权。
+ */
+void business_configure_face_recognition_engine(
+    smart_attendance::biometric::face::IFaceRecognitionEngine&
+        recognitionEngine) noexcept;
 
 typedef cv::Size CvSizeCompat; // C++用 OpenCV 的 cv::Size 类型
 

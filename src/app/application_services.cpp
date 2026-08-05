@@ -104,6 +104,11 @@ storage::IConfigRepository& ApplicationServices::configRepository() noexcept {
     return configRepository_;
 }
 
+biometric::face::IFaceRecognitionEngine&
+ApplicationServices::faceRecognitionEngine() noexcept {
+    return faceRecognitionEngine_;
+}
+
 void ApplicationServices::cleanupFailedDatabaseInitialization() noexcept {
     if (!databaseActive_) {
         return;

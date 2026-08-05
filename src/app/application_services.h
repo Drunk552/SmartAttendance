@@ -6,6 +6,7 @@
 #ifndef SMART_ATTENDANCE_APP_APPLICATION_SERVICES_H
 #define SMART_ATTENDANCE_APP_APPLICATION_SERVICES_H
 
+#include "biometric/face/face_recognition_engine.h"
 #include "services/employee_service.h"
 #include "services/punch_service.h"
 #include "storage/sqlite/legacy_employee_repository.h"
@@ -74,12 +75,16 @@ public:
     /** @brief 返回由组合根持有的配置 Repository，供后续配置 Service 迁移使用。 */
     storage::IConfigRepository& configRepository() noexcept;
 
+    /** @brief 返回由组合根持有的 OpenCV 人脸算法引擎，不转移所有权。 */
+    biometric::face::IFaceRecognitionEngine& faceRecognitionEngine() noexcept;
+
 private:
     void cleanupFailedDatabaseInitialization() noexcept;
     void shutdownDatabaseNoexcept() noexcept;
 
     DatabaseLifecycle databaseLifecycle_;
     BusinessLifecycle businessLifecycle_;
+    biometric::face::FaceRecognitionEngine faceRecognitionEngine_;
     storage::sqlite::LegacyEmployeeRepository employeeRepository_;
     services::EmployeeService employeeService_;
     storage::sqlite::LegacyConfigRepository configRepository_;
