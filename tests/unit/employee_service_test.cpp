@@ -30,9 +30,15 @@ struct FakeEmployeeRepository final : IEmployeeRepository {
     int calls{0};
     int lastEmployeeId{0};
     bool shouldThrow{false};
+    bool displayShouldThrow{false};
+    Result<std::optional<smart_attendance::storage::EmployeeDisplayDetails>,
+           RepositoryError> displayResult =
+        Result<std::optional<smart_attendance::storage::EmployeeDisplayDetails>,
+               RepositoryError>::success(std::nullopt);
     Result<smart_attendance::storage::EmployeePage, RepositoryError> pageResult =
         Result<smart_attendance::storage::EmployeePage, RepositoryError>::success(
-            {{{9, "PageEmployee", 4, EmployeeRole::Administrator}}, true});
+            {{{{9, "PageEmployee", 4, EmployeeRole::Administrator}, "Engineering"}},
+             true});
     int pageCalls{0};
     std::size_t lastOffset{0};
     std::size_t lastLimit{0};
@@ -46,6 +52,43 @@ struct FakeEmployeeRepository final : IEmployeeRepository {
             throw std::runtime_error("repository failure");
         }
         return result;
+    }
+
+    Result<std::optional<smart_attendance::storage::EmployeeDisplayDetails>,
+           RepositoryError>
+    findDisplayDetailsById(int) override {
+        if (displayShouldThrow) {
+            throw std::runtime_error("display repository failure");
+        }
+        return displayResult;
+    }
+
+    Result<void, RepositoryError> updateName(int, const std::string&) override {
+        return Result<void, RepositoryError>::success();
+    }
+
+    Result<void, RepositoryError> updateDepartment(int, int) override {
+        return Result<void, RepositoryError>::success();
+    }
+
+    Result<void, RepositoryError> updateRole(int, int) override {
+        return Result<void, RepositoryError>::success();
+    }
+
+    Result<smart_attendance::storage::PasswordVerification, RepositoryError>
+    verifyPassword(int, const std::string&) override {
+        return Result<smart_attendance::storage::PasswordVerification,
+                      RepositoryError>::success(
+            smart_attendance::storage::PasswordVerification::Match);
+    }
+
+    Result<bool, RepositoryError>
+    updatePassword(int, const std::string&) override {
+        return Result<bool, RepositoryError>::success(true);
+    }
+
+    Result<bool, RepositoryError> remove(int) override {
+        return Result<bool, RepositoryError>::success(true);
     }
 
     Result<smart_attendance::storage::EmployeePage, RepositoryError>
@@ -126,11 +169,89 @@ void testEmployeePageIsReturned() {
 
     require(result && result.value().employees.size() == 1,
             "valid employee page should be returned");
-    require(result.value().employees.front().id == 9 && result.value().hasMore,
+    require(result.value().employees.front().employee.id == 9 &&
+                result.value().employees.front().departmentName == "Engineering" &&
+                result.value().hasMore,
             "employee page contents and continuation state should be preserved");
     require(repository.pageCalls == 1 && repository.lastOffset == 12 &&
                 repository.lastLimit == 8,
             "service should forward the bounded page request exactly once");
+}
+
+void testDisplayDetailsAreMapped() {
+    FakeEmployeeRepository repository;
+    repository.displayResult = Result<std::optional<
+        smart_attendance::storage::EmployeeDisplayDetails>, RepositoryError>::success(
+        smart_attendance::storage::EmployeeDisplayDetails{
+            Employee{11, "Display", 5, EmployeeRole::Regular},
+            "Support", true, true, "CARD-11", false});
+    EmployeeService service(repository);
+
+    const auto result = service.findDisplayDetailsById(11);
+    require(result && result.value() && result.value()->employee.id == 11 &&
+                result.value()->departmentName == "Support" &&
+                result.value()->faceRegistered &&
+                result.value()->fingerprintRegistered &&
+                result.value()->cardId == "CARD-11" &&
+                !result.value()->passwordRegistered,
+            "service should map non-sensitive display detail fields");
+
+    repository.displayShouldThrow = true;
+    const auto failure = service.findDisplayDetailsById(11);
+    require(!failure && failure.error() == EmployeeError::ReadFailed,
+            "display repository exceptions must be mapped");
+}
+
+void testBasicUpdatesValidateBeforeStorage() {
+    FakeEmployeeRepository repository;
+    EmployeeService service(repository);
+
+    const auto invalidName = service.updateName(1, "");
+    const auto invalidDepartment = service.updateDepartment(1, 0);
+    const auto invalidEmployee = service.updateName(0, "Name");
+    const auto invalidRole = service.updateRole(1, 2);
+
+    require(!invalidName && invalidName.error() == EmployeeError::InvalidName,
+            "empty employee names should be rejected by the service");
+    require(!invalidDepartment &&
+                invalidDepartment.error() == EmployeeError::InvalidDepartmentId,
+            "invalid departments should be rejected by the service");
+    require(!invalidEmployee &&
+                invalidEmployee.error() == EmployeeError::InvalidEmployeeId,
+            "invalid employee ids should be rejected by the service");
+    require(!invalidRole && invalidRole.error() == EmployeeError::InvalidRole,
+            "invalid employee roles should be rejected by the service");
+}
+
+void testRemoveMapsNotFoundAndInvalidId() {
+    FakeEmployeeRepository repository;
+    EmployeeService service(repository);
+
+    require(service.remove(7).hasValue(),
+            "successful employee removal should return success");
+    const auto invalid = service.remove(0);
+    require(!invalid && invalid.error() == EmployeeError::InvalidEmployeeId,
+            "invalid employee removal id should be rejected");
+}
+
+void testPasswordValidationAndMapping() {
+    FakeEmployeeRepository repository;
+    EmployeeService service(repository);
+
+    const auto verified = service.verifyPassword(7, "123456");
+    require(verified &&
+                verified.value() ==
+                    smart_attendance::services::PasswordVerification::Match,
+            "password verification result should be mapped by the service");
+    require(service.updatePassword(7, "123456").hasValue(),
+            "valid password updates should succeed");
+
+    const auto empty = service.verifyPassword(7, "");
+    const auto tooLong = service.updatePassword(7, "1234567");
+    require(!empty && empty.error() == EmployeeError::InvalidPassword,
+            "empty passwords should be rejected");
+    require(!tooLong && tooLong.error() == EmployeeError::InvalidPassword,
+            "passwords longer than six characters should be rejected");
 }
 
 void testInvalidPageStopsBeforeRepository() {
@@ -181,6 +302,10 @@ int main() {
     testInvalidIdStopsBeforeRepository();
     testStorageFailuresAreMapped();
     testEmployeePageIsReturned();
+    testDisplayDetailsAreMapped();
+    testBasicUpdatesValidateBeforeStorage();
+    testRemoveMapsNotFoundAndInvalidId();
+    testPasswordValidationAndMapping();
     testInvalidPageStopsBeforeRepository();
     testPageFailuresAreMapped();
     std::cout << "employee_service_test: PASS\n";

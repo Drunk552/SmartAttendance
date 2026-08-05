@@ -101,6 +101,38 @@ int main() {
         auto& secondConfigRepository = services.configRepository();
         require(&firstConfigRepository == &secondConfigRepository,
                 "ApplicationServices must own one stable config Repository instance");
+        auto& firstConfigService = services.configService();
+        auto& secondConfigService = services.configService();
+        require(&firstConfigService == &secondConfigService,
+                "ApplicationServices must own one stable ConfigService instance");
+        const auto configUnavailable = firstConfigService.loadCompanyName();
+        require(!configUnavailable &&
+                    configUnavailable.error() ==
+                        smart_attendance::services::ConfigError::ReadFailed,
+                "ConfigService must observe a closed database without opening it");
+        auto& firstDepartmentService = services.departmentService();
+        auto& secondDepartmentService = services.departmentService();
+        require(&firstDepartmentService == &secondDepartmentService,
+                "ApplicationServices must own one stable DepartmentService instance");
+        const auto departmentsUnavailable =
+            firstDepartmentService.listDepartments();
+        require(!departmentsUnavailable &&
+                    departmentsUnavailable.error() ==
+                        smart_attendance::services::DepartmentError::ReadFailed,
+                "DepartmentService must observe a closed database without opening it");
+        require(&services.shiftService() == &services.shiftService(),
+                "ApplicationServices must own one stable ShiftService instance");
+        require(!services.shiftService().listShifts(),
+                "ShiftService must observe a closed database without opening it");
+        require(&services.attendanceQueryService() ==
+                    &services.attendanceQueryService(),
+                "ApplicationServices must own one stable attendance query service");
+        require(!services.attendanceQueryService().query(-1, 0, 1),
+                "attendance queries must fail while the database is closed");
+        require(&services.maintenanceService() == &services.maintenanceService(),
+                "ApplicationServices must own one stable maintenance service");
+        require(!services.maintenanceService().clearAttendance(),
+                "maintenance writes must fail while the database is closed");
         auto& firstFaceEngine = services.faceRecognitionEngine();
         auto& secondFaceEngine = services.faceRecognitionEngine();
         require(&firstFaceEngine == &secondFaceEngine &&

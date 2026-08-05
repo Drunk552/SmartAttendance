@@ -16,6 +16,8 @@ bool isValidText(const std::string& value) noexcept {
     return !value.empty();
 }
 
+constexpr const char* kCompanyNameKey = "company_name";
+
 } // namespace
 
 Result<std::optional<std::string>, RepositoryError>
@@ -29,6 +31,13 @@ LegacyConfigRepository::findValue(const std::string& key) {
     }
 
     try {
+        if (key == kCompanyNameKey) {
+            std::string name;
+            if (!db_load_company_name(name)) {
+                return ResultType::failure(RepositoryError::ReadFailed);
+            }
+            return ResultType::success(std::move(name));
+        }
         DbTextLookupResult lookup = db_find_system_config(key);
         if (lookup.status == DbTextLookupStatus::ReadError) {
             return ResultType::failure(RepositoryError::ReadFailed);
@@ -48,7 +57,15 @@ LegacyConfigRepository::saveValue(const std::string& key, const std::string& val
     if (!isValidText(key)) {
         return ResultType::failure(RepositoryError::InvalidArgument);
     }
-    if (!data_is_open() || !db_set_system_config(key, value)) {
+    if (!data_is_open()) {
+        return ResultType::failure(RepositoryError::WriteFailed);
+    }
+    if (key == kCompanyNameKey) {
+        return db_save_company_name(value)
+            ? ResultType::success()
+            : ResultType::failure(RepositoryError::WriteFailed);
+    }
+    if (!db_set_system_config(key, value)) {
         return ResultType::failure(RepositoryError::WriteFailed);
     }
     return ResultType::success();

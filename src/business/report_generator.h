@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 #include <map>
-#include "data/db_storage.h"
+#include "services/report_data_source.h"
 #include <xlsxwriter.h>
 
 // 报表文件输出类型定义
@@ -84,7 +84,7 @@ struct DailyCellData {
     int no_shift_days = 0; // 未排班天数（规则 Q3：无排班 -> 未排班，独立于旷工统计）
     };
 
-    ReportGenerator();
+    explicit ReportGenerator(smart_attendance::services::IReportDataSource& dataSource) noexcept;
     ~ReportGenerator();
 
     // 1. 导出全员考勤报表（包含5个Sheet）
@@ -97,6 +97,7 @@ struct DailyCellData {
     bool exportSettingsReport(const std::string& output_path);
                                          
 private:
+    smart_attendance::services::IReportDataSource& dataSource_;
 
     // 辅助函数：时间处理
     long long parseDateToTimestamp(const std::string& date_str, bool is_end_of_day);
@@ -109,7 +110,7 @@ private:
     int extractYearFromTimestamp(long long timestamp);
 
     // 新增辅助函数
-    std::map<int, ShiftInfo> db_get_user_monthly_shifts(int user_id, int year, int month);
+    std::map<int, ShiftInfo> loadUserMonthlyShifts(int user_id, int year, int month);
     std::string formatDateString(int year, int month, int day);
 
     // 计算迟到/早退分钟数
@@ -117,9 +118,9 @@ private:
     int calculateEarlyMinutes(long long timestamp, const ShiftInfo& shift);
 
     // 数据库访问函数
-    std::vector<AttendanceRecord> db_get_records(long long start_ts, long long end_ts);
-    std::vector<UserData> db_get_all_users_info();
-    std::vector<UserData> db_get_users_by_dept(const std::string& dept_name);
+    std::vector<AttendanceRecord> loadRecords(long long start_ts, long long end_ts);
+    std::vector<UserData> loadUsers();
+    std::vector<UserData> loadUsersByDepartment(const std::string& dept_name);
 
     // 样式创建函数
     lxw_format* createHeaderFormat(lxw_workbook* workbook);

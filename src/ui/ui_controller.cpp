@@ -6,14 +6,16 @@
  */
 #include "ui_controller.h"
 // 引入原来 ui_app.cpp 依赖的底层头文件
-#include "../data/db_storage.h"
 #include "../business/face_demo.h"
-#include "../business/report_generator.h"
 #include "../business/attendance_rule.h"
 #include "../app/ui_system_status_mailbox.h"
 #include "hal/rtc.h"
 #include "hal/storage_device.h"
+#include "storage/repository/employee_settings_import_repository.h"
 #include "presenters/employee_lookup_presenter.h"
+#include "presenters/settings_presenter.h"
+#include "presenters/department_presenter.h"
+#include "presenters/system_info_presenter.h"
 #include "managers/ui_manager.h"
 #include <algorithm>
 #include <set>
@@ -27,13 +29,12 @@
 #include <iostream> 
 #include <chrono>
 #include <condition_variable>
+#include <utility>
 
 namespace fs = std::filesystem;// C++17 引入的文件系统库
 
-static UiController* s_instance = nullptr;
 
 namespace {
-
 std::mutex g_monitorWaitMutex;
 std::condition_variable g_monitorWaitCondition;
 smart_attendance::hal::IRtc* g_rtc = nullptr;
@@ -84,6 +85,15 @@ std::string currentTimeString() {
     return std::string(buf);
 }
 
+std::string currentWeekdayString() {
+    const std::time_t now = currentUnixTime();
+    std::tm timeinfo{};
+    localtime_r(&now, &timeinfo);
+    char buffer[16];
+    std::strftime(buffer, sizeof(buffer), "%a", &timeinfo);
+    return buffer;
+}
+
 } // namespace
 
 void uiConfigureDeviceServices(
@@ -96,13 +106,6 @@ void uiConfigureDeviceServices(
 void uiResetDeviceServices() noexcept {
     g_rtc = nullptr;
     g_storage = nullptr;
-}
-
-UiController* UiController::getInstance() {
-    if (!s_instance) {
-        s_instance = new UiController();
-    }
-    return s_instance;
 }
 
 // 移入原 check_disk_low 逻辑
@@ -121,16 +124,7 @@ std::string UiController::getCurrentTimeStr() {
 
 // 获取当前星期几字符串实现
 std::string UiController::getCurrentWeekdayStr() {
-    time_t now = currentUnixTime();
-    struct tm tstruct;
-    char buf[16];
-    localtime_r(&now, &tstruct);
-    
-    // %a 表示星期的缩写 (如: Mon, Tue, Wed...)
-    // 如果你想要全称用 %A (如: Monday)，但考虑到顶部空间有限(60px)，建议用缩写
-    strftime(buf, sizeof(buf), "%a", &tstruct);
-    
-    return std::string(buf);
+    return currentWeekdayString();
 }
 
 // ==================== 公司设置功能实现  ====================
@@ -141,18 +135,10 @@ std::string UiController::getCurrentWeekdayStr() {
  * @return true 保存成功；false 保存失败
  */
 bool UiController::saveCompanyName(const std::string& name) {
-    std::lock_guard<std::mutex> lock(m_company_mutex);  // 线程安全
-    
-    bool success = db_save_company_name(name);
-    
-    if (success) {
-        // 更新缓存
-        m_company_name = name;
-        std::cout << "[UiController] 公司名称保存成功：" << name << std::endl;
-        return true;
+    if (settingsPresenter_ != nullptr) {
+        return settingsPresenter_->saveCompanyName(name);
     }
-    
-    std::cerr << "[UiController] 公司名称保存失败！" << std::endl;
+
     return false;
 }
 
@@ -162,31 +148,17 @@ bool UiController::saveCompanyName(const std::string& name) {
  * @return true 加载成功；false 加载失败
  */
 bool UiController::loadCompanyName(std::string& name) {
-    std::lock_guard<std::mutex> lock(m_company_mutex);  // 线程安全
-    
-    // 1. 先尝试从缓存读取 (减少数据库查询)
-    if (!m_company_name.empty()) {
-        name = m_company_name;
-        std::cout << "[UiController] 从缓存加载公司名称：" << name << std::endl;
-        return true;
+    if (settingsPresenter_ != nullptr) {
+        return settingsPresenter_->loadCompanyName(name);
     }
-    
-    // 2. 调用 DAO 接口从数据库读取
-    bool success = db_load_company_name(name);
-    
-    if (success) {
-        // 更新缓存
-        m_company_name = name;
-        std::cout << "[UiController] 从数据库加载公司名称成功：" << name << std::endl;
-    }
-    
-    return success;
+
+    return false;
 }
 
 // 移入原 get_next_available_id 逻辑
 int UiController::generateNextUserId() {
-    std::vector<UserData> users = db_get_all_users();
-    
+    if (employeeLookupPresenter_ == nullptr) return 0;
+    const auto users = employeeLookupPresenter_->listAll();
     int max_id = 0;
     
     // 遍历所有用户，找出目前最大的 ID
@@ -205,7 +177,23 @@ int UiController::generateNextUserId() {
 }
 
 std::vector<DeptInfo> UiController::getDepartmentList() {
-    return db_get_departments();
+    if (departmentPresenter_ != nullptr) {
+        std::vector<smart_attendance::ui::DepartmentItem> items;
+        if (!departmentPresenter_->listDepartments(items)) {
+            return {};
+        }
+        std::vector<DeptInfo> departments;
+        departments.reserve(items.size());
+        for (const auto& item : items) {
+            DeptInfo department;
+            department.id = item.id;
+            department.name = item.name;
+            department.company_id = item.companyId;
+            departments.push_back(std::move(department));
+        }
+        return departments;
+    }
+    return {};
 }
 
 // 通过部门 ID 获取部门名称的实现
@@ -225,86 +213,69 @@ std::string UiController::getDeptNameById(int deptId) {
 // ==================== 部门管理功能实现  ====================
 
 bool UiController::addDepartment(const std::string& deptName) {
-    if (deptName.empty()) {
-        std::cerr << "[UiController] 部门名称不能为空！" << std::endl;
-        return false;
+    if (departmentPresenter_ != nullptr) {
+        return departmentPresenter_->addDepartment(deptName);
     }
-    
-    bool success = db_add_department(deptName);
-    
-    if (success) {
-        std::cout << "[UiController] 部门添加成功：" << deptName << std::endl;
-    }
-    
-    return success;
+
+    return false;
 }
 
 bool UiController::updateDepartment(int deptId, const std::string& newName) {
-    if (newName.empty()) {
-        std::cerr << "[UiController] 部门名称不能为空！" << std::endl;
-        return false;
+    if (departmentPresenter_ != nullptr) {
+        return departmentPresenter_->renameDepartment(deptId, newName);
     }
-    
-    bool success = db_update_department(deptId, newName);
-    
-    if (success) {
-        std::cout << "[UiController] 部门更新成功：ID=" << deptId << ", Name=" << newName << std::endl;
-    }
-    
-    return success;
+
+    return false;
 }
 
 bool UiController::deleteDepartment(int deptId) {
-    // 1. 检查部门是否有员工
-    int empCount = getDepartmentEmployeeCount(deptId);
-    if (empCount > 0) {
-        std::cerr << "[UiController] 部门下有 " << empCount << " 名员工，无法删除！" << std::endl;
-        return false;
+    if (departmentPresenter_ != nullptr) {
+        return departmentPresenter_->removeDepartment(deptId);
     }
-    
-    bool success = db_delete_department(deptId);
-    
-    if (success) {
-        std::cout << "[UiController] 部门删除成功：ID=" << deptId << std::endl;
-    }
-    
-    return success;
+
+    return false;
 }
 
 int UiController::getDepartmentEmployeeCount(int deptId) {
-    std::vector<UserData> users = db_get_all_users();
-    int count = 0;
-    
-    for (const auto& user : users) {
-        if (user.dept_id == deptId) {
-            count++;
-        }
+    if (departmentPresenter_ != nullptr) {
+        int count = 0;
+        return departmentPresenter_->employeeCount(deptId, count) ? count : 0;
     }
-    
-    return count;
+
+    return 0;
 }
 
 // 获取指定部门的排班视图
 DeptScheduleView UiController::getDeptSchedule(int deptId) {
-    return db_get_dept_schedule_view(deptId);
+    if (departmentPresenter_ != nullptr) {
+        smart_attendance::ui::DepartmentScheduleState state;
+        if (!departmentPresenter_->loadSchedule(deptId, state)) {
+            DeptScheduleView empty;
+            empty.dept_id = deptId;
+            for (int& shift : empty.shifts) {
+                shift = 0;
+            }
+            return empty;
+        }
+
+        DeptScheduleView view;
+        view.dept_id = state.departmentId;
+        view.dept_name = state.departmentName;
+        for (std::size_t index = 0; index < state.shiftIds.size(); ++index) {
+            view.shifts[index] = state.shiftIds[index];
+        }
+        return view;
+    }
+    return {};
 }
 
 // 更新指定部门的名称和排班信息
 bool UiController::updateDeptSchedule(int deptId, const std::string& newName, const std::vector<int>& shifts) {
-    // 1. 更新部门名称
-    db_update_department(deptId, newName);
-    
-    // 2. 更新排班表
-    std::vector<DeptScheduleEntry> entries;
-    for(int i = 0; i < 7; i++) {
-        DeptScheduleEntry entry;
-        entry.dept_id = deptId;
-        entry.day_of_week = i; // 0=日, 1=一 ... 6=六
-        entry.shift_id = shifts[i];
-        entries.push_back(entry);
+    if (departmentPresenter_ != nullptr) {
+        return departmentPresenter_->updateSchedule(deptId, newName, shifts);
     }
-    db_import_dept_schedules(entries);
-    return true;
+
+    return false;
 }
 
 bool UiController::registerNewUser(const std::string& name, int deptId) {
@@ -317,6 +288,36 @@ void UiController::configureEmployeeLookupPresenter(
     employeeLookupPresenter_ = presenter;
 }
 
+void UiController::configureSettingsPresenter(
+    smart_attendance::ui::SettingsPresenter* presenter) noexcept {
+    settingsPresenter_ = presenter;
+}
+
+void UiController::configureDepartmentPresenter(
+    smart_attendance::ui::DepartmentPresenter* presenter) noexcept {
+    departmentPresenter_ = presenter;
+}
+
+void UiController::configureShiftPresenter(
+    smart_attendance::ui::ShiftPresenter* presenter) noexcept {
+    shiftPresenter_ = presenter;
+}
+
+void UiController::configureAttendanceQueryPresenter(
+    smart_attendance::ui::AttendanceQueryPresenter* presenter) noexcept {
+    attendanceQueryPresenter_ = presenter;
+}
+
+void UiController::configureMaintenancePresenter(
+    smart_attendance::ui::MaintenancePresenter* presenter) noexcept {
+    maintenancePresenter_ = presenter;
+}
+
+void UiController::configureSystemInfoPresenter(
+    smart_attendance::ui::SystemInfoPresenter* presenter) noexcept {
+    systemInfoPresenter_ = presenter;
+}
+
 int UiController::getUserRoleById(int userId) {
     if (employeeLookupPresenter_ == nullptr) {
         return -1;
@@ -326,33 +327,78 @@ int UiController::getUserRoleById(int userId) {
 
 // 验证用户密码是否正确（哈希验证）
 bool UiController::verifyUserPassword(int userId, const std::string& inputPassword) {
-    // 1. 获取用户信息
-    UserData user = getUserInfo(userId);
-    
-    // 2. 如果用户不存在或没设密码，直接返回 false
-    if (user.password.empty()) {
-        return false; 
+    if (employeeLookupPresenter_ != nullptr) {
+        return employeeLookupPresenter_->verifyPassword(userId, inputPassword);
     }
 
-    // 3. 调用数据层暴露的哈希函数，将输入的明文转为哈希值
-    std::string hashed_input = db_hash_password(inputPassword);
-
-    // 4. 比对结果
-    return (user.password == hashed_input);
+    return false;
 }
 
 std::vector<UserData> UiController::getAllUsers() {
-    return db_get_all_users();
+    if (employeeLookupPresenter_ == nullptr) return {};
+
+    const auto items = employeeLookupPresenter_->listAll();
+    std::vector<UserData> users;
+    users.reserve(items.size());
+    for (const auto& item : items) {
+        UserData user;
+        user.id = item.id;
+        user.name = item.name;
+        user.dept_id = item.departmentId;
+        user.dept_name = item.departmentName;
+        user.role = item.role;
+        users.push_back(std::move(user));
+    }
+    return users;
+}
+
+UserDisplayInfo UiController::getUserDisplayInfo(int userId) {
+    if (employeeLookupPresenter_ == nullptr) return UserDisplayInfo{};
+
+    const auto item = employeeLookupPresenter_->findDisplayDetailsById(userId);
+    if (!item) {
+        return UserDisplayInfo{};
+    }
+
+    UserDisplayInfo display;
+    display.id = item->id;
+    display.name = item->name;
+    display.departmentId = item->departmentId;
+    display.departmentName = item->departmentName;
+    display.faceRegistered = item->faceRegistered;
+    display.fingerprintRegistered = item->fingerprintRegistered;
+    display.cardId = item->cardId;
+    display.passwordRegistered = item->passwordRegistered;
+    display.role = item->role;
+    return display;
 }
 
 //获取班次列表实现
 std::vector<ShiftInfo> UiController::getAllShifts() {
-    return db_get_shifts();
+    if (shiftPresenter_ != nullptr) {
+        const auto items = shiftPresenter_->listAll();
+        std::vector<ShiftInfo> shifts;
+        shifts.reserve(items.size());
+        for (const auto& item : items) {
+            shifts.push_back({item.id, item.name, item.firstStart, item.firstEnd,
+                              item.secondStart, item.secondEnd, item.thirdStart,
+                              item.thirdEnd, item.crossDay});
+        }
+        return shifts;
+    }
+    return {};
 }
 
 //获取指定班次的详细信息实现
 std::optional<ShiftInfo> UiController::getShiftInfo(int shiftId) {
-    return db_get_shift_info(shiftId);
+    if (shiftPresenter_ != nullptr) {
+        smart_attendance::ui::ShiftItem item;
+        if (!shiftPresenter_->findById(shiftId, item)) return std::nullopt;
+        return ShiftInfo{item.id, item.name, item.firstStart, item.firstEnd,
+                         item.secondStart, item.secondEnd, item.thirdStart,
+                         item.thirdEnd, item.crossDay};
+    }
+    return std::nullopt;
 }
 
 //更新班次信息实现
@@ -360,8 +406,19 @@ bool UiController::updateShiftInfo(int shift_id,
                                    const std::string& s1_start, const std::string& s1_end,
                                    const std::string& s2_start, const std::string& s2_end,
                                    const std::string& s3_start, const std::string& s3_end) {
-    // 调用底层更新，默认 cross_day 设为 0 (当天)
-    return db_update_shift(shift_id, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, 0);
+    if (shiftPresenter_ != nullptr) {
+        smart_attendance::ui::ShiftItem current;
+        if (!shiftPresenter_->findById(shift_id, current)) return false;
+        current.firstStart = s1_start;
+        current.firstEnd = s1_end;
+        current.secondStart = s2_start;
+        current.secondEnd = s2_end;
+        current.thirdStart = s3_start;
+        current.thirdEnd = s3_end;
+        current.crossDay = 0;
+        return shiftPresenter_->update(current);
+    }
+    return false;
 }
 
 int UiController::getUserCount() {
@@ -373,14 +430,6 @@ bool UiController::getUserAt(int index, int* id, char* name_buf, int buf_len) {
 }
 
 UserData UiController::getUserInfo(int uid) {
-    auto user_opt = db_get_user_info(uid);
-    
-    // 如果查到了，拆盒把真实数据返回给 UI 层
-    if (user_opt.has_value()) {
-        return user_opt.value();
-    } 
-    
-    // 如果没查到（空盒子），为了兼容原有 UI 逻辑，构造一个 id=0 的空对象
     UserData empty_user;
     empty_user.id = 0;
     //设一个默认名字防止界面显示乱码
@@ -396,38 +445,30 @@ bool UiController::checkUserExists(int user_id) {
 }
 
 std::vector<AttendanceRecord> UiController::getRecords(int userId, time_t start, time_t end) {
-    // 可以在这里对数据进行过滤，UI层拿到的就是处理好的
-    auto all_records = db_get_records(start, end);
-    if (userId < 0) return all_records; // 约定 < 0 返回所有
-
-    std::vector<AttendanceRecord> filtered;
-    for (const auto& rec : all_records) {
-        if (rec.user_id == userId) filtered.push_back(rec);
+    if (attendanceQueryPresenter_ != nullptr) {
+        const auto items = attendanceQueryPresenter_->query(userId, start, end);
+        std::vector<AttendanceRecord> records;
+        records.reserve(items.size());
+        for (const auto& item : items) {
+            AttendanceRecord record{};
+            record.id = item.id;
+            record.user_id = item.employeeId;
+            record.user_name = item.employeeName;
+            record.dept_name = item.departmentName;
+            record.timestamp = item.timestamp;
+            record.status = item.status;
+            record.image_path = item.imagePath;
+            records.push_back(std::move(record));
+        }
+        return records;
     }
-    return filtered;
+    return {};
 }
 
-bool UiController::exportReportToUsb() {
-    // 将原 ui_download_report_handler 中的逻辑移到这里
-    // 包括创建目录、计算日期、调用 Generator
-    // 这里只保留纯业务，不包含 lv_msgbox 等 UI 弹窗代码
-    // 可以返回一个状态码或 bool 给 UI 层去决定弹窗内容
-    const auto directory = storageDirectory("usb_sim");
-    std::error_code directoryError;
-    std::filesystem::create_directories(directory, directoryError);
-    if (directoryError) return false;
-
-    std::time_t t = currentUnixTime();
-    std::tm* now = std::localtime(&t);
-    char start_date[16], end_date[16];
-    std::strftime(start_date, sizeof(start_date), "%Y-%m-01", now);
-    std::strftime(end_date, sizeof(end_date), "%Y-%m-%d", now);
-
-    ReportGenerator generator;
-    return generator.exportAllAttendanceReport(
-        start_date,
-        end_date,
-        (directory / "attendance_report.xlsx").string());
+smart_attendance::ui::AttendanceRecordPage UiController::getRecordPage(
+    int userId, time_t start, time_t end, std::size_t pageIndex) {
+    if (attendanceQueryPresenter_ == nullptr) return {};
+    return attendanceQueryPresenter_->queryPage(userId, start, end, pageIndex);
 }
 
 bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
@@ -453,26 +494,20 @@ bool UiController::getDisplayFrame(uint8_t* buffer, int width, int height) {
 
 // 更新用户名称实现
 bool UiController::updateUserName(int userId, const std::string& newName) {
-    // 1. 先获取当前用户的 optional "盒子"
-    auto user_opt = db_get_user_info(userId);
-    
-    // 2. 检查用户是否存在 (盒子为空直接返回失败)
-    if (!user_opt.has_value()) return false; 
+    if (employeeLookupPresenter_ != nullptr) {
+        return employeeLookupPresenter_->updateName(userId, newName);
+    }
 
-    // 3. 拆盒取出真实数据
-    UserData user = user_opt.value();
-
-    // 4. 调用底层更新接口：保留原有的 dept_id, role, card_id 不变，只修改 name
-    return db_update_user_basic(userId, newName, user.dept_id, user.role, user.card_id);
+    return false;
 }
 
 //更新用户部门信息
 bool UiController::updateUserDept(int userId, int newDeptId) {
-    // 1. 先获取该用户当前所有的基本信息
-    UserData currentUser = getUserInfo(userId);
-    
-    // 2. 调用 db_update_user_basic，只把 dept_id 替换成新的，其他用旧的
-    return db_update_user_basic(userId, currentUser.name, newDeptId, currentUser.role, currentUser.card_id);
+    if (employeeLookupPresenter_ != nullptr) {
+        return employeeLookupPresenter_->updateDepartment(userId, newDeptId);
+    }
+
+    return false;
 }
 
 //更新用户人脸
@@ -484,62 +519,29 @@ bool UiController::updateUserFace(int userId) {
 
 // 更新用户密码实现
 bool UiController::updateUserPassword(int userId, const std::string& newPassword) {
-    // 底层有单独修改密码的接口，直接调用即可
-    return db_update_user_password(userId, newPassword);
+    if (employeeLookupPresenter_ != nullptr) {
+        return employeeLookupPresenter_->updatePassword(userId, newPassword);
+    }
+
+    return false;
 }
 
 // 更新用户权限实现
 bool UiController::updateUserRole(int userId, int newRole) {
-    // 1. 获取当前用户的 optional "盒子"
-    auto user_opt = db_get_user_info(userId);
-    
-    // 2. 检查用户是否存在
-    if (!user_opt.has_value()) return false;
+    if (employeeLookupPresenter_ != nullptr) {
+        return employeeLookupPresenter_->updateRole(userId, newRole);
+    }
 
-    // 3. 拆盒取出真实数据
-    UserData user = user_opt.value();
-
-    // 4. 调用底层更新接口：保留原有的 name, dept_id, card_id 不变，只修改 role
-    return db_update_user_basic(userId, user.name, user.dept_id, newRole, user.card_id);
+    return false;
 }
 
 // 删除用户实现
 bool UiController::deleteUser(int userId) {
-    // 调用底层数据库接口
-    // 注意：db_delete_user 会级联删除该用户的考勤记录和图片，非常干净
-    return db_delete_user(userId);
-}
-
-// 导出自定义全体员工报表实现
-bool UiController::exportCustomReport(const std::string& start, const std::string& end) {
-    const auto directory = storageDirectory("usb_sim");
-    if (directory.empty()) return false;
-    std::string dir = directory.string();
-    
-    // 强制创建目录，如果目录不存在
-    if (!fs::exists(dir)) {
-        fs::create_directories(dir); 
+    if (employeeLookupPresenter_ != nullptr) {
+        return employeeLookupPresenter_->remove(userId);
     }
 
-    std::string path = dir + "/Attendance_Report_All_" + start + "_to_" + end + ".xlsx";
-    ReportGenerator report_gen; 
-    return report_gen.exportAllAttendanceReport(start, end, path);
-}
-
-// 导出个人报表实现
-bool UiController::exportUserReport(int user_id, const std::string& start, const std::string& end) {
-    const auto directory = storageDirectory("usb_sim");
-    if (directory.empty()) return false;
-    std::string dir = directory.string();
-
-    // 强制创建目录，如果目录不存在
-    if (!fs::exists(dir)) {
-        fs::create_directories(dir);
-    }
-
-    std::string path = dir + "/User_" + std::to_string(user_id) + "_Report.xlsx";
-    ReportGenerator report_gen;
-    return report_gen.exportIndividualAttendanceReport(user_id, start, end, path);
+    return false;
 }
 
 // 更新摄像头 Buffer 实现
@@ -558,49 +560,41 @@ void UiController::updateCameraFrame(const uint8_t* data, int w, int h) {
 
 //查询系统信息
 SystemStats UiController::getSystemStatistics() {
-    // 直接调用数据层接口并返回
-    return db_get_system_stats();
+    SystemStats stats{};
+    return systemInfoPresenter_ != nullptr && systemInfoPresenter_->statistics(stats)
+        ? stats
+        : SystemStats{};
 }
 
-void UiController::clearAllRecords() {
-    db_clear_attendance();
+bool UiController::clearAllRecords() {
+    if (maintenancePresenter_ != nullptr) {
+        return maintenancePresenter_->clearAttendance();
+    }
+    return false;
 }
 
 // 恢复出厂设置实现
-void UiController::factoryReset() {
-    // 调用底层数据层的重置接口
-    db_factory_reset();
+bool UiController::factoryReset() {
+    if (maintenancePresenter_ != nullptr) {
+        return maintenancePresenter_->factoryReset();
+    }
+    return false;
 }
 
 // 清除所有员工实现 (防止下一个报错是它)
-void UiController::clearAllEmployees() {
-    db_clear_users();
+bool UiController::clearAllEmployees() {
+    if (maintenancePresenter_ != nullptr) {
+        return maintenancePresenter_->clearEmployees();
+    }
+    return false;
 }
 
 // 清除所有数据实现
-void UiController::clearAllData() {
-    // 假设底层有这个函数，或者手动调用清除员工+清除记录
-    db_clear_users();
-    db_clear_attendance();
-    // 可能还需要删除特征文件等，视具体业务而定
-}
-
-// 实现导出员工设置表功能Set the table
-bool UiController::exportEmployeeSettings() {
-    const auto directory = storageDirectory("usb_settings");
-    if (directory.empty()) return false;
-    std::string dir = directory.string();
-
-    // 强制创建目录，如果目录不存在
-    if (!fs::exists(dir)) {
-        fs::create_directories(dir);
+bool UiController::clearAllData() {
+    if (maintenancePresenter_ != nullptr) {
+        return maintenancePresenter_->clearAllData();
     }
-
-    ReportGenerator generator;
-    
-    std::string export_path = dir + "/员工设置表.xlsx"; 
-    
-    return generator.exportSettingsReport(export_path);
+    return false;
 }
 
 void uiRunMonitorTask(
@@ -611,7 +605,7 @@ void uiRunMonitorTask(
         // 单槽邮箱只保留最新状态；后台线程不接触 LVGL。
         statusMailbox.publishTime(
             currentTimeString(),
-            UiController::getInstance()->getCurrentWeekdayStr());
+            currentWeekdayString());
 
         // 磁盘状态同样按当前值合并，避免积压过期告警。
         if (++diskCheckCounter >= 5) {
@@ -638,7 +632,9 @@ void uiWakeMonitorTask() {
 //       → 读取 sheet1.xml 第6行起解析员工数据(工号/姓名/部门/权限)
 //       → 调用 db_batch_add_users 写入数据库
 // ============================================================
-bool UiController::importEmployeeSettings(int* invalid_time_count) {
+bool uiImportEmployeeSettings(
+    smart_attendance::storage::IEmployeeSettingsImportRepository& repository,
+    int* invalid_time_count) {
     const auto settingsDirectory =
         storageDirectory("usb_settings");
     if (settingsDirectory.empty()) return false;
@@ -914,7 +910,8 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
                    s3_end.empty()   ? "--" : s3_end.c_str());
 
             // 写入数据库（只更新有效时间字段，cross_day 保持原值0）
-            db_update_shift(shift_id, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end, 0);
+            (void)repository.updateShift(
+                shift_id, s1_start, s1_end, s2_start, s2_end, s3_start, s3_end);
         }
     } else {
         printf("[Import] sheet2.xml 不存在或为空，跳过班次时间导入\n");
@@ -934,12 +931,7 @@ bool UiController::importEmployeeSettings(int* invalid_time_count) {
     }
 
     // 8. 员工数据写入数据库（INSERT OR REPLACE）
-    bool ok = db_batch_add_users(import_users);
-
-    //如果员工基本信息写入成功，则继续写入他们的排班表
-    if (ok) {
-        db_batch_update_user_schedules(import_year, import_month, import_users);
-    }
+    bool ok = repository.importUsers(import_year, import_month, import_users);
 
     printf("[Import] 导入结果: %s,共 %zu 名员工，时间格式异常字段: %d\n",
            ok ? "成功" : "失败", import_users.size(), bad_time_count);

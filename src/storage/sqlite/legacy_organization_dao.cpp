@@ -229,8 +229,9 @@ std::optional<ShiftInfo> db_get_shift_info(int shift_id) {
     // 加上你的共享读锁，确保并发安全
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);
 
-    // 查询 shifts 表中该 ID 对应的四个时间段
-    const char* sql = "SELECT id, name, s1_start, s1_end, s2_start, s2_end FROM shifts WHERE id = ?;";
+    const char* sql =
+        "SELECT id, name, s1_start, s1_end, s2_start, s2_end, "
+        "s3_start, s3_end, cross_day FROM shifts WHERE id = ?;";
 
     // 使用你封装的语句管理对象
     ScopedSqliteStmt stmt;
@@ -262,6 +263,13 @@ std::optional<ShiftInfo> db_get_shift_info(int shift_id) {
 
         const char* s2_end = (const char*)sqlite3_column_text(stmt.get(), 5);
         shift.s2_end = s2_end ? s2_end : "";
+
+        const char* s3_start = (const char*)sqlite3_column_text(stmt.get(), 6);
+        shift.s3_start = s3_start ? s3_start : "";
+
+        const char* s3_end = (const char*)sqlite3_column_text(stmt.get(), 7);
+        shift.s3_end = s3_end ? s3_end : "";
+        shift.cross_day = sqlite3_column_int(stmt.get(), 8);
 
         return shift; // 找到数据，自动打包进 optional
     }

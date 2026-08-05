@@ -12,17 +12,18 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <functional>
 #include <string>
 
 namespace smart_attendance::app {
 
-using UserReportExporter = bool (*)(int userId,
-                                    const std::string& startDate,
-                                    const std::string& endDate);
-using CustomReportExporter = bool (*)(const std::string& startDate,
-                                      const std::string& endDate);
-using EmployeeSettingsExporter = bool (*)();
-using EmployeeSettingsImporter = bool (*)(int& invalidTimeCount);
+using UserReportExporter = std::function<bool(int userId,
+                                              const std::string& startDate,
+                                              const std::string& endDate)>;
+using CustomReportExporter = std::function<bool(const std::string& startDate,
+                                                const std::string& endDate)>;
+using EmployeeSettingsExporter = std::function<bool()>;
+using EmployeeSettingsImporter = std::function<bool(int& invalidTimeCount)>;
 
 enum class UiBackgroundJobSubmitError {
     None,

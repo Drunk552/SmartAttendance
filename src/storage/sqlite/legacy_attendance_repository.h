@@ -7,6 +7,7 @@
 #define SMART_ATTENDANCE_STORAGE_SQLITE_LEGACY_ATTENDANCE_REPOSITORY_H
 
 #include "storage/repository/attendance_repository.h"
+#include "storage/repository/attendance_query_repository.h"
 
 namespace smart_attendance::storage::sqlite {
 
@@ -20,6 +21,13 @@ public:
     Result<bool, RepositoryError> hasRecordInRange(
         int userId, std::int64_t startTimestamp, std::int64_t endTimestamp) override;
     Result<void, RepositoryError> save(const AttendanceEntry& entry) override;
+};
+
+class LegacyAttendanceQueryRepository final : public IAttendanceQueryRepository {
+public:
+    Result<AttendanceQueryPage, RepositoryError> query(
+        int employeeId, std::int64_t startTimestamp, std::int64_t endTimestamp,
+        std::size_t limit, std::size_t offset) override;
 };
 
 } // namespace smart_attendance::storage::sqlite

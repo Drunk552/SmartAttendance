@@ -159,8 +159,16 @@ target_link_libraries(smartattendance_storage PUBLIC
 add_library(smartattendance_repositories STATIC
     src/storage/sqlite/legacy_employee_repository.cpp
     src/storage/sqlite/legacy_config_repository.cpp
+    src/storage/sqlite/legacy_department_repository.cpp
+    src/storage/sqlite/legacy_shift_repository.cpp
+    src/storage/sqlite/legacy_maintenance_repository.cpp
     src/storage/sqlite/legacy_schedule_repository.cpp
     src/storage/sqlite/legacy_attendance_repository.cpp
+    src/storage/sqlite/legacy_report_data_source.cpp
+    src/storage/sqlite/legacy_authentication_repository.cpp
+    src/storage/sqlite/legacy_face_data_repository.cpp
+    src/storage/sqlite/legacy_employee_settings_import_repository.cpp
+    src/storage/sqlite/legacy_system_info_repository.cpp
 )
 target_include_directories(smartattendance_repositories PUBLIC
     ${CMAKE_SOURCE_DIR}/src
@@ -187,9 +195,20 @@ file(GLOB_RECURSE SRC_FILES
 
     # 核心打卡规则与阶段三过渡服务
     "src/core/attendance/punch_rule.cpp"
+    "src/services/config_service.cpp"
+    "src/services/department_service.cpp"
     "src/services/employee_service.cpp"
     "src/services/punch_service.cpp"
+    "src/services/shift_service.cpp"
+    "src/services/attendance_query_service.cpp"
+    "src/services/maintenance_service.cpp"
+    "src/services/report_service.cpp"
     "src/ui/presenters/employee_lookup_presenter.cpp"
+    "src/ui/presenters/settings_presenter.cpp"
+    "src/ui/presenters/department_presenter.cpp"
+    "src/ui/presenters/shift_presenter.cpp"
+    "src/ui/presenters/attendance_query_presenter.cpp"
+    "src/ui/presenters/maintenance_presenter.cpp"
     
     # UI 层 - 显式列出需要的文件
     "src/ui/common/ui_style.cpp"
@@ -228,23 +247,18 @@ add_executable(attendance_app ${SRC_FILES})
 target_include_directories(attendance_app PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/libs/lvgl
     ${CMAKE_SOURCE_DIR}/src/business
     ${CMAKE_SOURCE_DIR}/src/data
     ${CMAKE_SOURCE_DIR}/src/ui
     ${CMAKE_SOURCE_DIR}/src/ui/common
     ${CMAKE_SOURCE_DIR}/src/ui/managers
     ${CMAKE_SOURCE_DIR}/src/ui/screens
-    # 添加 lv_freetype.h 所在的目录
-    ${CMAKE_SOURCE_DIR}/libs/lvgl/src/libs/freetype
-
      #添加db_storage.h
     ${PROJECT_SOURCE_DIR}/src/data 
     ${PROJECT_SOURCE_DIR}/src/business
 
     ${SDL2_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
-    "/usr/include/opencv4"   # [强制] Linux/WSL OpenCV4 标准路径
     ${XLSXWRITER_INCLUDE_DIRS}
 )
 
@@ -279,9 +293,19 @@ if(BUILD_TESTING)
         src/app/ui_background_job_queue.cpp
         src/app/ui_system_status_mailbox.cpp
         src/core/attendance/punch_rule.cpp
+        src/services/config_service.cpp
+        src/services/department_service.cpp
         src/services/employee_service.cpp
         src/services/punch_service.cpp
+        src/services/shift_service.cpp
+        src/services/attendance_query_service.cpp
+        src/services/maintenance_service.cpp
         src/ui/presenters/employee_lookup_presenter.cpp
+        src/ui/presenters/settings_presenter.cpp
+        src/ui/presenters/department_presenter.cpp
+        src/ui/presenters/shift_presenter.cpp
+        src/ui/presenters/attendance_query_presenter.cpp
+        src/ui/presenters/maintenance_presenter.cpp
         tests/unit/application_lifecycle_test.cpp
     )
     target_include_directories(application_lifecycle_test PRIVATE
@@ -302,9 +326,14 @@ if(BUILD_TESTING)
 
     add_executable(application_services_test
         src/app/application_services.cpp
+        src/services/config_service.cpp
+        src/services/department_service.cpp
         src/core/attendance/punch_rule.cpp
         src/services/employee_service.cpp
         src/services/punch_service.cpp
+        src/services/shift_service.cpp
+        src/services/attendance_query_service.cpp
+        src/services/maintenance_service.cpp
         tests/unit/application_services_test.cpp
     )
     target_include_directories(application_services_test PRIVATE
@@ -322,6 +351,131 @@ if(BUILD_TESTING)
         NAME application_services
         COMMAND application_services_test
     )
+
+    add_executable(config_service_test
+        src/services/config_service.cpp
+        tests/unit/config_service_test.cpp
+    )
+    target_include_directories(config_service_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(config_service_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME config_service
+        COMMAND config_service_test
+    )
+
+    add_executable(settings_presenter_test
+        src/services/config_service.cpp
+        src/ui/presenters/settings_presenter.cpp
+        tests/unit/settings_presenter_test.cpp
+    )
+    target_include_directories(settings_presenter_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(settings_presenter_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME settings_presenter
+        COMMAND settings_presenter_test
+    )
+
+    add_executable(department_service_test
+        src/services/department_service.cpp
+        tests/unit/department_service_test.cpp
+    )
+    target_include_directories(department_service_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(department_service_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME department_service
+        COMMAND department_service_test
+    )
+
+    add_executable(department_presenter_test
+        src/services/department_service.cpp
+        src/ui/presenters/department_presenter.cpp
+        tests/unit/department_presenter_test.cpp
+    )
+    target_include_directories(department_presenter_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(department_presenter_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME department_presenter
+        COMMAND department_presenter_test
+    )
+
+    add_executable(shift_service_test
+        src/core/attendance/punch_rule.cpp
+        src/services/shift_service.cpp
+        tests/unit/shift_service_test.cpp
+    )
+    target_include_directories(shift_service_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(shift_service_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME shift_service COMMAND shift_service_test)
+
+    add_executable(shift_presenter_test
+        src/core/attendance/punch_rule.cpp
+        src/services/shift_service.cpp
+        src/ui/presenters/shift_presenter.cpp
+        tests/unit/shift_presenter_test.cpp
+    )
+    target_include_directories(shift_presenter_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(shift_presenter_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME shift_presenter COMMAND shift_presenter_test)
+
+    add_executable(attendance_query_service_test
+        src/services/attendance_query_service.cpp
+        tests/unit/attendance_query_service_test.cpp)
+    target_include_directories(attendance_query_service_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(attendance_query_service_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME attendance_query_service COMMAND attendance_query_service_test)
+
+    add_executable(maintenance_service_test
+        src/services/maintenance_service.cpp
+        tests/unit/maintenance_service_test.cpp)
+    target_include_directories(maintenance_service_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(maintenance_service_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME maintenance_service COMMAND maintenance_service_test)
+
+    add_executable(auth_service_test
+        src/business/auth_service.cpp
+        tests/unit/auth_service_test.cpp)
+    target_include_directories(auth_service_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(auth_service_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME auth_service COMMAND auth_service_test)
+
+    add_executable(system_info_presenter_test
+        tests/unit/system_info_presenter_test.cpp)
+    target_include_directories(system_info_presenter_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS})
+    target_compile_options(system_info_presenter_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME system_info_presenter COMMAND system_info_presenter_test)
 
     add_executable(task_manager_test
         src/app/task_manager.cpp
@@ -594,6 +748,59 @@ if(BUILD_TESTING)
         NAME legacy_config_repository
         COMMAND legacy_config_repository_test
     )
+
+    add_executable(legacy_department_repository_test
+        tests/integration/legacy_department_repository_test.cpp
+    )
+    target_include_directories(legacy_department_repository_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(legacy_department_repository_test PRIVATE
+        SQLite::SQLite3
+        ${OpenCV_LIBS}
+        Threads::Threads
+        smartattendance_repositories
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(legacy_department_repository_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME legacy_department_repository
+        COMMAND legacy_department_repository_test
+    )
+
+    add_executable(legacy_shift_repository_test
+        tests/integration/legacy_shift_repository_test.cpp
+    )
+    target_include_directories(legacy_shift_repository_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(legacy_shift_repository_test PRIVATE
+        SQLite::SQLite3 ${OpenCV_LIBS} Threads::Threads smartattendance_repositories)
+    target_compile_options(legacy_shift_repository_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME legacy_shift_repository COMMAND legacy_shift_repository_test)
+
+    add_executable(legacy_attendance_query_repository_test
+        tests/integration/legacy_attendance_query_repository_test.cpp)
+    target_include_directories(legacy_attendance_query_repository_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(legacy_attendance_query_repository_test PRIVATE
+        SQLite::SQLite3 ${OpenCV_LIBS} Threads::Threads smartattendance_repositories)
+    target_compile_options(legacy_attendance_query_repository_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME legacy_attendance_query_repository COMMAND legacy_attendance_query_repository_test)
+
+    add_executable(legacy_maintenance_repository_test
+        tests/integration/legacy_maintenance_repository_test.cpp)
+    target_include_directories(legacy_maintenance_repository_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(legacy_maintenance_repository_test PRIVATE
+        SQLite::SQLite3 ${OpenCV_LIBS} Threads::Threads smartattendance_repositories)
+    target_compile_options(legacy_maintenance_repository_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME legacy_maintenance_repository COMMAND legacy_maintenance_repository_test)
 endif()
 
 # ==========================================

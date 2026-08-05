@@ -2,7 +2,7 @@
  * @file ui_controller.h
  * @brief UI 控制器头文件 - 提供 UI 层与业务/数据层的接口封装
  * @details 该类封装了 UI 层所需的各种业务逻辑调用，简化 UI 代码复杂度。
- *          通过单例模式提供全局访问点。
+ *          实例由 UI 组合层创建，并显式注入各页面模块。
  */
 #ifndef UI_CONTROLLER_H
 #define UI_CONTROLLER_H
@@ -11,6 +11,9 @@
 #include <vector>
 #include <ctime>
 #include <mutex>
+#include "ui/presenters/shift_presenter.h"
+#include "ui/presenters/attendance_query_presenter.h"
+#include "ui/presenters/maintenance_presenter.h"
 #include <atomic>
 
 namespace smart_attendance::app {
@@ -19,11 +22,18 @@ class UiSystemStatusMailbox;
 
 namespace smart_attendance::ui {
 class EmployeeLookupPresenter;
+class SettingsPresenter;
+class DepartmentPresenter;
+class SystemInfoPresenter;
 }
 
 namespace smart_attendance::hal {
 class IRtc;
 class IStorageDevice;
+}
+
+namespace smart_attendance::storage {
+class IEmployeeSettingsImportRepository;
 }
 
 // 这里为了简化，我们暂时复用 data 层的结构体定义
@@ -47,10 +57,22 @@ void uiResetDeviceServices() noexcept;
 /** @brief 将业务层最新帧缩放后投递到 UI 管理器的线程安全缓冲区。 */
 void uiRunFrameDeliveryTask(const std::atomic<bool>& stopRequested);
 
+struct UserDisplayInfo {
+    int id{0};
+    std::string name;
+    int departmentId{0};
+    std::string departmentName;
+    bool faceRegistered{false};
+    bool fingerprintRegistered{false};
+    std::string cardId;
+    bool passwordRegistered{false};
+    int role{0};
+};
+
 class UiController {
 public:
-    // 单例访问点
-    static UiController* getInstance();
+    UiController() = default;
+    ~UiController() = default;
 
     // --- 1. 系统状态类 ---
     bool isDiskFull();             // 替换原来的 check_disk_low
@@ -72,31 +94,45 @@ public:
     void configureEmployeeLookupPresenter(
         smart_attendance::ui::EmployeeLookupPresenter* presenter) noexcept;
 
+    void configureSettingsPresenter(
+        smart_attendance::ui::SettingsPresenter* presenter) noexcept;
+
+    void configureDepartmentPresenter(
+        smart_attendance::ui::DepartmentPresenter* presenter) noexcept;
+
+    void configureShiftPresenter(
+        smart_attendance::ui::ShiftPresenter* presenter) noexcept;
+    void configureAttendanceQueryPresenter(
+        smart_attendance::ui::AttendanceQueryPresenter* presenter) noexcept;
+    void configureMaintenancePresenter(
+        smart_attendance::ui::MaintenancePresenter* presenter) noexcept;
+    void configureSystemInfoPresenter(
+        smart_attendance::ui::SystemInfoPresenter* presenter) noexcept;
+
     // 验证用户密码是否正确(校验哈希值)
     bool verifyUserPassword(int userId, const std::string& inputPassword);
     
     // 获取用于列表显示的用户数据
     // 返回简单的结构或直接复用底层，这里演示获取所有用户
     std::vector<UserData> getAllUsers(); 
+    /** @brief 获取详情页字段，不返回密码或生物特征内容。 */
+    UserDisplayInfo getUserDisplayInfo(int userId);
     int getUserCount();
     bool getUserAt(int index, int* id, char* name_buf, int buf_len);
 
     // --- 3. 记录与查询类 ---
     UserData getUserInfo(int uid);
     std::vector<AttendanceRecord> getRecords(int userId, time_t start, time_t end);
+    smart_attendance::ui::AttendanceRecordPage getRecordPage(
+        int userId, time_t start, time_t end, std::size_t pageIndex);
     // 检查用户是否存在 (用于 UI 导出报表前的同步校验)
     bool checkUserExists(int user_id);
     
     // --- 4. 维护与报表 ---
-    bool exportReportToUsb();      // 封装报表导出逻辑
-    void clearAllRecords();
-    void clearAllEmployees();
-    void factoryReset();
-    void clearAllData();
-    bool exportEmployeeSettings();// 导出员工设置表
-    // 上传员工设置表（从U盘读取xlsx并导入数据库）
-    // invalid_time_count: 若非空，写入解析过程中时间格式非法的字段数
-    bool importEmployeeSettings(int* invalid_time_count = nullptr);
+    bool clearAllRecords();
+    bool clearAllEmployees();
+    bool factoryReset();
+    bool clearAllData();
 
     // --- 5. 摄像头图像获取  ---
     bool getDisplayFrame(uint8_t* buffer, int width, int height);
@@ -114,12 +150,6 @@ public:
     // 删除用户
     bool deleteUser(int userId);
 
-    // 导出自定义报表
-    bool exportCustomReport(const std::string& start, const std::string& end);
-    
-    // 导出个人报表
-    bool exportUserReport(int user_id, const std::string& start, const std::string& end);
-    
     // 更新摄像头 Buffer 的接口
     void updateCameraFrame(const uint8_t* data, int w, int h);
 
@@ -151,15 +181,23 @@ public:
                          const std::string& s3_start, const std::string& s3_end);
     
 private:
-    UiController() = default; // 私有构造
-    ~UiController() = default;
-
     // 线程安全相关的成员
     std::mutex m_frame_mutex;            // 保护图像数据的锁
     std::vector<uint8_t> m_cached_frame; // 缓存最新的一帧图像
     std::string m_company_name;          // 公司名称缓存
     std::mutex m_company_mutex;          // 保护公司数据的锁
     smart_attendance::ui::EmployeeLookupPresenter* employeeLookupPresenter_{nullptr};
+    smart_attendance::ui::SettingsPresenter* settingsPresenter_{nullptr};
+    smart_attendance::ui::DepartmentPresenter* departmentPresenter_{nullptr};
+    smart_attendance::ui::ShiftPresenter* shiftPresenter_{nullptr};
+    smart_attendance::ui::AttendanceQueryPresenter* attendanceQueryPresenter_{nullptr};
+    smart_attendance::ui::MaintenancePresenter* maintenancePresenter_{nullptr};
+    smart_attendance::ui::SystemInfoPresenter* systemInfoPresenter_{nullptr};
 };
+
+/** @brief 兼容现有员工设置 XLSX 格式的导入实现，由 ReportService 注入调用。 */
+bool uiImportEmployeeSettings(
+    smart_attendance::storage::IEmployeeSettingsImportRepository& repository,
+    int* invalid_time_count = nullptr);
 
 #endif // UI_CONTROLLER_H

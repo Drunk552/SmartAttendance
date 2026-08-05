@@ -12,6 +12,7 @@
 #include <lvgl.h>
 #include <cstdio>
 #include <cstdlib>
+#include <csignal>
 #include <stdexcept>
 
 // 模块接口
@@ -22,12 +23,16 @@
 
 // 引入主页头文件
 #include "screens/home/ui_scr_home.h"
+#include "screens/user_mgmt/ui_user_mgmt.h"
 #include "screens/record_query/ui_scr_record_query.h"
 #include "screens/att_stats/ui_scr_att_stats.h"
+#include "screens/att_design/ui_scr_att_design.h"
+#include "screens/system/ui_sys_settings.h"
+#include "screens/sys_info/ui_scr_sys_info.h"
 
 // 全局退出标志 (定义在 main.cpp)
 extern "C" {
-    extern volatile bool g_program_should_exit;
+    extern volatile sig_atomic_t g_program_should_exit;
 }
 
 namespace {
@@ -36,8 +41,17 @@ smart_attendance::app::UiBackgroundJobQueue* g_backgroundJobs = nullptr;
 smart_attendance::app::UiSystemStatusMailbox* g_systemStatus = nullptr;
 smart_attendance::hal::IDisplay* g_display = nullptr;
 smart_attendance::hal::IKeypad* g_keypad = nullptr;
-
 } // namespace
+
+void ui_configure_controller(UiController& controller) noexcept {
+    ui::home::configureController(controller);
+    ui::user_mgmt::configureController(controller);
+    ui::record_query::configureController(controller);
+    ui::att_stats::configureController(controller);
+    ui::att_design::configureController(controller);
+    ui::system::configureController(controller);
+    ui::sys_info::configureController(controller);
+}
 
 void ui_configure_background_jobs(
     smart_attendance::app::UiBackgroundJobQueue& backgroundJobs) noexcept {

@@ -12,7 +12,6 @@
 #include <ctime>
 #include <algorithm>
 #include <sys/stat.h> // 用于创建目录
-#include <db_storage.h>// 调用数据层接口
 #include "attendance_rule.h"
 
 /**
@@ -31,7 +30,9 @@ int timeStrToMinutes(const std::string& time_str) {
 /**
  * @brief 构造函数
  */
-ReportGenerator::ReportGenerator() {}
+ReportGenerator::ReportGenerator(
+    smart_attendance::services::IReportDataSource& dataSource) noexcept
+    : dataSource_(dataSource) {}
 ReportGenerator::~ReportGenerator() {}
 
 /**
@@ -45,28 +46,28 @@ long long ReportGenerator::parseDateToTimestamp(const std::string& date_str, boo
     std::tm tm = {};
     std::stringstream ss(date_str);
     ss >> std::get_time(&tm, "%Y-%m-%d");
-    
+
      if (ss.fail()) {
         ss.clear();
         ss.str(date_str);
         ss >> std::get_time(&tm, "%Y/%m/%d");
     }
-    
+
     if (ss.fail()) {
         std::cerr << "[Error] 无法解析日期: " << date_str << std::endl;
         return 0;
     }
-    
+
     if (is_end_of_day) {
-        tm.tm_hour = 23; 
-        tm.tm_min = 59; 
+        tm.tm_hour = 23;
+        tm.tm_min = 59;
         tm.tm_sec = 59;
     } else {
-        tm.tm_hour = 0; 
-        tm.tm_min = 0; 
+        tm.tm_hour = 0;
+        tm.tm_min = 0;
         tm.tm_sec = 0;
     }
-    
+
     return std::mktime(&tm);
 }
 
@@ -120,16 +121,16 @@ std::string ReportGenerator::formatMonth(int year, int month) {
  */
 int ReportGenerator::getDaysInMonth(int year, int month) {
     if (month < 1 || month > 12) return 31;
-    
+
     const int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
     int days = days_in_month[month - 1];
-    
+
     // 闰年二月
     if (month == 2) {
         bool is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
         if (is_leap) days = 29;
     }
-    
+
     return days;
 }
 
@@ -182,14 +183,14 @@ int ReportGenerator::calculateLateMinutes(long long timestamp, const ShiftInfo& 
     int punch_mins = tm->tm_hour * 60 + tm->tm_min;
 
     // 2. 解析班次时间点
-    int s1_start = timeStrToMinutes(shift.s1_start); 
+    int s1_start = timeStrToMinutes(shift.s1_start);
     int s1_end   = timeStrToMinutes(shift.s1_end);
-    int s2_start = timeStrToMinutes(shift.s2_start); 
+    int s2_start = timeStrToMinutes(shift.s2_start);
 
     // 3. [Epic 4.4 优化] 动态计算分界点
     // 默认为 12:00 (720)，防止没有下午班次时出错
-    int split_point = 720; 
-    
+    int split_point = 720;
+
     // 如果上午班结束和下午班开始都存在，取两者的中间点作为分界线
     // 例如：上午结束 12:00，下午开始 14:00 -> 分界点 13:00
     if (s1_end > 0 && s2_start > 0 && s2_start > s1_end) {
@@ -200,7 +201,7 @@ int ReportGenerator::calculateLateMinutes(long long timestamp, const ShiftInfo& 
 
     // 4. 判定逻辑
     // 情况 A: 打卡时间在分界点之前 -> 归属上午班，跟 s1_start 比
-    if (s1_start != -1 && punch_mins <= split_point) { 
+    if (s1_start != -1 && punch_mins <= split_point) {
         if (punch_mins > s1_start) {
             late_mins = punch_mins - s1_start;
         }
@@ -211,7 +212,7 @@ int ReportGenerator::calculateLateMinutes(long long timestamp, const ShiftInfo& 
             late_mins = punch_mins - s2_start;
         }
     }
-    
+
     return late_mins > 0 ? late_mins : 0;
 }
 
@@ -226,13 +227,13 @@ int ReportGenerator::calculateEarlyMinutes(long long timestamp, const ShiftInfo&
     std::tm* tm = std::localtime(&t);
     int punch_mins = tm->tm_hour * 60 + tm->tm_min;
 
-    int s1_end   = timeStrToMinutes(shift.s1_end); 
+    int s1_end   = timeStrToMinutes(shift.s1_end);
     int s2_start = timeStrToMinutes(shift.s2_start);
-    int s2_end   = timeStrToMinutes(shift.s2_end); 
-    
+    int s2_end   = timeStrToMinutes(shift.s2_end);
+
     // [Epic 4.4 优化] 动态计算分界点 (逻辑同上)
     int split_point = 720; // 默认 12:00
-    
+
     if (s1_end > 0 && s2_start > 0 && s2_start > s1_end) {
         split_point = s1_end + (s2_start - s1_end) / 2;
     }
@@ -241,7 +242,7 @@ int ReportGenerator::calculateEarlyMinutes(long long timestamp, const ShiftInfo&
 
     // 判定逻辑：
     // 情况 A: 打卡时间在分界点之前 -> 视为上午下班，跟 s1_end 比
-    if (s1_end != -1 && punch_mins <= split_point) { 
+    if (s1_end != -1 && punch_mins <= split_point) {
         if (punch_mins < s1_end) {
             early_mins = s1_end - punch_mins;
         }
@@ -264,22 +265,23 @@ int ReportGenerator::calculateEarlyMinutes(long long timestamp, const ShiftInfo&
  * @param end_ts 结束时间戳 (秒级)
  * @return 考勤记录列表
  */
-std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts, long long end_ts) {
+std::vector<AttendanceRecord> ReportGenerator::loadRecords(
+    long long start_ts, long long end_ts) {
     std::vector<AttendanceRecord> records;
-    auto db_records = ::db_get_records(start_ts, end_ts);
+    auto db_records = dataSource_.records(start_ts, end_ts);
 
     // 班次缓存 map，避免同一个人同一天重复查询数据库
     // Key: "UserID_YYYY-MM-DD", Value: ShiftInfo
     std::map<std::string, ShiftInfo> shift_cache;
-    
+
     for (const auto& record : db_records) {
         AttendanceRecord rec; // 复制数据
-        rec.id = record.id; 
-        rec.user_id = record.user_id; 
-        rec.timestamp = record.timestamp; 
-        rec.status = record.status; 
-        rec.user_name = record.user_name; 
-        rec.dept_name = record.dept_name; 
+        rec.id = record.id;
+        rec.user_id = record.user_id;
+        rec.timestamp = record.timestamp;
+        rec.status = record.status;
+        rec.user_name = record.user_name;
+        rec.dept_name = record.dept_name;
         rec.image_path = record.image_path;
 
         rec.minutes_late = 0; // 默认值为0
@@ -293,11 +295,11 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
         // 检查缓存或查询数据库
         if (shift_cache.find(cache_key) != shift_cache.end()) {
             current_shift = shift_cache[cache_key];
-        } 
+        }
         else {
             // 智能获取当天的排班
-            auto shift_opt = ::db_get_user_shift_smart(rec.user_id, rec.timestamp);
-            
+            auto shift_opt = dataSource_.shiftForUserAt(rec.user_id, rec.timestamp);
+
             if (shift_opt.has_value()) {
                 current_shift = shift_opt.value(); // 如果有排班，把数据拆盒取出来
             } else {
@@ -306,8 +308,8 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
             }
 
             shift_cache[cache_key] = current_shift;
-        } 
-        
+        }
+
         // 计算迟到/早退逻辑 (自动处理 id=0 的情况)
         int late_min = calculateLateMinutes(rec.timestamp, current_shift);
         int early_min = calculateEarlyMinutes(rec.timestamp, current_shift);
@@ -316,7 +318,7 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
         if (late_min > 0) {
             rec.status = STATUS_LATE;       // 强制标记为迟到
             rec.minutes_late = late_min;    // 记录迟到时长
-        } 
+        }
         else if (early_min > 0) {
             rec.status = STATUS_EARLY;      // 强制标记为早退
             rec.minutes_early = early_min;  // 记录早退时长
@@ -329,11 +331,11 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
         }
         records.push_back(rec);
     }
-    
-    std::cout << "[Report] 从数据库获取 " << records.size() 
-              << " 条考勤记录 (" << formatDate(start_ts) 
+
+    std::cout << "[Report] 从数据库获取 " << records.size()
+              << " 条考勤记录 (" << formatDate(start_ts)
               << " 到 " << formatDate(end_ts) << ")" << std::endl;
-              
+
     return records;
 }
 
@@ -341,9 +343,9 @@ std::vector<AttendanceRecord> ReportGenerator::db_get_records(long long start_ts
  * @brief 从数据库获取所有用户信息
  * @return 用户信息列表
  */
-std::vector<UserData> ReportGenerator::db_get_all_users_info() {
+std::vector<UserData> ReportGenerator::loadUsers() {
     std::vector<UserData> users;
-    auto db_users = ::db_get_all_users();
+    auto db_users = dataSource_.users();
 
      for (const auto& db_user : db_users) {
         UserData user;
@@ -363,12 +365,12 @@ std::vector<UserData> ReportGenerator::db_get_all_users_info() {
         } else {
             user.position = "员工";
         }
-        
+
         users.push_back(user);
     }
-    
+
     std::cout << "[Report] 从数据库获取 " << users.size() << " 个用户信息" << std::endl;
-    
+
     return users;
 }
 
@@ -377,20 +379,21 @@ std::vector<UserData> ReportGenerator::db_get_all_users_info() {
  * @param dept_name 部门名称
  * @return 用户信息列表
  */
-std::vector<UserData> ReportGenerator::db_get_users_by_dept(const std::string& dept_name) {
-    std::vector<UserData> users = db_get_all_users_info();
+std::vector<UserData> ReportGenerator::loadUsersByDepartment(
+    const std::string& dept_name) {
+    std::vector<UserData> users = loadUsers();
     std::vector<UserData> result;
-    
+
     // 筛选指定部门的用户
     for (const auto& user : users) {
         if (user.dept_name == dept_name) {
             result.push_back(user);
         }
     }
-    
-    std::cout << "[Report] 从部门 '" << dept_name << "' 获取 " 
+
+    std::cout << "[Report] 从部门 '" << dept_name << "' 获取 "
               << result.size() << " 个用户" << std::endl;
-    
+
     return result;
 }
 
@@ -499,11 +502,11 @@ void ReportGenerator::processAttendanceData(
     long long start_ts, long long end_ts,
     std::map<int, std::map<int, DailyCellData>>& detail_data,
     std::map<int, MonthlySummary>& summaries) {
-    
+
     // 初始化数据结构
     for (const auto& user : users) {
         detail_data[user.id] = std::map<int, DailyCellData>();
-        
+
         MonthlySummary summary;
         summary.user_name = user.name;
         summary.user_code = std::to_string(user.id);
@@ -513,15 +516,15 @@ void ReportGenerator::processAttendanceData(
 
     // [规则 Q3] 从数据库获取全局考勤规则，获取允许迟到分钟阈値
     // 避免硬编码为 0、和数据库配置脱节
-    RuleConfig global_rules = db_get_global_rules();
+    RuleConfig global_rules = dataSource_.globalRules();
     int late_threshold = global_rules.late_threshold; // 全局迟到容忍分钟数
-    
+
     // 处理考勤记录
     for (const auto& rec : records) {
         int user_id = rec.user_id;
         int day = extractDayFromTimestamp(rec.timestamp); // 获取几号
         std::string punch_time = formatTime(rec.timestamp); // 格式化为 HH:MM
-        
+
         auto& cell = detail_data[user_id][day];
 
         // ==========================================
@@ -533,7 +536,7 @@ void ReportGenerator::processAttendanceData(
         //   - 默认班次 fallback
         //   - 【节点K】周六/周日是否上班规则检查
         // ==========================================
-        auto day_shift_opt = db_get_user_shift_smart(user_id, rec.timestamp);
+        auto day_shift_opt = dataSource_.shiftForUserAt(user_id, rec.timestamp);
 
         // 若节点K判定当天无排班（如周末不上班），跳过此条打卡记录不计入考勤
         if (!day_shift_opt.has_value() || day_shift_opt.value().id == 0) {
@@ -603,15 +606,15 @@ void ReportGenerator::processAttendanceData(
             }
         }
     }
-    
+
     //补全缺失日期并统计
     int year = extractYearFromTimestamp(start_ts);
     int month = extractMonthFromTimestamp(start_ts);
     int days_in_month = getDaysInMonth(year, month);
-    
+
     for (auto& [user_id, user_data] : detail_data) {
         MonthlySummary& summary = summaries[user_id];
-        
+
         for (int day = 1; day <= days_in_month; day++) {
             if (user_data.find(day) == user_data.end()) {
                 // [规则 Q3 第一阶段] 该天无打卡记录，需先判断是否排班：
@@ -619,7 +622,7 @@ void ReportGenerator::processAttendanceData(
                 //   - 无排班（db_get_user_shift_smart 返回 id==0） -> 未排班 (STATUS_NO_SHIFT)
                 //   两种情况是完全不同的业务语义，不能统一处理为旷工
                 long long day_ts = parseDateToTimestamp(formatDateString(year, month, day), false);
-                auto day_shift = db_get_user_shift_smart(user_id, day_ts);
+                auto day_shift = dataSource_.shiftForUserAt(user_id, day_ts);
                 bool has_shift = day_shift.has_value() && day_shift.value().id != 0;
 
                 DailyCellData empty_data;
@@ -677,12 +680,12 @@ bool ReportGenerator::exportAllAttendanceReport(const std::string& start_date, c
     if (start_ts == 0 || end_ts == 0) return false;
 
     // 1. 调用数据层接口获取全局基础数据
-    std::vector<UserData> users = db_get_all_users_info(); // 获取所有员工及部门名
-    std::vector<DeptInfo> depts = db_get_departments();    // 获取部门列表
-    std::vector<ShiftInfo> shifts = db_get_shifts();       // 获取班次列表
-    
+    std::vector<UserData> users = loadUsers(); // 获取所有员工及部门名
+    std::vector<DeptInfo> depts = dataSource_.departments();    // 获取部门列表
+    std::vector<ShiftInfo> shifts = dataSource_.shifts();       // 获取班次列表
+
     // 调用数据层接口：获取该时间段内全公司的所有考勤打卡记录
-    std::vector<AttendanceRecord> records = db_get_records(start_ts, end_ts);
+    std::vector<AttendanceRecord> records = loadRecords(start_ts, end_ts);
 
     // 2. 处理考勤核心数据 (复用您已有的数据清洗计算函数)
     std::map<int, std::map<int, DailyCellData>> detail_data;
@@ -704,7 +707,7 @@ bool ReportGenerator::exportAllAttendanceReport(const std::string& start_date, c
     // 4. 按文档要求依次生成 5 个 Sheet 标签页
 
     // --- 统一提取 year, month, days_in_month ---
-    int year = 2024, month = 1, days_in_month = 31; 
+    int year = 2024, month = 1, days_in_month = 31;
     try {
         if (start_date.length() >= 7) {
             year = std::stoi(start_date.substr(0, 4));
@@ -733,19 +736,19 @@ bool ReportGenerator::exportIndividualAttendanceReport(int user_id, const std::s
     if (start_ts == 0 || end_ts == 0) return false;
 
     // 1. 获取该个人的详情数据
-    std::optional<UserData> user_opt = db_get_user_info(user_id);
+    std::optional<UserData> user_opt = dataSource_.user(user_id);
     if (!user_opt.has_value()) {
         std::cerr << "[Error] 找不到该员工工号: " << user_id << std::endl;
         return false;
     }
     // 打包成 vector 以便兼容您的核心处理函数
-    std::vector<UserData> users = { user_opt.value() }; 
-    
-    std::vector<DeptInfo> depts = db_get_departments();
-    std::vector<ShiftInfo> shifts = db_get_shifts();
+    std::vector<UserData> users = { user_opt.value() };
+
+    std::vector<DeptInfo> depts = dataSource_.departments();
+    std::vector<ShiftInfo> shifts = dataSource_.shifts();
 
     // 真实接口调用：仅获取该工号(user_id)的考勤记录
-    std::vector<AttendanceRecord> records = db_get_records_by_user(user_id, start_ts, end_ts);
+    std::vector<AttendanceRecord> records = dataSource_.recordsForUser(user_id, start_ts, end_ts);
 
     // --- 下方的处理与生成步骤与全员表完全相同 ---
     std::map<int, std::map<int, DailyCellData>> detail_data;
@@ -763,7 +766,7 @@ bool ReportGenerator::exportIndividualAttendanceReport(int user_id, const std::s
     if (!workbook) return false;
 
     // --- 统一提取 year, month, days_in_month ---
-    int year = 2024, month = 1, days_in_month = 31; 
+    int year = 2024, month = 1, days_in_month = 31;
     try {
         if (start_date.length() >= 7) {
             year = std::stoi(start_date.substr(0, 4));
@@ -787,10 +790,10 @@ bool ReportGenerator::exportIndividualAttendanceReport(int user_id, const std::s
 // ======================= 3. 导出 员工设置表.xls =======================
 bool ReportGenerator::exportSettingsReport(const std::string& output_path) {
     // 1. 调用真实接口：获取导出设置表所需的所有外围数据
-    std::vector<UserData> users = db_get_all_users_info();
-    RuleConfig rules = db_get_global_rules();          // 获取机器防重复、韦根等配置规则
-    std::vector<ShiftInfo> shifts = db_get_shifts();   // 获取最多10个时段的班次信息
-    std::vector<DeptInfo> depts = db_get_departments();
+    std::vector<UserData> users = loadUsers();
+    RuleConfig rules = dataSource_.globalRules();          // 获取机器防重复、韦根等配置规则
+    std::vector<ShiftInfo> shifts = dataSource_.shifts();   // 获取最多10个时段的班次信息
+    std::vector<DeptInfo> depts = dataSource_.departments();
 
     // 2. 创建工作簿
     lxw_workbook* workbook = workbook_new(output_path.c_str());
@@ -807,7 +810,7 @@ bool ReportGenerator::exportSettingsReport(const std::string& output_path) {
     int year = now->tm_year + 1900;
     int month = now->tm_mon + 1;
     int days_in_month = getDaysInMonth(year, month);
-    
+
     // 生成当月 1 号的字符串作为排班日期参考
     char date_buf[32];
     snprintf(date_buf, sizeof(date_buf), "%04d-%02d-01", year, month);
@@ -815,9 +818,9 @@ bool ReportGenerator::exportSettingsReport(const std::string& output_path) {
 
     writeEmployeeSettingsSheet(workbook, users, start_date, year, month, days_in_month);
     // 1. 获取真实数据
-    RuleConfig config = db_get_global_rules();        // 获取规则配置
-    //std::vector<DeptInfo> depts = db_get_departments();    // 获取部门 (请核对您的获取部门函数名)
-    //std::vector<ShiftInfo> shifts = db_get_shifts(); // 获取班次
+    RuleConfig config = dataSource_.globalRules();        // 获取规则配置
+    //std::vector<DeptInfo> depts = dataSource_.departments();    // 获取部门 (请核对您的获取部门函数名)
+    //std::vector<ShiftInfo> shifts = dataSource_.shifts(); // 获取班次
 
     // 2. 传入设置表
     writeAttendanceSettingsSheet(workbook, config, depts, shifts);
@@ -830,8 +833,8 @@ bool ReportGenerator::exportSettingsReport(const std::string& output_path) {
 //======================== 考勤报表.xls =======================
 
 //排班信息表
-void ReportGenerator::writeShiftInfoSheet(lxw_workbook* workbook, 
-                                          const std::vector<UserData>& users, 
+void ReportGenerator::writeShiftInfoSheet(lxw_workbook* workbook,
+                                          const std::vector<UserData>& users,
                                           const std::vector<DeptInfo>& depts,
                                           const std::vector<ShiftInfo>& shifts,
                                           const std::string& start_date,
@@ -846,7 +849,7 @@ void ReportGenerator::writeShiftInfoSheet(lxw_workbook* workbook,
     format_set_align(info_format, LXW_ALIGN_LEFT);
     format_set_align(info_format, LXW_ALIGN_VERTICAL_CENTER);
     format_set_border(info_format, LXW_BORDER_THIN);
-    
+
     // 表头格式 (黄色背景)
     lxw_format *header_format = workbook_add_format(workbook);
     format_set_bold(header_format);
@@ -871,7 +874,7 @@ void ReportGenerator::writeShiftInfoSheet(lxw_workbook* workbook,
     // 第0行：排班日期 和 备注说明
     std::string date_title = "排班日期：" + start_date + " ~ " + end_date;
     worksheet_merge_range(worksheet, 0, 0, 0, 2, date_title.c_str(), info_format);
-    
+
     std::string remark_title = "备注：排班:1-10班次, 25-请假, 26-出差, 空/0-节假日;";
     worksheet_merge_range(worksheet, 0, 3, 0, 3 + days_in_month - 1, remark_title.c_str(), info_format);
     worksheet_set_row(worksheet, 0, 20, NULL);
@@ -892,7 +895,7 @@ void ReportGenerator::writeShiftInfoSheet(lxw_workbook* workbook,
         std::tm time_in = {0, 0, 0, day, month - 1, year - 1900};
         std::time_t time_temp = std::mktime(&time_in);
         const std::tm* time_out = std::localtime(&time_temp);
-        
+
         // 第2行写星期几 (一, 二, 三...)
         worksheet_write_string(worksheet, 2, col, weekdays[time_out->tm_wday], header_format);
     }
@@ -915,7 +918,7 @@ void ReportGenerator::writeShiftInfoSheet(lxw_workbook* workbook,
         worksheet_write_string(worksheet, row, 2, d_name.c_str(), cell_format);
 
         // 获取该员工当月的排班数据
-        auto monthly_shifts = db_get_user_monthly_shifts(user.id, year, month);
+        auto monthly_shifts = loadUserMonthlyShifts(user.id, year, month);
 
         // 写入每天的排班班次
         for (int day = 1; day <= days_in_month; ++day) {
@@ -930,7 +933,7 @@ void ReportGenerator::writeShiftInfoSheet(lxw_workbook* workbook,
                 worksheet_write_number(worksheet, row, col, shift_id, cell_format);
             } else {
                 // 没排班写入空或者0
-                worksheet_write_string(worksheet, row, col, "", cell_format); 
+                worksheet_write_string(worksheet, row, col, "", cell_format);
             }
         }
         row++;
@@ -955,7 +958,7 @@ void ReportGenerator::writeSummarySheet(lxw_workbook* workbook, const std::map<i
     lxw_format *left_format = workbook_add_format(workbook);
     format_set_align(left_format, LXW_ALIGN_LEFT);
     format_set_align(left_format, LXW_ALIGN_VERTICAL_CENTER);
-    
+
     lxw_format *right_format = workbook_add_format(workbook);
     format_set_align(right_format, LXW_ALIGN_RIGHT);
     format_set_align(right_format, LXW_ALIGN_VERTICAL_CENTER);
@@ -999,7 +1002,7 @@ void ReportGenerator::writeSummarySheet(lxw_workbook* workbook, const std::map<i
     worksheet_merge_range(worksheet, 2, 0, 3, 0, "工号", header_format);
     worksheet_merge_range(worksheet, 2, 1, 3, 1, "姓名", header_format);
     worksheet_merge_range(worksheet, 2, 2, 3, 2, "部门", header_format);
-    
+
     // [跨列区] 工作时数、迟到、早退、加班
     worksheet_merge_range(worksheet, 2, 3, 2, 4, "工作时数", header_format);
     worksheet_write_string(worksheet, 3, 3, "标准", header_format);
@@ -1039,7 +1042,7 @@ void ReportGenerator::writeSummarySheet(lxw_workbook* workbook, const std::map<i
     worksheet_merge_range(worksheet, 2, 22, 3, 22, "备注", header_format);
 
     // 冻结前4行（前4行一直可见）
-    worksheet_freeze_panes(worksheet, 4, 0); 
+    worksheet_freeze_panes(worksheet, 4, 0);
 
     // ================= 5. 写入数据 =================
     int row = 4; // 数据从第4行开始写
@@ -1167,7 +1170,7 @@ void ReportGenerator::writeRecordSheet(lxw_workbook* workbook, const std::vector
         worksheet_write_string(worksheet, row, 4, time_buf, current_format);
         worksheet_write_string(worksheet, row, 5, status_str.c_str(), current_format);
         worksheet_write_string(worksheet, row, 6, remark.c_str(), current_format);
-        
+
         row++;
     }
 }
@@ -1296,7 +1299,7 @@ void ReportGenerator::writeAbnormalSheet(lxw_workbook* workbook, const std::vect
         worksheet_write_string(worksheet, row, 1, rec.user_name.c_str(), red_format);
         worksheet_write_string(worksheet, row, 2, rec.dept_name.c_str(), red_format);
         worksheet_write_string(worksheet, row, 3, date_buf, red_format);
-        
+
         // 时段一 (上下班)
         worksheet_write_string(worksheet, row, 4, t1_in.c_str(), red_format);
         worksheet_write_string(worksheet, row, 5, t1_out.c_str(), red_format);
@@ -1309,19 +1312,19 @@ void ReportGenerator::writeAbnormalSheet(lxw_workbook* workbook, const std::vect
         worksheet_write_number(worksheet, row, 9, early, red_format);
         worksheet_write_number(worksheet, row, 10, total_abnormal, red_format);
         worksheet_write_string(worksheet, row, 11, remark.c_str(), red_format);
-        
+
         row++;
     }
 }
 
 //考勤明细表
-void ReportGenerator::writeDetailSheet(lxw_workbook* workbook, 
-                                       const std::map<int, std::map<int, DailyCellData>>& detail_data, 
+void ReportGenerator::writeDetailSheet(lxw_workbook* workbook,
+                                       const std::map<int, std::map<int, DailyCellData>>& detail_data,
                                        const std::map<int, MonthlySummary>& summaries,
-                                       const std::string& start_date, 
+                                       const std::string& start_date,
                                        const std::string& end_date,
                                        int year, int month, int days_in_month) {
-    
+
     // 1. 创建工作表
     lxw_worksheet *worksheet = workbook_add_worksheet(workbook, "考勤明细表");
 
@@ -1471,7 +1474,7 @@ void ReportGenerator::writeDetailSheet(lxw_workbook* workbook,
 //======================== 员工设置表.xls =======================
 
 //员工设置表
-void ReportGenerator::writeEmployeeSettingsSheet(lxw_workbook* workbook, 
+void ReportGenerator::writeEmployeeSettingsSheet(lxw_workbook* workbook,
                                                  const std::vector<UserData>& users,
                                                  const std::string& start_date,
                                                  int year, int month, int days_in_month) {
@@ -1507,7 +1510,7 @@ void ReportGenerator::writeEmployeeSettingsSheet(lxw_workbook* workbook,
     format_set_align(cell_format, LXW_ALIGN_CENTER);
     format_set_align(cell_format, LXW_ALIGN_VERTICAL_CENTER);
     format_set_border(cell_format, LXW_BORDER_THIN);
-    
+
     // 日期值靠左格式
     lxw_format *date_value_format = workbook_add_format(workbook);
     format_set_align(date_value_format, LXW_ALIGN_LEFT);
@@ -1574,7 +1577,7 @@ void ReportGenerator::writeEmployeeSettingsSheet(lxw_workbook* workbook,
         worksheet_write_number(worksheet, row, 3, user.role, cell_format); // user.role 对应权限
 
         // 导出该员工现有的当月排班（如果有的话）
-        auto monthly_shifts = db_get_user_monthly_shifts(user.id, year, month);
+        auto monthly_shifts = loadUserMonthlyShifts(user.id, year, month);
         for (int day = 1; day <= 31; ++day) {
             int col = 3 + day;
             if (day <= days_in_month) {
@@ -1602,9 +1605,9 @@ void ReportGenerator::writeEmployeeSettingsSheet(lxw_workbook* workbook,
 }
 
 //考勤设置表
-void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook, 
-                                                   const RuleConfig& config, 
-                                                   const std::vector<DeptInfo>& depts, 
+void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook,
+                                                   const RuleConfig& config,
+                                                   const std::vector<DeptInfo>& depts,
                                                    const std::vector<ShiftInfo>& shifts) {
     // 1. 创建工作表
     lxw_worksheet *worksheet = workbook_add_worksheet(workbook, "考勤设置表");
@@ -1637,7 +1640,7 @@ void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook,
     format_set_align(editable_format, LXW_ALIGN_VERTICAL_CENTER);
     format_set_border(editable_format, LXW_BORDER_THIN);
     // 【关键】：单独为白色单元格解除锁定，这样用户就能在这里打字了！
-    format_set_unlocked(editable_format); 
+    format_set_unlocked(editable_format);
 
     // ================= 3. 设置列宽 (共16列：0~15) =================
     worksheet_set_column(worksheet, 0, 0, 8, NULL);  // 班次号
@@ -1667,7 +1670,7 @@ void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook,
 
     // 第3行：子表头
     const char* sub_headers[] = {
-        "上班", "下班", "上班", "下班", "上班", "下班", 
+        "上班", "下班", "上班", "下班", "上班", "下班",
         "编号", "部门名称", "日", "一", "二", "三", "四", "五", "六"
     };
     for (int i = 0; i < 15; ++i) {
@@ -1681,18 +1684,18 @@ void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook,
     // ================= 5. 填充数据区 (一共画 16 行：适配10个班次和16个部门) =================
     for (int i = 0; i < 16; ++i) {
         int row = 4 + i;
-        
+
         // ------------- 左半部分：班次 (1-10) 或 考勤规则 (11-16) -------------
         if (i < 10) {
             // 写入班次号 1~10
             int shift_id = i + 1;
             worksheet_write_number(worksheet, row, 0, shift_id, readonly_format);
-            
+
             // 写入班次时间
             if (static_cast<size_t>(i) < shifts.size()) {
                 worksheet_write_string(worksheet, row, 1, shifts[i].s1_start.c_str(), editable_format);
                 // 为了避免编译报错，底层未暴露的结构体字段暂填空字符串，HR可在模板里自行填写
-                worksheet_write_string(worksheet, row, 2, "", editable_format); 
+                worksheet_write_string(worksheet, row, 2, "", editable_format);
                 worksheet_write_string(worksheet, row, 3, "", editable_format);
                 worksheet_write_string(worksheet, row, 4, "", editable_format);
                 worksheet_write_string(worksheet, row, 5, "", editable_format);
@@ -1707,7 +1710,7 @@ void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook,
                 worksheet_merge_range(worksheet, row, 5, row, 6, std::to_string(config.late_threshold).c_str(), editable_format);
             } else if (i == 11) {
                 worksheet_merge_range(worksheet, row, 0, row, 4, "下班早多少分钟记早退", readonly_format);
-                worksheet_merge_range(worksheet, row, 5, row, 6, "0", editable_format); 
+                worksheet_merge_range(worksheet, row, 5, row, 6, "0", editable_format);
             } else if (i == 12) {
                 worksheet_merge_range(worksheet, row, 0, row, 4, "考勤重复确认时间(分钟)", readonly_format);
                 worksheet_merge_range(worksheet, row, 5, row, 6, "3", editable_format);
@@ -1723,7 +1726,7 @@ void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook,
         // ------------- 右半部分：部门设置与排班 (1-16) -------------
         int dept_id = i + 1;
         worksheet_write_number(worksheet, row, 7, dept_id, readonly_format);
-        
+
         if (static_cast<size_t>(i) < depts.size()) {
             worksheet_write_string(worksheet, row, 8, depts[i].name.c_str(), editable_format);
             for(int d = 0; d < 7; ++d) {
@@ -1746,7 +1749,8 @@ void ReportGenerator::writeAttendanceSettingsSheet(lxw_workbook* workbook,
  * @param month 月份
  * @return 用户在该月每天的排班信息
  */
-std::map<int,ShiftInfo> ReportGenerator::db_get_user_monthly_shifts(int user_id, int year, int month) {
+std::map<int,ShiftInfo> ReportGenerator::loadUserMonthlyShifts(
+    int user_id, int year, int month) {
     std::map<int,ShiftInfo> monthly_shifts;
 
     int days_in_month = getDaysInMonth(year, month); // 获取当月天数
@@ -1756,24 +1760,24 @@ std::map<int,ShiftInfo> ReportGenerator::db_get_user_monthly_shifts(int user_id,
         std::string date_str = formatDateString(year, month, day); // 构建日期字符串
         long long timestamp = parseDateToTimestamp(date_str, false);
 
-        auto shift_opt = ::db_get_user_shift_smart(user_id, timestamp); 
-        
+        auto shift_opt = dataSource_.shiftForUserAt(user_id, timestamp);
+
         if (shift_opt.has_value()) {
             monthly_shifts[day] = shift_opt.value(); // 取出实际排班信息
         } else {
-            ShiftInfo empty_shift; 
+            ShiftInfo empty_shift;
             empty_shift.id = 0; // 如果没排班/休息，返回一个 id=0 的空对象存入 map
             monthly_shifts[day] = empty_shift;
         }
     }
-    
+
     return monthly_shifts;
 }
 
 /**
  * @brief 将时间格式化为字符串
  * @param year 年份
- * @param month 月份  
+ * @param month 月份
  * @param day 日期
  * @return 格式化字符串 "YYYY-MM-DD"
  */
@@ -1784,4 +1788,3 @@ std::string ReportGenerator::formatDateString(int year, int month, int day){
        <<std::setw(2) << std::setfill('0') <<day;
     return ss.str();
 }
-

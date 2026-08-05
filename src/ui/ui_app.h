@@ -12,6 +12,9 @@ class IDisplay;
 class IKeypad;
 }
 
+class UiController;
+void ui_configure_controller(UiController& controller) noexcept;
+
 void ui_configure_background_jobs(
     smart_attendance::app::UiBackgroundJobQueue& backgroundJobs) noexcept;
 void ui_configure_system_status(

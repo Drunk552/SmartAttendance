@@ -23,7 +23,7 @@
 // [修复 3] 使用 extern "C" 定义变量，以匹配 ui_app.h 中的声明
 // 这样 C 语言 (ui_app.c) 和 C++ (main.cpp) 才能看到同一个变量
 extern "C" {
-    volatile bool g_program_should_exit = false;
+    volatile sig_atomic_t g_program_should_exit = 0;
 }
 
 // 2. 引入项目模块头文件
@@ -33,14 +33,22 @@ extern "C" {
 #include "data/db_storage.h"    // 数据层
 #include "app/application.h"
 #include "app/platform_factory.h"
+#include "services/report_service.h"
+#include "storage/sqlite/legacy_report_data_source.h"
+#include "storage/sqlite/legacy_face_data_repository.h"
+#include "storage/sqlite/legacy_employee_settings_import_repository.h"
+#include "storage/sqlite/legacy_system_info_repository.h"
+#include "services/system_info_service.h"
+#include "ui/presenters/system_info_presenter.h"
 
 namespace {
 
 class UiEmployeeLookupPresenterBinding final {
 public:
     explicit UiEmployeeLookupPresenterBinding(
+        UiController& controller,
         smart_attendance::ui::EmployeeLookupPresenter& presenter)
-        : controller_(*UiController::getInstance()) {
+        : controller_(controller) {
         controller_.configureEmployeeLookupPresenter(&presenter);
     }
 
@@ -51,6 +59,111 @@ public:
     UiEmployeeLookupPresenterBinding(const UiEmployeeLookupPresenterBinding&) = delete;
     UiEmployeeLookupPresenterBinding& operator=(const UiEmployeeLookupPresenterBinding&) = delete;
 
+private:
+    UiController& controller_;
+};
+
+class UiSettingsPresenterBinding final {
+public:
+    explicit UiSettingsPresenterBinding(
+        UiController& controller,
+        smart_attendance::ui::SettingsPresenter& presenter)
+        : controller_(controller) {
+        controller_.configureSettingsPresenter(&presenter);
+    }
+
+    ~UiSettingsPresenterBinding() {
+        controller_.configureSettingsPresenter(nullptr);
+    }
+
+    UiSettingsPresenterBinding(const UiSettingsPresenterBinding&) = delete;
+    UiSettingsPresenterBinding& operator=(const UiSettingsPresenterBinding&) = delete;
+
+private:
+    UiController& controller_;
+};
+
+class UiDepartmentPresenterBinding final {
+public:
+    explicit UiDepartmentPresenterBinding(
+        UiController& controller,
+        smart_attendance::ui::DepartmentPresenter& presenter)
+        : controller_(controller) {
+        controller_.configureDepartmentPresenter(&presenter);
+    }
+
+    ~UiDepartmentPresenterBinding() {
+        controller_.configureDepartmentPresenter(nullptr);
+    }
+
+    UiDepartmentPresenterBinding(const UiDepartmentPresenterBinding&) = delete;
+    UiDepartmentPresenterBinding& operator=(const UiDepartmentPresenterBinding&) = delete;
+
+private:
+    UiController& controller_;
+};
+
+class UiShiftPresenterBinding final {
+public:
+    UiShiftPresenterBinding(UiController& controller,
+                            smart_attendance::ui::ShiftPresenter& presenter)
+        : controller_(controller) {
+        controller_.configureShiftPresenter(&presenter);
+    }
+    ~UiShiftPresenterBinding() { controller_.configureShiftPresenter(nullptr); }
+    UiShiftPresenterBinding(const UiShiftPresenterBinding&) = delete;
+    UiShiftPresenterBinding& operator=(const UiShiftPresenterBinding&) = delete;
+private:
+    UiController& controller_;
+};
+
+class UiAttendanceQueryPresenterBinding final {
+public:
+    explicit UiAttendanceQueryPresenterBinding(
+        UiController& controller,
+        smart_attendance::ui::AttendanceQueryPresenter& presenter)
+        : controller_(controller) {
+        controller_.configureAttendanceQueryPresenter(&presenter);
+    }
+    ~UiAttendanceQueryPresenterBinding() {
+        controller_.configureAttendanceQueryPresenter(nullptr);
+    }
+    UiAttendanceQueryPresenterBinding(const UiAttendanceQueryPresenterBinding&) = delete;
+    UiAttendanceQueryPresenterBinding& operator=(const UiAttendanceQueryPresenterBinding&) = delete;
+private:
+    UiController& controller_;
+};
+
+class UiMaintenancePresenterBinding final {
+public:
+    explicit UiMaintenancePresenterBinding(
+        UiController& controller,
+        smart_attendance::ui::MaintenancePresenter& presenter)
+        : controller_(controller) {
+        controller_.configureMaintenancePresenter(&presenter);
+    }
+    ~UiMaintenancePresenterBinding() {
+        controller_.configureMaintenancePresenter(nullptr);
+    }
+    UiMaintenancePresenterBinding(const UiMaintenancePresenterBinding&) = delete;
+    UiMaintenancePresenterBinding& operator=(const UiMaintenancePresenterBinding&) = delete;
+private:
+    UiController& controller_;
+};
+
+class UiSystemInfoPresenterBinding final {
+public:
+    UiSystemInfoPresenterBinding(
+        UiController& controller,
+        smart_attendance::ui::SystemInfoPresenter& presenter)
+        : controller_(controller) {
+        controller_.configureSystemInfoPresenter(&presenter);
+    }
+    ~UiSystemInfoPresenterBinding() {
+        controller_.configureSystemInfoPresenter(nullptr);
+    }
+    UiSystemInfoPresenterBinding(const UiSystemInfoPresenterBinding&) = delete;
+    UiSystemInfoPresenterBinding& operator=(const UiSystemInfoPresenterBinding&) = delete;
 private:
     UiController& controller_;
 };
@@ -111,27 +224,6 @@ const char* runErrorMessage(smart_attendance::app::ApplicationRunError error) {
     return "未知主循环错误";
 }
 
-bool exportUserReport(int userId,
-                      const std::string& startDate,
-                      const std::string& endDate) {
-    return UiController::getInstance()->exportUserReport(
-        userId, startDate, endDate);
-}
-
-bool exportCustomReport(const std::string& startDate,
-                        const std::string& endDate) {
-    return UiController::getInstance()->exportCustomReport(
-        startDate, endDate);
-}
-
-bool exportEmployeeSettings() {
-    return UiController::getInstance()->exportEmployeeSettings();
-}
-
-bool importEmployeeSettings(int& invalidTimeCount) {
-    return UiController::getInstance()->importEmployeeSettings(&invalidTimeCount);
-}
-
 void initializeUi() {
     std::cout << ">>> 初始化 UI 层..." << std::endl;
     ui_init();
@@ -139,7 +231,7 @@ void initializeUi() {
 }
 
 bool shouldStopApplication() {
-    return g_program_should_exit;
+    return g_program_should_exit != 0;
 }
 
 void runUiIteration() {
@@ -166,8 +258,8 @@ void runUiIteration() {
 
 // 捕获 Ctrl+C 信号，防止终端关不掉
 void signal_handler(int signum) {
-    std::cout << "\n[System] 捕获中断信号 (" << signum << ")，正在退出..." << std::endl;
-    g_program_should_exit = true;
+    (void)signum;
+    g_program_should_exit = 1;
 }
 
 /**
@@ -222,8 +314,9 @@ void disable_system_screensaver() {
 int main(int argc, char* argv[]) {
     (void)argc;
 
-    // 注册信号处理 (Ctrl+C)
+    // 信号处理器只设置原子标志，资源释放由 Application 主线程完成。
     signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     //  程序启动第一件事：禁用休眠
     disable_system_screensaver();
@@ -246,25 +339,55 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
+    auto platformDevices = std::move(platformResult).value();
+    UiController uiController;
+    ui_configure_controller(uiController);
+    smart_attendance::storage::sqlite::LegacyReportDataSource reportDataSource;
+    smart_attendance::storage::sqlite::LegacyFaceDataRepository faceDataRepository;
+    smart_attendance::storage::sqlite::LegacyEmployeeSettingsImportRepository
+        employeeSettingsImportRepository;
+    smart_attendance::storage::sqlite::LegacySystemInfoRepository
+        systemInfoRepository;
+    smart_attendance::services::SystemInfoService systemInfoService(
+        systemInfoRepository);
+    smart_attendance::ui::SystemInfoPresenter systemInfoPresenter(
+        systemInfoService);
+    smart_attendance::services::ReportService reportService(
+        *platformDevices.storage,
+        reportDataSource,
+        [&employeeSettingsImportRepository](int& invalidTimeCount) {
+            return uiImportEmployeeSettings(
+                employeeSettingsImportRepository, &invalidTimeCount);
+        });
+
     smart_attendance::app::Application application(
         {data_init, data_close},
         {initializeUi, ui_shutdown},
         {shouldStopApplication, runUiIteration},
         {business_init, business_shutdown},
-        exportUserReport,
-        exportCustomReport,
-        exportEmployeeSettings,
-        importEmployeeSettings,
+        [&reportService](int userId, const std::string& startDate,
+                         const std::string& endDate) {
+            return reportService.exportUserReport(userId, startDate, endDate);
+        },
+        [&reportService](const std::string& startDate,
+                         const std::string& endDate) {
+            return reportService.exportCustomReport(startDate, endDate);
+        },
+        [&reportService]() { return reportService.exportEmployeeSettings(); },
+        [&reportService](int& invalidTimeCount) {
+            return reportService.importEmployeeSettings(invalidTimeCount);
+        },
         {uiRunMonitorTask, uiWakeMonitorTask},
         {uiRunFrameDeliveryTask, nullptr},
         {business_run_capture_task, business_wake_capture_task},
         {business_run_database_writer_task,
          business_wake_database_writer_task},
-        std::move(platformResult).value(),
+        std::move(platformDevices),
         runtimeDirectory);
     business_configure_punch_service(application.punchService());
     business_configure_face_recognition_engine(
         application.faceRecognitionEngine());
+    business_configure_face_data_repository(faceDataRepository);
     business_configure_platform_devices(
         application.camera(), application.rtc());
     ui_configure_platform(application.display(), application.keypad());
@@ -281,7 +404,24 @@ int main(int argc, char* argv[]) {
     std::cout << "[OK] 运行时文件目录: "
               << application.runtimeDirectory().string() << std::endl;
     UiEmployeeLookupPresenterBinding employeeLookupPresenterBinding(
+        uiController,
         application.employeeLookupPresenter());
+    UiSettingsPresenterBinding settingsPresenterBinding(
+        uiController,
+        application.settingsPresenter());
+    UiDepartmentPresenterBinding departmentPresenterBinding(
+        uiController,
+        application.departmentPresenter());
+    UiShiftPresenterBinding shiftPresenterBinding(
+        uiController, application.shiftPresenter());
+    UiAttendanceQueryPresenterBinding attendanceQueryPresenterBinding(
+        uiController,
+        application.attendanceQueryPresenter());
+    UiMaintenancePresenterBinding maintenancePresenterBinding(
+        uiController,
+        application.maintenancePresenter());
+    UiSystemInfoPresenterBinding systemInfoPresenterBinding(
+        uiController, systemInfoPresenter);
 
     // 3. 后初始化业务层 (再启动线程，确保发出的第一个请求都有消费者)
     std::cout << ">>> 初始化业务层..." << std::endl;

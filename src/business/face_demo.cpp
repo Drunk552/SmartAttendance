@@ -4,7 +4,7 @@
 #include "biometric/face/face_recognition_engine.h"
 #include "business/face_capture_worker.h"
 #include "business/face_punch_worker.h"
-#include "db_storage.h"
+#include "storage/repository/face_data_repository.h"
 #include "hal/camera.h"
 #include "hal/rtc.h"
 #include "services/punch_service.h"
@@ -44,6 +44,8 @@ static smart_attendance::biometric::face::IFaceRecognitionEngine*
     g_recognition_engine = nullptr;
 static smart_attendance::hal::ICamera* g_camera = nullptr;
 static smart_attendance::hal::IRtc* g_rtc = nullptr;
+static smart_attendance::storage::IFaceDataRepository*
+    g_face_data_repository = nullptr;
 static std::unique_ptr<smart_attendance::business::FaceCaptureWorker>
     g_capture_worker;
 
@@ -169,7 +171,8 @@ void business_run_capture_task(
 
 bool business_init() {
     if (!g_punch_worker.isConfigured() || g_recognition_engine == nullptr ||
-        g_camera == nullptr || g_rtc == nullptr) {
+        g_camera == nullptr || g_rtc == nullptr ||
+        g_face_data_repository == nullptr) {
         std::cerr << "[Business] Face engine, camera, RTC and PunchService must be configured "
                      "before initialization."
                   << std::endl;
@@ -195,7 +198,8 @@ bool business_init() {
     
     // 系统启动时，静默清理 30 天前的旧打卡抓拍图，释放磁盘空间
     std::cout << ">>> [Business] 正在检查磁盘空间与过期打卡抓拍图..." << std::endl;
-    int cleaned_images = db_cleanup_old_attendance_images(30); // 30天
+    int cleaned_images =
+        g_face_data_repository->cleanupOldAttendanceImages(30); // 30天
     if (cleaned_images > 0) {
         std::cout << ">>> [Business] 自动清理完毕！共删除 " << cleaned_images << " 张过期图片。" << std::endl;
     } else {
@@ -217,7 +221,8 @@ bool business_init() {
         std::cout << ">>> [Business] 发现本地模型 " << MODEL_FILE
                   << "，正在快速加载..." << std::endl;
         if (g_recognition_engine->loadModel(MODEL_FILE)) {
-            std::vector<UserData> users_info = db_get_all_users_light();
+            std::vector<UserData> users_info =
+                g_face_data_repository->listUsersLight();
             for (const auto& u : users_info) {
                 if (names.size() <= u.id) {
                     names.resize(u.id + 1, "Unknown");
@@ -238,7 +243,7 @@ bool business_init() {
     if (!model_loaded) {
         std::cout << ">>> [Business] 开始执行全量训练 (读取本地头像文件)..." << std::endl;
         
-        std::vector<UserData> users = db_get_all_users(); 
+        std::vector<UserData> users = g_face_data_repository->listUsers();
         
         if (!users.empty()) {
             for (const auto& u : users) {
@@ -319,6 +324,11 @@ void business_configure_platform_devices(
     smart_attendance::hal::IRtc& rtc) noexcept {
     g_camera = &camera;
     g_rtc = &rtc;
+}
+
+void business_configure_face_data_repository(
+    smart_attendance::storage::IFaceDataRepository& repository) noexcept {
+    g_face_data_repository = &repository;
 }
 
 void business_shutdown() {
@@ -526,11 +536,11 @@ bool business_get_display_frame(void* buffer, int w, int h) {
 /**
  * @brief 获取用户总数并刷新缓存（供 UI 列表使用）
  * @return 当前用户数量
- * @note 会调用 db_get_all_users() 刷新 g_user_cache
+ * @note 通过注入的 FaceDataRepository 刷新 g_user_cache
  */
 int business_get_user_count(void) {
     // 每次进入列表页时，从数据库重新拉取一次数据
-    g_user_cache = db_get_all_users();
+    g_user_cache = g_face_data_repository->listUsers();
     return (int)g_user_cache.size();
 } 
 
@@ -562,7 +572,7 @@ bool business_get_user_at(int index, int *id_out, char *name_buf, int len) {
  * @brief 使用当前帧注册新用户（将原图作为人脸数据保存）
  * @param name 新用户姓名
  * @return true 成功注册并写入数据库；false 失败（无帧或 DB 错误）
- * @note 此接口会调用 db_add_user(current_frame) 并刷新用户缓存
+ * @note 通过注入的 FaceDataRepository 写入并刷新用户缓存
  */
 bool business_register_user(const char* name, int dept_id) {
 
@@ -587,7 +597,7 @@ bool business_register_user(const char* name, int dept_id) {
     u.card_id = "";
 
     // 3. 调用数据层接口 (自动处理图片编码和存储)
-    int new_id = db_add_user(u, current_frame);
+    int new_id = g_face_data_repository->addUser(u, current_frame);
     
     if (new_id > 0) {
         std::cout << "[Business] Registration Success! ID: " << new_id << "\n";
@@ -669,7 +679,7 @@ bool business_update_user_face(int user_id) {
 
     // 3. 调用数据层接口更新数据库 (调用我们上一轮加的函数)
     // 注意：确保该文件包含了 db_storage.h 并且能识别 db_update_user_face
-    if (db_update_user_face(user_id, current_frame)) {
+    if (g_face_data_repository->updateUserFace(user_id, current_frame)) {
         std::cout << "[Business] DB Face Update Success! ID: " << user_id << "\n";
         
         // ========================================================
@@ -723,7 +733,7 @@ bool business_update_user_face(int user_id) {
 /**
  * @brief 获取考勤记录数量并刷新缓存（查询最近所有记录并保留前 50 条）
  * @return 缓存中的记录数（最多 50）
- * @note 调用 db_get_records(0, 2100 年) 并将结果保存到 g_record_cache
+ * @note 通过注入的 FaceDataRepository 查询并保存到 g_record_cache
  */
 int business_get_record_count(void) {
     // 查询最近 100 条记录 (从 0 到 2099年)
@@ -731,7 +741,7 @@ int business_get_record_count(void) {
     long long start = 0;
     long long end = 4102444800; // 2100年
     
-    g_record_cache = db_get_records(start, end);
+    g_record_cache = g_face_data_repository->records(start, end);
     
     // 如果记录太多，只取前 50 条显示，防止列表过长卡顿
     if (g_record_cache.size() > 50) {

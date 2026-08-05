@@ -15,6 +15,16 @@
 namespace ui {
 namespace record_query {
 
+static UiController* controller_ = nullptr;
+
+void configureController(UiController& controller) noexcept {
+    controller_ = &controller;
+}
+
+static UiController& controller() {
+    return *controller_;
+}
+
 // ================= [内部状态: 屏幕指针] =================
 static lv_obj_t *scr_query = nullptr;//记录查询主菜单界面
 static lv_obj_t *scr_job_query = nullptr;//工号查询界面
@@ -53,6 +63,8 @@ static time_t g_job_query_end_ts = 0;//获取工号查询结束时间
 static int g_time_query_uid = -1;// 告诉底层：我要查所有人
 static time_t g_time_query_start_ts = 0;//获取时间查询开始时间
 static time_t g_time_query_end_ts = 0;//获取时间查询结束时间
+static std::size_t g_job_query_page = 0;
+static std::size_t g_time_query_page = 0;
 
 // ===================== 辅助函数 =================
 
@@ -60,31 +72,31 @@ static time_t g_time_query_end_ts = 0;//获取时间查询结束时间
 static bool is_valid_date_format(const std::string& date) {
     // 1. 检查长度是否严格为 10位 (例如 2026-01-01)
     if (date.length() != 10) return false;
-    
+
     // 2. 检查横杠的位置
     if (date[4] != '-' || date[7] != '-') return false;
-    
+
     // 3. 检查其他位置是否都是数字
     for (int i = 0; i < 10; ++i) {
         if (i == 4 || i == 7) continue;
         if (!isdigit(date[i])) return false;
     }
-    
+
     // 4. 提取年月日进行简单的逻辑校验
     int year = std::stoi(date.substr(0, 4));
     int month = std::stoi(date.substr(5, 2));
     int day = std::stoi(date.substr(8, 2));
-    
+
     if (year < 2000 || year > 2100) return false; // 限制合理年份
     if (month < 1 || month > 12) return false;    // 月份 1-12
     if (day < 1 || day > 31) return false;        // 天数 1-31 (粗略校验即可，防止崩溃)
-    
+
     return true;
 }
 
 // 辅助函数：获取当前系统日期，格式为 YYYY-MM-DD
 static std::string get_current_date_str() {
-    time_t now = UiController::getInstance()->getCurrentUnixTime();
+    time_t now = controller().getCurrentUnixTime();
     struct tm tstruct;
     char buf[20];
     tstruct = *localtime(&now);
@@ -120,9 +132,9 @@ static void show_export_result(lv_obj_t* spinner, bool success) {
     }
 
     if (success) {
-        show_popup_msg("下载考勤报表失败", "报表下载成功!\n报表已下载至U盘!", nullptr, "我知道了");
+        show_popup_msg("下载考勤报表成功", "报表下载成功!\n报表已下载至U盘!", nullptr, "我知道了");
     } else {
-        show_popup_msg("下载考勤报表成功", "报表下载失败!\n请检查设备!", nullptr, "我知道了");
+        show_popup_msg("下载考勤报表失败", "报表下载失败!\n请检查设备!", nullptr, "我知道了");
     }
 }
 
@@ -164,7 +176,7 @@ static void record_query_event_cb(lv_event_t *e) {
 
     // 1. 导航与返回逻辑 (仅处理按键)
     if (code == LV_EVENT_KEY) {
-        
+
         // --- ESC 返回 ---
         if (key == LV_KEY_ESC) {
             ui::menu::load_menu_screen(); // 返回上一级系统主菜单
@@ -183,7 +195,7 @@ static void record_query_event_cb(lv_event_t *e) {
 
     // 2. 触发逻辑 (兼容 触摸点击 和 键盘回车)
     if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
-        
+
         lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
 
         // 获取 index (放在这里获取更安全)
@@ -192,7 +204,7 @@ static void record_query_event_cb(lv_event_t *e) {
 
         if (index == 0) {
             load_job_query_screen(); //工号查询
-        } 
+        }
         else if (index == 1) {
             load_time_query_screen();//时间查询
         }
@@ -255,7 +267,7 @@ static void job_query_event_cb(lv_event_t *e) {
 
     // 1. 导航与返回逻辑 (仅处理按键)
     if (code == LV_EVENT_KEY) {
-        
+
         // --- ESC 返回 ---
         if (key == LV_KEY_ESC) {
             load_record_query_menu_screen(); // 返回上一级记录查询界面
@@ -274,7 +286,7 @@ static void job_query_event_cb(lv_event_t *e) {
 
     // 2. 触发逻辑 (兼容 触摸点击 和 键盘回车)
     if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
-        
+
         lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
 
         // 获取 index (放在这里获取更安全)
@@ -283,7 +295,7 @@ static void job_query_event_cb(lv_event_t *e) {
 
         if (index == 0) {
             load_browse_job_query_screen(); //浏览工号查询界面
-        } 
+        }
         else if (index == 1) {
             load_download_job_query_screen ();//下载工号查询界面
         }
@@ -337,7 +349,7 @@ void load_job_query_screen() {
 // 浏览工号查询事件回调
 static void browse_job_query_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e);
 
     uint32_t key = 0;
     if(code == LV_EVENT_KEY) {
@@ -346,7 +358,7 @@ static void browse_job_query_event_cb(lv_event_t *e) {
 
     // 1. 处理 ESC 键退出 (返回工号查询界面)
     if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        lv_indev_wait_release(lv_indev_get_act()); 
+        lv_indev_wait_release(lv_indev_get_act());
         load_job_query_screen(); //工号查询界面
         return;
     }
@@ -361,33 +373,33 @@ static void browse_job_query_event_cb(lv_event_t *e) {
     else if (current_target == g_ta_dl_browse_job_start) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_browse_job_uid); // ↑跳回工号
-            return; 
+            return;
         } else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_ta_dl_browse_job_end); // ↓跳到结束时间
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【结束时间输入框】 =================
     else if (current_target == g_ta_dl_browse_job_end) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_browse_job_start); // ↑跳回开始时间
-            return; 
+            return;
         } else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_btn_dl_browse_job_confirm); // ↓跳到确认按钮
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【确认按钮】 =================
     else if (current_target == g_btn_dl_browse_job_confirm) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_browse_job_end); // ↑跳回结束时间
-            return; 
+            return;
         }
 
         // 按下确认按钮
         if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
             lv_indev_wait_release(lv_indev_get_act());
-            
+
             std::string uid_txt = lv_textarea_get_text(g_ta_dl_browse_job_uid);
             std::string s_txt = lv_textarea_get_text(g_ta_dl_browse_job_start);
             std::string e_txt = lv_textarea_get_text(g_ta_dl_browse_job_end);
@@ -397,8 +409,8 @@ static void browse_job_query_event_cb(lv_event_t *e) {
                 show_popup_msg("浏览工号查询失败", "工号和时间都不能为空!\n请输入工号和时间!", nullptr, "我知道了");
                 return;
             }
-            
-            // 2. 格式校验 
+
+            // 2. 格式校验
             if (!is_valid_date_format(s_txt) || !is_valid_date_format(e_txt)) {
                 show_popup_msg("浏览工号查询失败", "格式错误！\n日期格式必须为:\nYYYY-MM-DD\n(例如 2026-01-01)", nullptr, "我知道了");
                 lv_group_focus_obj(is_valid_date_format(s_txt) ? g_ta_dl_browse_job_end : g_ta_dl_browse_job_start);
@@ -418,10 +430,10 @@ static void browse_job_query_event_cb(lv_event_t *e) {
                 lv_group_focus_obj(g_ta_dl_browse_job_start);
                 return;
             }
-            
+
             int uid = std::stoi(uid_txt); // 将工号转为整型
 
-            if (!UiController::getInstance()->checkUserExists(uid)) { 
+            if (!controller().checkUserExists(uid)) {
                 show_popup_msg("浏览工号查询失败", "工号错误!\n 该工号不存在,请检查工号! ", nullptr, "我知道了");
                 lv_group_focus_obj(g_ta_dl_browse_job_uid); // 焦点移回工号输入框，方便用户重输
                 return;
@@ -430,6 +442,7 @@ static void browse_job_query_event_cb(lv_event_t *e) {
             g_job_query_uid = uid;
             g_job_query_start_ts = convert_date_to_timestamp(s_txt, false); // 当天 00:00:00
             g_job_query_end_ts = convert_date_to_timestamp(e_txt, true);    // 当天 23:59:59
+            g_job_query_page = 0;
 
             load_browse_job_query_result_screen ();//跳到四级界面，浏览查询结果界面
 
@@ -483,7 +496,7 @@ void load_browse_job_query_screen() {
 
     // 4. 确认浏览按钮
     g_btn_dl_browse_job_confirm = create_form_btn(form_cont, "确认浏览", browse_job_query_event_cb, nullptr);
-    lv_obj_add_event_cb(g_btn_dl_browse_job_confirm, browse_job_query_event_cb, LV_EVENT_KEY, nullptr); 
+    lv_obj_add_event_cb(g_btn_dl_browse_job_confirm, browse_job_query_event_cb, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(g_btn_dl_browse_job_confirm);
 
     // 默认聚焦在工号输入框
@@ -514,17 +527,31 @@ static void browse_job_query_result_event_cb(lv_event_t *e) {
             load_browse_job_query_screen(); // 返回浏览工号查询界面
             lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
-         } 
+         }
         else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下或向右导航
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
-        } 
+        }
         else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
             lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上或向左导航
             return;
          }
     }
-    
+
+}
+
+static void job_page_event_cb(lv_event_t* e) {
+    const auto code = lv_event_get_code(e);
+    if (code != LV_EVENT_CLICKED &&
+        !(code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ENTER)) {
+        return;
+    }
+    const auto delta = static_cast<int>(reinterpret_cast<intptr_t>(
+        lv_event_get_user_data(e)));
+    if (delta < 0 && g_job_query_page > 0) --g_job_query_page;
+    if (delta > 0) ++g_job_query_page;
+    lv_indev_wait_release(lv_indev_get_act());
+    load_browse_job_query_result_screen();
 }
 
 // 浏览工号查询结果界面实现
@@ -551,7 +578,7 @@ void load_browse_job_query_result_screen() {
     // 将内容区改为 Flex 垂直布局，方便表头和列表堆叠
     // ==========================================
     lv_obj_set_flex_flow(parts.content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(parts.content, 5, 0); // 内容区内边距 
+    lv_obj_set_style_pad_all(parts.content, 5, 0); // 内容区内边距
     lv_obj_set_style_pad_gap(parts.content, 5, 0); // 表头和下方列表的间距
 
     // ==========================================
@@ -560,8 +587,8 @@ void load_browse_job_query_result_screen() {
     lv_obj_t * header_row = lv_obj_create(parts.content);
     lv_obj_set_width(header_row, LV_PCT(100));
     lv_obj_set_height(header_row, 30);
-    lv_obj_set_style_bg_opa(header_row, LV_OPA_TRANSP, 0); 
-    lv_obj_set_style_border_width(header_row, 0, 0);       
+    lv_obj_set_style_bg_opa(header_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(header_row, 0, 0);
     lv_obj_set_style_pad_all(header_row, 0, 0);
 
     // 开启横向排列，上下居中
@@ -603,25 +630,26 @@ void load_browse_job_query_result_screen() {
     lv_obj_set_flex_flow(obj_browse_view, LV_FLEX_FLOW_COLUMN); // 开启垂直滚动的流式布局
 
     // 通过 Controller 获取特定工号、特定日期的打卡记录
-    std::vector<AttendanceRecord> records = UiController::getInstance()->getRecords(g_job_query_uid, g_job_query_start_ts, g_job_query_end_ts);
+    const auto page = controller().getRecordPage(
+        g_job_query_uid, g_job_query_start_ts, g_job_query_end_ts,
+        g_job_query_page);
 
-    if (records.empty()) {
+    if (page.records.empty()) {
         // 无数据时的占位提示
         lv_obj_t* empty_label = lv_label_create(parts.content);
         lv_label_set_text(empty_label, "该员工当天无打卡记录");
         lv_obj_add_style(empty_label, &style_text_cn, 0);
         lv_obj_center(empty_label);
-        
+
         // 绑定一个隐形的按键事件，确保按 ESC 还能退出去
         lv_obj_add_event_cb(parts.screen, browse_job_query_result_event_cb, LV_EVENT_KEY, nullptr);
     } else {
         // 遍历记录，生成按钮
-        for (size_t i = 0; i < records.size(); i++) {
-            const auto& rec = records[i];
+        for (const auto& rec : page.records) {
 
             // 1. 解析时间戳
             // 先将 long long 转成标准时间类型 time_t
-            time_t t_val = static_cast<time_t>(rec.timestamp); 
+            time_t t_val = static_cast<time_t>(rec.timestamp);
             // 再传地址给 localtime
             struct tm* tm_info = localtime(&t_val);
             char date_buf[32]; // 存放 年-月-日
@@ -639,7 +667,7 @@ void load_browse_job_query_result_screen() {
 
             // 4. 左侧组件：工号
             lv_obj_t* lbl_uid = lv_label_create(btn);
-            lv_label_set_text_fmt(lbl_uid, "%d", rec.user_id);
+            lv_label_set_text_fmt(lbl_uid, "%d", rec.employeeId);
             lv_obj_add_style(lbl_uid, &style_text_cn, 0);
 
             // 5. 中间组件：日期 (利用 flex_grow 自动拉伸填满中间区域，并设置文字居中)
@@ -656,6 +684,33 @@ void load_browse_job_query_result_screen() {
 
             // 7. 加入按键物理组
             UiManager::getInstance()->addObjToGroup(btn);
+        }
+
+
+        if (page.hasPrevious || page.hasNext) {
+            lv_obj_t* pageRow = lv_obj_create(parts.content);
+            lv_obj_set_size(pageRow, LV_PCT(100), 42);
+            lv_obj_set_style_bg_opa(pageRow, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(pageRow, 0, 0);
+            lv_obj_set_flex_flow(pageRow, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(pageRow, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            if (page.hasPrevious) {
+                lv_obj_t* previous = create_form_btn(
+                    pageRow, "上一页", job_page_event_cb,
+                    reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
+                UiManager::getInstance()->addObjToGroup(previous);
+            }
+            lv_obj_t* label = lv_label_create(pageRow);
+            lv_label_set_text_fmt(label, "第 %u 页",
+                                  static_cast<unsigned>(page.pageIndex + 1));
+            lv_obj_add_style(label, &style_text_cn, 0);
+            if (page.hasNext) {
+                lv_obj_t* next = create_form_btn(
+                    pageRow, "下一页", job_page_event_cb,
+                    reinterpret_cast<void*>(static_cast<intptr_t>(1)));
+                UiManager::getInstance()->addObjToGroup(next);
+            }
         }
 
         // 默认聚焦第一条记录
@@ -677,7 +732,7 @@ void load_browse_job_query_result_screen() {
 // 下载工号查询事件回调 (个人)
 static void download_job_query_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e);
 
     uint32_t key = 0;
     if(code == LV_EVENT_KEY) {
@@ -686,7 +741,7 @@ static void download_job_query_event_cb(lv_event_t *e) {
 
     // 1. 处理 ESC 键退出 (返回工号查询界面)
     if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        lv_indev_wait_release(lv_indev_get_act()); 
+        lv_indev_wait_release(lv_indev_get_act());
         load_job_query_screen ();//工号查询界面
         return;
     }
@@ -702,33 +757,33 @@ static void download_job_query_event_cb(lv_event_t *e) {
     else if (current_target == g_ta_dl_download_job_start) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_download_job_uid); // ↑跳回工号
-            return; 
+            return;
         } else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_ta_dl_download_job_end); // ↓跳到结束时间
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【结束时间输入框】 =================
     else if (current_target == g_ta_dl_download_job_end) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_download_job_start); // ↑跳回开始时间
-            return; 
+            return;
         } else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_btn_dl_download_job_confirm); // ↓跳到确认按钮
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【下载按钮】 =================
     else if (current_target == g_btn_dl_download_job_confirm) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_download_job_end); // ↑跳回结束时间
-            return; 
+            return;
         }
 
         // 按下确认下载
         if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
             lv_indev_wait_release(lv_indev_get_act());
-            
+
             std::string uid_txt = lv_textarea_get_text(g_ta_dl_download_job_uid);
             std::string s_txt = lv_textarea_get_text(g_ta_dl_download_job_start);
             std::string e_txt = lv_textarea_get_text(g_ta_dl_download_job_end);
@@ -738,8 +793,8 @@ static void download_job_query_event_cb(lv_event_t *e) {
                 show_popup_msg("下载个人考勤报表失败", "工号和时间都不能为空!\n请输入工号和时间!", nullptr, "我知道了");
                 return;
             }
-            
-            // 2. 格式校验 
+
+            // 2. 格式校验
             if (!is_valid_date_format(s_txt) || !is_valid_date_format(e_txt)) {
                 show_popup_msg("下载个人考勤报表失败", "格式错误！\n日期格式必须为:\nYYYY-MM-DD\n(例如 2026-01-01)", nullptr, "我知道了");
                 lv_group_focus_obj(is_valid_date_format(s_txt) ? g_ta_dl_download_job_end : g_ta_dl_download_job_start);
@@ -759,10 +814,10 @@ static void download_job_query_event_cb(lv_event_t *e) {
                 lv_group_focus_obj(g_ta_dl_download_job_start);
                 return;
             }
-            
+
             int uid = std::stoi(uid_txt); // 将工号转为整型
 
-            if (!UiController::getInstance()->checkUserExists(uid)) { 
+            if (!controller().checkUserExists(uid)) {
                 show_popup_msg("下载个人考勤报表失败", "工号错误!\n 该工号不存在,请检查工号! ", nullptr, "我知道了");
                 lv_group_focus_obj(g_ta_dl_download_job_uid); // 焦点移回工号输入框，方便用户重输
                 return;
@@ -839,7 +894,7 @@ void load_download_job_query_screen() {
 
     // 4. 确认下载按钮
     g_btn_dl_download_job_confirm = create_form_btn(form_cont, "确认下载", download_job_query_event_cb, nullptr);
-    lv_obj_add_event_cb(g_btn_dl_download_job_confirm, download_job_query_event_cb, LV_EVENT_KEY, nullptr); 
+    lv_obj_add_event_cb(g_btn_dl_download_job_confirm, download_job_query_event_cb, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(g_btn_dl_download_job_confirm);
 
     // 默认聚焦在工号输入框
@@ -867,7 +922,7 @@ static void time_query_event_cb(lv_event_t *e) {
 
     // 1. 导航与返回逻辑 (仅处理按键)
     if (code == LV_EVENT_KEY) {
-        
+
         // --- ESC 返回 ---
         if (key == LV_KEY_ESC) {
             load_record_query_menu_screen(); // 返回上一级记录查询界面
@@ -886,7 +941,7 @@ static void time_query_event_cb(lv_event_t *e) {
 
     // 2. 触发逻辑 (兼容 触摸点击 和 键盘回车)
     if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
-        
+
         lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
 
         // 获取 index (放在这里获取更安全)
@@ -895,7 +950,7 @@ static void time_query_event_cb(lv_event_t *e) {
 
         if (index == 0) {
             load_browse_time_query_screen();//浏览时间查询界面
-        } 
+        }
         else if (index == 1) {
             load_download_time_query_screen ();//下载时间查询界面
         }
@@ -949,7 +1004,7 @@ void load_time_query_screen() {
 // 浏览时间查询事件回调
 static void browse_time_query_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e);
 
     uint32_t key = 0;
     if(code == LV_EVENT_KEY) {
@@ -958,7 +1013,7 @@ static void browse_time_query_event_cb(lv_event_t *e) {
 
     // 1. 处理 ESC 键退出 (返回工号查询界面)
     if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        lv_indev_wait_release(lv_indev_get_act()); 
+        lv_indev_wait_release(lv_indev_get_act());
         load_job_query_screen(); //工号查询界面
         return;
     }
@@ -969,31 +1024,31 @@ static void browse_time_query_event_cb(lv_event_t *e) {
             lv_group_focus_obj(g_ta_dl_browse_time_end);
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【结束时间输入框】 =================
     else if (current_target == g_ta_dl_browse_time_end) {
         // 按下↑键，跳回开始时间
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_browse_time_start);
-            return; 
+            return;
         }
         // 按下回车或↓键，跳到确认浏览按钮
         else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_btn_dl_browse_time_confirm);
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【确认按钮】 =================
     else if (current_target == g_btn_dl_browse_time_confirm) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_browse_time_end); // ↑跳回结束时间
-            return; 
+            return;
         }
 
         // 按下确认按钮
         if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
             lv_indev_wait_release(lv_indev_get_act());
-            
+
             std::string s_txt = lv_textarea_get_text(g_ta_dl_browse_time_start);
             std::string e_txt = lv_textarea_get_text(g_ta_dl_browse_time_end);
 
@@ -1002,8 +1057,8 @@ static void browse_time_query_event_cb(lv_event_t *e) {
                 show_popup_msg("浏览时间查询失败", "开始时间和结束时间不能为空!\n请输入开始时间和结束时间!", nullptr, "我知道了");
                 return;
             }
-            
-            // 2. 格式校验 
+
+            // 2. 格式校验
             if (!is_valid_date_format(s_txt) || !is_valid_date_format(e_txt)) {
                 show_popup_msg("浏览时间查询失败", "格式错误！\n日期格式必须为:\nYYYY-MM-DD\n(例如 2026-01-01)", nullptr, "我知道了");
                 lv_group_focus_obj(is_valid_date_format(s_txt) ? g_ta_dl_browse_time_end : g_ta_dl_browse_time_start);
@@ -1026,6 +1081,7 @@ static void browse_time_query_event_cb(lv_event_t *e) {
 
             g_time_query_start_ts = convert_date_to_timestamp(s_txt, false); // 当天 00:00:00
             g_time_query_end_ts = convert_date_to_timestamp(e_txt, true);    // 当天 23:59:59
+            g_time_query_page = 0;
 
             load_browse_time_query_result_screen ();//跳到四级界面，浏览时间查询结果界面
         }
@@ -1071,7 +1127,7 @@ void load_browse_time_query_screen() {
 
     // 3. 确认浏览按钮
     g_btn_dl_browse_time_confirm = create_form_btn(form_cont, "确认浏览", browse_job_query_event_cb, nullptr);
-    lv_obj_add_event_cb(g_btn_dl_browse_time_confirm, browse_time_query_event_cb, LV_EVENT_KEY, nullptr); 
+    lv_obj_add_event_cb(g_btn_dl_browse_time_confirm, browse_time_query_event_cb, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(g_btn_dl_browse_time_confirm);
 
     // 默认聚焦在开始时间输入框
@@ -1102,17 +1158,31 @@ static void browse_time_query_result_event_cb(lv_event_t *e) {
             load_browse_time_query_screen(); // 返回浏览时间查询界面
             lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
-         } 
+         }
         else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下或向右导航
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
-        } 
+        }
         else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
             lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上或向左导航
             return;
          }
     }
-    
+
+}
+
+static void time_page_event_cb(lv_event_t* e) {
+    const auto code = lv_event_get_code(e);
+    if (code != LV_EVENT_CLICKED &&
+        !(code == LV_EVENT_KEY && lv_event_get_key(e) == LV_KEY_ENTER)) {
+        return;
+    }
+    const auto delta = static_cast<int>(reinterpret_cast<intptr_t>(
+        lv_event_get_user_data(e)));
+    if (delta < 0 && g_time_query_page > 0) --g_time_query_page;
+    if (delta > 0) ++g_time_query_page;
+    lv_indev_wait_release(lv_indev_get_act());
+    load_browse_time_query_result_screen();
 }
 
 // 浏览时间查询结果界面实现
@@ -1139,7 +1209,7 @@ void load_browse_time_query_result_screen() {
     // 将内容区改为 Flex 垂直布局，方便表头和列表堆叠
     // ==========================================
     lv_obj_set_flex_flow(parts.content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(parts.content, 5, 0); // 内容区内边距 
+    lv_obj_set_style_pad_all(parts.content, 5, 0); // 内容区内边距
     lv_obj_set_style_pad_gap(parts.content, 5, 0); // 表头和下方列表的间距
 
     // ==========================================
@@ -1148,8 +1218,8 @@ void load_browse_time_query_result_screen() {
     lv_obj_t * header_row = lv_obj_create(parts.content);
     lv_obj_set_width(header_row, LV_PCT(100));
     lv_obj_set_height(header_row, 30);
-    lv_obj_set_style_bg_opa(header_row, LV_OPA_TRANSP, 0); 
-    lv_obj_set_style_border_width(header_row, 0, 0);       
+    lv_obj_set_style_bg_opa(header_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(header_row, 0, 0);
     lv_obj_set_style_pad_all(header_row, 0, 0);
 
     // 开启横向排列，上下居中
@@ -1191,25 +1261,26 @@ void load_browse_time_query_result_screen() {
     lv_obj_set_flex_flow(time_browse_view, LV_FLEX_FLOW_COLUMN); // 开启垂直滚动的流式布局
 
     // 通过 Controller 获取特定工号、特定日期的打卡记录
-    std::vector<AttendanceRecord> records = UiController::getInstance()->getRecords(g_time_query_uid, g_time_query_start_ts, g_time_query_end_ts);
+    const auto page = controller().getRecordPage(
+        g_time_query_uid, g_time_query_start_ts, g_time_query_end_ts,
+        g_time_query_page);
 
-    if (records.empty()) {
+    if (page.records.empty()) {
         // 无数据时的占位提示
         lv_obj_t* empty_label = lv_label_create(parts.content);
         lv_label_set_text(empty_label, "该时间段无打卡记录");
         lv_obj_add_style(empty_label, &style_text_cn, 0);
         lv_obj_center(empty_label);
-        
+
         // 绑定一个隐形的按键事件，确保按 ESC 还能退出去
         lv_obj_add_event_cb(parts.screen, browse_time_query_result_event_cb, LV_EVENT_KEY, nullptr);
     } else {
         // 遍历记录，生成按钮
-        for (size_t i = 0; i < records.size(); i++) {
-            const auto& rec = records[i];
+        for (const auto& rec : page.records) {
 
             // 1. 解析时间戳
             // 先将 long long 转成标准时间类型 time_t
-            time_t t_val = static_cast<time_t>(rec.timestamp); 
+            time_t t_val = static_cast<time_t>(rec.timestamp);
             // 再传地址给 localtime
             struct tm* tm_info = localtime(&t_val);
             char date_buf[32]; // 存放 年-月-日
@@ -1227,7 +1298,7 @@ void load_browse_time_query_result_screen() {
 
             // 4. 左侧组件：工号
             lv_obj_t* lbl_uid = lv_label_create(btn);
-            lv_label_set_text_fmt(lbl_uid, "%d", rec.user_id);
+            lv_label_set_text_fmt(lbl_uid, "%d", rec.employeeId);
             lv_obj_add_style(lbl_uid, &style_text_cn, 0);
 
             // 5. 中间组件：日期 (利用 flex_grow 自动拉伸填满中间区域，并设置文字居中)
@@ -1244,6 +1315,33 @@ void load_browse_time_query_result_screen() {
 
             // 7. 加入按键物理组
             UiManager::getInstance()->addObjToGroup(btn);
+        }
+
+
+        if (page.hasPrevious || page.hasNext) {
+            lv_obj_t* pageRow = lv_obj_create(parts.content);
+            lv_obj_set_size(pageRow, LV_PCT(100), 42);
+            lv_obj_set_style_bg_opa(pageRow, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(pageRow, 0, 0);
+            lv_obj_set_flex_flow(pageRow, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(pageRow, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            if (page.hasPrevious) {
+                lv_obj_t* previous = create_form_btn(
+                    pageRow, "上一页", time_page_event_cb,
+                    reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
+                UiManager::getInstance()->addObjToGroup(previous);
+            }
+            lv_obj_t* label = lv_label_create(pageRow);
+            lv_label_set_text_fmt(label, "第 %u 页",
+                                  static_cast<unsigned>(page.pageIndex + 1));
+            lv_obj_add_style(label, &style_text_cn, 0);
+            if (page.hasNext) {
+                lv_obj_t* next = create_form_btn(
+                    pageRow, "下一页", time_page_event_cb,
+                    reinterpret_cast<void*>(static_cast<intptr_t>(1)));
+                UiManager::getInstance()->addObjToGroup(next);
+            }
         }
 
         // 默认聚焦第一条记录
@@ -1265,7 +1363,7 @@ void load_browse_time_query_result_screen() {
 // 下载时间查询事件回调 (全员)
 static void download_time_query_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e);
 
     uint32_t key = 0;
     if(code == LV_EVENT_KEY) {
@@ -1274,7 +1372,7 @@ static void download_time_query_event_cb(lv_event_t *e) {
 
     // 1. 处理 ESC 键退出 (返回工号查询界面)
     if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        lv_indev_wait_release(lv_indev_get_act()); 
+        lv_indev_wait_release(lv_indev_get_act());
         load_time_query_screen ();//时间查询界面
         return;
     }
@@ -1286,31 +1384,31 @@ static void download_time_query_event_cb(lv_event_t *e) {
             lv_group_focus_obj(g_ta_dl_download_time_end);
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【结束时间输入框】 =================
     else if (current_target == g_ta_dl_download_time_end) {
         // 按下↑键，跳回开始时间
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_download_time_start);
-            return; 
+            return;
         }
         // 按下回车或↓键，跳到确认浏览按钮
         else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_btn_dl_download_time_confirm);
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【下载按钮】 =================
     else if (current_target == g_btn_dl_download_time_confirm) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_download_time_end); // ↑跳回结束时间
-            return; 
+            return;
         }
 
         // 按下确认下载
         if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
             lv_indev_wait_release(lv_indev_get_act());
-            
+
             std::string s_txt = lv_textarea_get_text(g_ta_dl_download_time_start);
             std::string e_txt = lv_textarea_get_text(g_ta_dl_download_time_end);
 
@@ -1327,7 +1425,7 @@ static void download_time_query_event_cb(lv_event_t *e) {
                 lv_group_focus_obj(is_valid_date_format(s_txt) ? g_ta_dl_download_time_end : g_ta_dl_download_time_start);
                 return;
             }
-            
+
             // ================== 业务逻辑时间穿越校验  ==================
             std::string current_date = get_current_date_str();
 
@@ -1406,7 +1504,7 @@ void load_download_time_query_screen() {
 
     // 3. 确认下载按钮
     g_btn_dl_download_time_confirm = create_form_btn(form_cont, "确认下载", download_time_query_event_cb, nullptr);
-    lv_obj_add_event_cb(g_btn_dl_download_time_confirm, download_time_query_event_cb, LV_EVENT_KEY, nullptr); 
+    lv_obj_add_event_cb(g_btn_dl_download_time_confirm, download_time_query_event_cb, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(g_btn_dl_download_time_confirm);
 
     // 默认聚焦在工号输入框

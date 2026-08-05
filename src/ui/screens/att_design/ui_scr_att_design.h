@@ -3,6 +3,9 @@
 
 #include <lvgl.h>
 
+class UiController;
+namespace ui::att_design { void configureController(UiController& controller) noexcept; }
+
 namespace ui {
 namespace att_design {
 

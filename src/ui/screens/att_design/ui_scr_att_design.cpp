@@ -9,6 +9,16 @@
 namespace ui {
 namespace att_design {
 
+static UiController* controller_ = nullptr;
+
+void configureController(UiController& controller) noexcept {
+    controller_ = &controller;
+}
+
+static UiController& controller() {
+    return *controller_;
+}
+
 // ================= [内部状态: 屏幕指针] =================
 static lv_obj_t *scr_design = nullptr;   // 考勤设计主菜单屏幕
 static lv_obj_t *scr_dept_set = nullptr;     // 部门设置界面
@@ -290,12 +300,12 @@ void load_dept_set_screen() {
 
     //循环创建按钮
     // 1. 通过 UiController 获取部门列表数据，实现与数据库层的解耦
-    std::vector<DeptInfo> departments = UiController::getInstance()->getDepartmentList();
+    std::vector<DeptInfo> departments = controller().getDepartmentList();
     
     // 2. 遍历部门数据，动态创建列表按钮
     for (const auto& dept : departments) {
         // 通过 UiController 获取该部门下的员工人数，用于在右侧状态区域显示
-        int emp_count = UiController::getInstance()->getDepartmentEmployeeCount(dept.id);
+        int emp_count = controller().getDepartmentEmployeeCount(dept.id);
         
         // 构造按钮上显示的文本
         // 格式 - 左侧："ID. "  中间："部门名称"  右侧："XX人"
@@ -388,7 +398,7 @@ static void dept_set_info_event_cb(lv_event_t *e) {
         }
 
         // 4. 所有校验通过，调用 UiController 保存数据 (仅调用一次)
-        bool ok = UiController::getInstance()->updateDeptSchedule(current_dept_id, dept_name, shifts);
+        bool ok = controller().updateDeptSchedule(current_dept_id, dept_name, shifts);
         if (ok) {
             show_popup_msg("保存成功", "部门排班已更新!", nullptr, "确认");
             lv_timer_handler(); // 刷新 UI
@@ -421,7 +431,7 @@ void load_dept_set_info_screen(int dept_id) {
     UiManager::getInstance()->resetKeypadGroup();
 
     // 1. 获取数据
-    DeptScheduleView schedule_view = UiController::getInstance()->getDeptSchedule(dept_id);
+    DeptScheduleView schedule_view = controller().getDeptSchedule(dept_id);
 
     // ================== 【安全补丁】 ==================
     // 因为 shifts 是固定的 int[7] 数组，不存在越界(size<7)的问题。
@@ -653,7 +663,7 @@ void load_shift_set_screen() {
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
     //循环创建按钮
-    std::vector<ShiftInfo> shifts = UiController::getInstance()->getAllShifts();
+    std::vector<ShiftInfo> shifts = controller().getAllShifts();
     
     for (const auto& shift : shifts) {
         // 判断班次是否有排班信息
@@ -797,7 +807,7 @@ static void shift_info_event_cb(lv_event_t *e) {
             s3_end   = s3_input.empty() ? "" : s3_input.substr(6, 5);
 
             // 写入数据库 
-            bool success = UiController::getInstance()->updateShiftInfo(
+            bool success = controller().updateShiftInfo(
                 g_current_edit_shift_id,
                 s1_start, s1_end,
                 s2_start, s2_end,
@@ -850,7 +860,7 @@ void load_shift_info_screen(int shift_id) {
     lv_obj_t* form_cont = create_form_container(parts.content);
 
     // ================== [数据加载] ==================
-    auto shift_opt = UiController::getInstance()->getShiftInfo(shift_id);
+    auto shift_opt = controller().getShiftInfo(shift_id);
     std::string s1_text = "", s2_text = "", s3_text = "";
     
     if (shift_opt.has_value()) {
@@ -1043,7 +1053,7 @@ static void company_btn_event_cb(lv_event_t* e) {
                 return;
             }
 
-            bool success = UiController::getInstance()->saveCompanyName(name_str);
+            bool success = controller().saveCompanyName(name_str);
 
             if (success) {
                 show_popup_msg("保存成功", "公司名称已保存!", nullptr, "确认");
@@ -1085,7 +1095,7 @@ void load_company_screen() {
 
     // 6. 加载当前数据 
     std::string name;
-    UiController::getInstance()->loadCompanyName(name);
+    controller().loadCompanyName(name);
 
     // 7. 创建公司名称输入框 
     ta_company_save = create_form_input(form_cont, "公司名称:", "请输入公司名称", name.c_str(), false);

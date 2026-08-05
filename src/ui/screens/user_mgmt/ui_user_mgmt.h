@@ -3,6 +3,9 @@
 
 #include <lvgl.h>
 
+class UiController;
+namespace ui::user_mgmt { void configureController(UiController& controller) noexcept; }
+
 namespace ui {
 namespace user_mgmt {
 

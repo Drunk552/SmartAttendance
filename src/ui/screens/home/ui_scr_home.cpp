@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <string>
 #include <ctime>
+#include <csignal>
 
 // 模块依赖
 #include "../../managers/ui_manager.h"
@@ -19,7 +20,7 @@
 
 // 在命名空间外部声明，确保链接到 main.cpp 中的全局变量
 extern "C" {
-    extern volatile bool g_program_should_exit;
+    extern volatile sig_atomic_t g_program_should_exit;
 }
 
 // 宏定义\
@@ -30,6 +31,16 @@ extern "C" {
 
 namespace ui {
 namespace home {
+
+static UiController* controller_ = nullptr;
+
+void configureController(UiController& controller) noexcept {
+    controller_ = &controller;
+}
+
+static UiController& controller() {
+    return *controller_;
+}
 
 static lv_obj_t * screen = nullptr;
 static lv_obj_t * img_camera = nullptr;
@@ -98,7 +109,7 @@ static void screen_event_cb(lv_event_t * e) {
         }
         if (key == LV_KEY_ESC) {
             // 退出程序请求
-            g_program_should_exit = true;
+            g_program_should_exit = 1;
         }
     }
 }
@@ -111,7 +122,7 @@ static void timer_cam_cb(lv_timer_t * t) {
         // 使用 UiManager 的同步机制
         if (UiManager::getInstance()->trySetFramePending()) {
             // 获取最新帧到共享 Buffer 并使对象失效触发重绘
-            UiController::getInstance()->getDisplayFrame(
+            controller().getDisplayFrame(
                 UiManager::getInstance()->getCameraDisplayBuffer(), CAM_W, CAM_H);
             lv_obj_invalidate(img_camera);
             UiManager::getInstance()->clearFramePending();
@@ -121,7 +132,7 @@ static void timer_cam_cb(lv_timer_t * t) {
 
 // 辅助函数：获取当前格式化日期 (YYYY-MM-DD)
 static std::string get_current_date() {
-    std::time_t now = UiController::getInstance()->getCurrentUnixTime();
+    std::time_t now = controller().getCurrentUnixTime();
     char buf[20];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::localtime(&now));
     return std::string(buf);

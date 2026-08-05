@@ -9,10 +9,18 @@
 #include "biometric/face/face_recognition_engine.h"
 #include "app/platform_factory.h"
 #include "services/employee_service.h"
+#include "services/config_service.h"
+#include "services/department_service.h"
 #include "services/punch_service.h"
+#include "services/shift_service.h"
+#include "services/attendance_query_service.h"
+#include "services/maintenance_service.h"
 #include "storage/sqlite/legacy_employee_repository.h"
 #include "storage/sqlite/legacy_config_repository.h"
+#include "storage/sqlite/legacy_department_repository.h"
 #include "storage/sqlite/legacy_punch_repositories.h"
+#include "storage/sqlite/legacy_shift_repository.h"
+#include "storage/sqlite/legacy_maintenance_repository.h"
 
 namespace smart_attendance::app {
 
@@ -77,6 +85,16 @@ public:
     /** @brief 返回由组合根持有的配置 Repository，供后续配置 Service 迁移使用。 */
     storage::IConfigRepository& configRepository() noexcept;
 
+    /** @brief 返回由组合根持有的配置用例服务。 */
+    services::ConfigService& configService() noexcept;
+
+    /** @brief 返回由组合根持有的部门维护和排班读取服务。 */
+    services::DepartmentService& departmentService() noexcept;
+
+    services::ShiftService& shiftService() noexcept;
+    services::AttendanceQueryService& attendanceQueryService() noexcept;
+    services::MaintenanceService& maintenanceService() noexcept;
+
     /** @brief 返回由组合根持有的 OpenCV 人脸算法引擎，不转移所有权。 */
     biometric::face::IFaceRecognitionEngine& faceRecognitionEngine() noexcept;
 
@@ -99,6 +117,15 @@ private:
     storage::sqlite::LegacyEmployeeRepository employeeRepository_;
     services::EmployeeService employeeService_;
     storage::sqlite::LegacyConfigRepository configRepository_;
+    services::ConfigService configService_;
+    storage::sqlite::LegacyDepartmentRepository departmentRepository_;
+    services::DepartmentService departmentService_;
+    storage::sqlite::LegacyShiftRepository shiftManagementRepository_;
+    services::ShiftService shiftService_;
+    storage::sqlite::LegacyAttendanceQueryRepository attendanceQueryRepository_;
+    services::AttendanceQueryService attendanceQueryService_;
+    storage::sqlite::LegacyMaintenanceRepository maintenanceRepository_;
+    services::MaintenanceService maintenanceService_;
     storage::sqlite::LegacyScheduleRepository scheduleRepository_;
     storage::sqlite::LegacyAttendanceRuleRepository attendanceRuleRepository_;
     storage::sqlite::LegacyAttendanceRepository attendanceRepository_;

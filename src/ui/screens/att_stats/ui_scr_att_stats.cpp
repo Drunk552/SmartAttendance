@@ -15,6 +15,16 @@
 namespace ui {
 namespace att_stats {
 
+static UiController* controller_ = nullptr;
+
+void configureController(UiController& controller) noexcept {
+    controller_ = &controller;
+}
+
+static UiController& controller() {
+    return *controller_;
+}
+
 // ================= [内部状态: 屏幕指针] =================
 static lv_obj_t *scr_stats = nullptr;//考勤统计界面
 static lv_obj_t *sub_screen_cont = nullptr; // 用于显示考勤统计子界面
@@ -42,31 +52,31 @@ static lv_obj_t* g_btn_dl_psn_confirm = nullptr;  // 下载个人考勤报表界
 static bool is_valid_date_format(const std::string& date) {
     // 1. 检查长度是否严格为 10位 (例如 2026-01-01)
     if (date.length() != 10) return false;
-    
+
     // 2. 检查横杠的位置
     if (date[4] != '-' || date[7] != '-') return false;
-    
+
     // 3. 检查其他位置是否都是数字
     for (int i = 0; i < 10; ++i) {
         if (i == 4 || i == 7) continue;
         if (!isdigit(date[i])) return false;
     }
-    
+
     // 4. 提取年月日进行简单的逻辑校验
     int year = std::stoi(date.substr(0, 4));
     int month = std::stoi(date.substr(5, 2));
     int day = std::stoi(date.substr(8, 2));
-    
+
     if (year < 2000 || year > 2100) return false; // 限制合理年份
     if (month < 1 || month > 12) return false;    // 月份 1-12
     if (day < 1 || day > 31) return false;        // 天数 1-31 (粗略校验即可，防止崩溃)
-    
+
     return true;
 }
 
 // 辅助函数：获取当前系统日期，格式为 YYYY-MM-DD
 static std::string get_current_date_str() {
-    time_t now = UiController::getInstance()->getCurrentUnixTime();
+    time_t now = controller().getCurrentUnixTime();
     struct tm tstruct;
     char buf[20];
     tstruct = *localtime(&now);
@@ -202,7 +212,7 @@ static void stats_menu_btn_cb(lv_event_t *e) {
 
     // 1. 导航与返回逻辑 (仅处理按键)
     if (code == LV_EVENT_KEY) {
-        
+
         // --- ESC 返回 ---
         if (key == LV_KEY_ESC) {
             ui::menu::load_menu_screen(); // 返回上一级
@@ -221,7 +231,7 @@ static void stats_menu_btn_cb(lv_event_t *e) {
 
     // 2. 触发逻辑 (兼容 触摸点击 和 键盘回车)
     if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
-        
+
         lv_indev_wait_release(lv_indev_get_act());// 【防连跳核心】 --- IGNORE ---
 
         // 获取 index (放在这里获取更安全)
@@ -231,18 +241,18 @@ static void stats_menu_btn_cb(lv_event_t *e) {
         if (index == 0) {
             // A：下载考勤报表
             load_download_all_screen(); // 跳转到下载考勤报表界面
-        } 
+        }
         else if (index == 1) {
             // B：下载个人报表
             load_download_personal_screen();// 跳转到下载个人报表界面
         }
         else if (index == 2) {
             // C: 下载员工设置表
-            
+
             // 1. 创建并显示居中的加载圈 (Spinner) 阻塞屏幕交互
             lv_obj_t* spin = lv_spinner_create(lv_screen_active());
             lv_obj_center(spin);
-            
+
             std::uint64_t requestId = 0;
             const auto submitResult = g_background_jobs == nullptr
                 ? smart_attendance::app::UiBackgroundJobSubmitError::Stopped
@@ -311,21 +321,21 @@ void load_att_stats_menu_screen() {
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
-    // 创建按钮 
+    // 创建按钮
     // 参数: 父对象, 行号, 图标, 英文标题, 中文标题, 回调, 索引(作为user_data)
-    
+
     // 按钮 0: 下载考勤报表
     create_sys_list_btn(list, "1. ", "", "下载考勤报表", stats_menu_btn_cb, (const char*)(intptr_t)0);
 
     // 按钮 1: 下载个人考勤报表
     create_sys_list_btn(list, "2. ", "", "下载个人考勤报表", stats_menu_btn_cb, (const char*)(intptr_t)1);
 
-    // 按钮 2: 下载员工设置 
+    // 按钮 2: 下载员工设置
     create_sys_list_btn(list, "3. ", "", "下载员工设置", stats_menu_btn_cb, (const char*)(intptr_t)2);
 
     // 按钮 3: 上传员工设置 (占位)
     create_sys_list_btn(list, "4. ", "", "上传员工设置", stats_menu_btn_cb, (const char*)(intptr_t)3);
-                        
+
     // 按钮 4: 下载员工数据 (占位)
     create_sys_list_btn(list, "5. ", "", "下载员工数据", stats_menu_btn_cb, (const char*)(intptr_t)4);
 
@@ -353,7 +363,7 @@ void load_att_stats_menu_screen() {
 //下载考勤报表 (全员)事件回调
 static void download_all_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e);
 
     uint32_t key = 0;
     if(code == LV_EVENT_KEY) {
@@ -362,8 +372,8 @@ static void download_all_event_cb(lv_event_t *e) {
 
     // 1. 处理 ESC 键退出 (返回考勤统计菜单)
     if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        lv_indev_wait_release(lv_indev_get_act()); 
-        ui::att_stats::load_att_stats_menu_screen(); 
+        lv_indev_wait_release(lv_indev_get_act());
+        ui::att_stats::load_att_stats_menu_screen();
         return;
     }
 
@@ -374,32 +384,32 @@ static void download_all_event_cb(lv_event_t *e) {
             lv_group_focus_obj(g_ta_dl_all_end);
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【结束时间输入框】 =================
     else if (current_target == g_ta_dl_all_end) {
         // 按下↑键，跳回开始时间
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_all_start);
-            return; 
+            return;
         }
         // 按下回车或↓键，跳到下载按钮
         else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_btn_dl_all_confirm);
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【下载按钮】 =================
     else if (current_target == g_btn_dl_all_confirm) {
         // 按下↑键，跳回结束时间
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_all_end);
-            return; 
+            return;
         }
 
         // 按下确认下载
         if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
             lv_indev_wait_release(lv_indev_get_act());
-            
+
             std::string s_txt = lv_textarea_get_text(g_ta_dl_all_start);
             std::string e_txt = lv_textarea_get_text(g_ta_dl_all_end);
 
@@ -416,7 +426,7 @@ static void download_all_event_cb(lv_event_t *e) {
                 lv_group_focus_obj(is_valid_date_format(s_txt) ? g_ta_dl_all_end : g_ta_dl_all_start);
                 return;
             }
-            
+
             // ================== 业务逻辑时间穿越校验  ==================
             std::string current_date = get_current_date_str();
 
@@ -499,7 +509,7 @@ void load_download_all_screen() {
     // create_form_btn 会自动帮你绑定 LV_EVENT_CLICKED
     g_btn_dl_all_confirm = create_form_btn(form_cont, "确认下载", download_all_event_cb, nullptr);
     // 补充绑定 LV_EVENT_KEY 以处理键盘的 UP/DOWN 焦点跳转
-    lv_obj_add_event_cb(g_btn_dl_all_confirm, download_all_event_cb, LV_EVENT_KEY, nullptr); 
+    lv_obj_add_event_cb(g_btn_dl_all_confirm, download_all_event_cb, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(g_btn_dl_all_confirm);
 
     // 默认聚焦在开始时间
@@ -516,7 +526,7 @@ void load_download_all_screen() {
 // 下载个人考勤报表事件回调 (个人)
 static void download_personal_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e); 
+    lv_obj_t *current_target = (lv_obj_t *)lv_event_get_current_target(e);
 
     uint32_t key = 0;
     if(code == LV_EVENT_KEY) {
@@ -525,8 +535,8 @@ static void download_personal_event_cb(lv_event_t *e) {
 
     // 1. 处理 ESC 键退出 (返回考勤统计菜单)
     if (code == LV_EVENT_KEY && key == LV_KEY_ESC) {
-        lv_indev_wait_release(lv_indev_get_act()); 
-        ui::att_stats::load_att_stats_menu_screen(); 
+        lv_indev_wait_release(lv_indev_get_act());
+        ui::att_stats::load_att_stats_menu_screen();
         return;
     }
 
@@ -541,33 +551,33 @@ static void download_personal_event_cb(lv_event_t *e) {
     else if (current_target == g_ta_dl_psn_start) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_psn_uid); // ↑跳回工号
-            return; 
+            return;
         } else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_ta_dl_psn_end); // ↓跳到结束时间
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【结束时间输入框】 =================
     else if (current_target == g_ta_dl_psn_end) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_psn_start); // ↑跳回开始时间
-            return; 
+            return;
         } else if (code == LV_EVENT_KEY && (key == LV_KEY_ENTER || key == LV_KEY_DOWN)) {
             lv_group_focus_obj(g_btn_dl_psn_confirm); // ↓跳到确认按钮
             lv_indev_wait_release(lv_indev_get_act());
         }
-    } 
+    }
     // ================= 焦点在【下载按钮】 =================
     else if (current_target == g_btn_dl_psn_confirm) {
         if (code == LV_EVENT_KEY && key == LV_KEY_UP) {
             lv_group_focus_obj(g_ta_dl_psn_end); // ↑跳回结束时间
-            return; 
+            return;
         }
 
         // 按下确认下载
         if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER)) {
             lv_indev_wait_release(lv_indev_get_act());
-            
+
             std::string uid_txt = lv_textarea_get_text(g_ta_dl_psn_uid);
             std::string s_txt = lv_textarea_get_text(g_ta_dl_psn_start);
             std::string e_txt = lv_textarea_get_text(g_ta_dl_psn_end);
@@ -577,8 +587,8 @@ static void download_personal_event_cb(lv_event_t *e) {
                 show_popup_msg("导出个人考勤报表失败", "工号和时间都不能为空!\n请输入工号和时间!", nullptr, "我知道了");
                 return;
             }
-            
-            // 2. 格式校验 
+
+            // 2. 格式校验
             if (!is_valid_date_format(s_txt) || !is_valid_date_format(e_txt)) {
                 show_popup_msg("导出个人考勤报表失败", "格式错误！\n日期格式必须为:\nYYYY-MM-DD\n(例如 2026-01-01)", nullptr, "我知道了");
                 lv_group_focus_obj(is_valid_date_format(s_txt) ? g_ta_dl_psn_end : g_ta_dl_psn_start);
@@ -598,10 +608,10 @@ static void download_personal_event_cb(lv_event_t *e) {
                 lv_group_focus_obj(g_ta_dl_psn_start);
                 return;
             }
-            
+
             int uid = std::stoi(uid_txt); // 将工号转为整型
 
-            if (!UiController::getInstance()->checkUserExists(uid)) { 
+            if (!controller().checkUserExists(uid)) {
                 show_popup_msg("导出个人考勤报表失败", "工号错误!\n 该工号不存在,请检查工号! ", nullptr, "我知道了");
                 lv_group_focus_obj(g_ta_dl_psn_uid); // 焦点移回工号输入框，方便用户重输
                 return;
@@ -678,7 +688,7 @@ void load_download_personal_screen() {
 
     // 4. 确认下载按钮
     g_btn_dl_psn_confirm = create_form_btn(form_cont, "确认下载", download_personal_event_cb, nullptr);
-    lv_obj_add_event_cb(g_btn_dl_psn_confirm, download_personal_event_cb, LV_EVENT_KEY, nullptr); 
+    lv_obj_add_event_cb(g_btn_dl_psn_confirm, download_personal_event_cb, LV_EVENT_KEY, nullptr);
     UiManager::getInstance()->addObjToGroup(g_btn_dl_psn_confirm);
 
     // 默认聚焦在工号输入框
