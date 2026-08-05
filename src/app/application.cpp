@@ -22,10 +22,13 @@ Application::Application(DatabaseLifecycle databaseLifecycle,
                          WorkerLifecycle frameDeliveryWorkerLifecycle,
                          WorkerLifecycle captureWorkerLifecycle,
                          WorkerLifecycle databaseWriterWorkerLifecycle,
+                         PlatformDevices platformDevices,
                          std::filesystem::path runtimeDirectory)
     : uiLifecycle_(uiLifecycle),
       applicationLoop_(applicationLoop),
-      services_(databaseLifecycle, businessLifecycle),
+      services_(databaseLifecycle,
+                businessLifecycle,
+                std::move(platformDevices)),
       employeeLookupPresenter_(services_.employeeService()),
       taskManager_(userReportExporter,
                    customReportExporter,
@@ -64,6 +67,9 @@ ApplicationInitError Application::initialize() noexcept {
     }
     if (!services_.hasValidBusinessLifecycle()) {
         return ApplicationInitError::InvalidBusinessLifecycle;
+    }
+    if (!services_.hasCompletePlatformDevices()) {
+        return ApplicationInitError::InvalidPlatformDevices;
     }
 
     std::error_code error;
@@ -181,6 +187,26 @@ services::PunchService& Application::punchService() noexcept {
 biometric::face::IFaceRecognitionEngine&
 Application::faceRecognitionEngine() noexcept {
     return services_.faceRecognitionEngine();
+}
+
+hal::ICamera& Application::camera() noexcept {
+    return services_.camera();
+}
+
+hal::IDisplay& Application::display() noexcept {
+    return services_.display();
+}
+
+hal::IKeypad& Application::keypad() noexcept {
+    return services_.keypad();
+}
+
+hal::IRtc& Application::rtc() noexcept {
+    return services_.rtc();
+}
+
+hal::IStorageDevice& Application::storage() noexcept {
+    return services_.storage();
 }
 
 ui::EmployeeLookupPresenter& Application::employeeLookupPresenter() noexcept {

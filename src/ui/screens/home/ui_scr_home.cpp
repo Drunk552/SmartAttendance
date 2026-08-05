@@ -121,7 +121,7 @@ static void timer_cam_cb(lv_timer_t * t) {
 
 // 辅助函数：获取当前格式化日期 (YYYY-MM-DD)
 static std::string get_current_date() {
-    std::time_t now = std::time(nullptr);
+    std::time_t now = UiController::getInstance()->getCurrentUnixTime();
     char buf[20];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::localtime(&now));
     return std::string(buf);

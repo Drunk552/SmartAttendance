@@ -5,6 +5,8 @@
 #include "business/face_capture_worker.h"
 #include "business/face_punch_worker.h"
 #include "db_storage.h"
+#include "hal/camera.h"
+#include "hal/rtc.h"
 #include "services/punch_service.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -40,6 +42,8 @@ static smart_attendance::business::FacePunchWorker g_punch_worker{
     kPunchQueueCapacity};
 static smart_attendance::biometric::face::IFaceRecognitionEngine*
     g_recognition_engine = nullptr;
+static smart_attendance::hal::ICamera* g_camera = nullptr;
+static smart_attendance::hal::IRtc* g_rtc = nullptr;
 static std::unique_ptr<smart_attendance::business::FaceCaptureWorker>
     g_capture_worker;
 
@@ -145,7 +149,7 @@ void business_wake_database_writer_task() {
 
 void business_wake_capture_task() {
     // 采集 Worker 可能正阻塞于已满的打卡队列，必须唤醒以观察停止标志。
-    // 当前 VideoCapture 无可移植唤醒 API，UDP 探测仍每 200ms 检查停止标志。
+    // Camera HAL 的 PC 实现限制 UDP 探测和断流等待时间，Worker 会随后观察停止标志。
     g_punch_worker.wake();
 }
 
@@ -164,8 +168,9 @@ void business_run_capture_task(
  */
 
 bool business_init() {
-    if (!g_punch_worker.isConfigured() || g_recognition_engine == nullptr) {
-        std::cerr << "[Business] Face engine and PunchService must be configured "
+    if (!g_punch_worker.isConfigured() || g_recognition_engine == nullptr ||
+        g_camera == nullptr || g_rtc == nullptr) {
+        std::cerr << "[Business] Face engine, camera, RTC and PunchService must be configured "
                      "before initialization."
                   << std::endl;
         return false;
@@ -183,7 +188,10 @@ bool business_init() {
 
     g_capture_worker =
         std::make_unique<smart_attendance::business::FaceCaptureWorker>(
-            *g_recognition_engine, makeCaptureCallbacks());
+            *g_recognition_engine,
+            *g_camera,
+            *g_rtc,
+            makeCaptureCallbacks());
     
     // 系统启动时，静默清理 30 天前的旧打卡抓拍图，释放磁盘空间
     std::cout << ">>> [Business] 正在检查磁盘空间与过期打卡抓拍图..." << std::endl;
@@ -306,6 +314,13 @@ void business_configure_face_recognition_engine(
     g_recognition_engine = &recognitionEngine;
 }
 
+void business_configure_platform_devices(
+    smart_attendance::hal::ICamera& camera,
+    smart_attendance::hal::IRtc& rtc) noexcept {
+    g_camera = &camera;
+    g_rtc = &rtc;
+}
+
 void business_shutdown() {
     std::cout << ">>> [Business] 正在释放识别模型和业务缓存..." << std::endl;
 
@@ -344,6 +359,8 @@ void business_shutdown() {
         preprocess_config = PreprocessConfig{};
     }
     g_recognition_engine = nullptr;
+    g_camera = nullptr;
+    g_rtc = nullptr;
     std::cout << ">>> [Business] 识别模型和业务缓存已释放。" << std::endl;
 }
 

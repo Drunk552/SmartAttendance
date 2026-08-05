@@ -5,13 +5,17 @@
 
 #include "application_services.h"
 
+#include <utility>
+
 namespace smart_attendance::app {
 
 ApplicationServices::ApplicationServices(
     DatabaseLifecycle databaseLifecycle,
-    BusinessLifecycle businessLifecycle) noexcept
+    BusinessLifecycle businessLifecycle,
+    PlatformDevices platformDevices) noexcept
     : databaseLifecycle_(databaseLifecycle),
       businessLifecycle_(businessLifecycle),
+      platformDevices_(std::move(platformDevices)),
       employeeService_(employeeRepository_),
       punchService_(scheduleRepository_,
                     attendanceRuleRepository_,
@@ -107,6 +111,35 @@ storage::IConfigRepository& ApplicationServices::configRepository() noexcept {
 biometric::face::IFaceRecognitionEngine&
 ApplicationServices::faceRecognitionEngine() noexcept {
     return faceRecognitionEngine_;
+}
+
+hal::ICamera& ApplicationServices::camera() noexcept {
+    return *platformDevices_.camera;
+}
+
+hal::IDisplay& ApplicationServices::display() noexcept {
+    return *platformDevices_.display;
+}
+
+hal::IKeypad& ApplicationServices::keypad() noexcept {
+    return *platformDevices_.keypad;
+}
+
+hal::IRtc& ApplicationServices::rtc() noexcept {
+    return *platformDevices_.rtc;
+}
+
+hal::IStorageDevice& ApplicationServices::storage() noexcept {
+    return *platformDevices_.storage;
+}
+
+const hal::DeviceCapabilities&
+ApplicationServices::deviceCapabilities() const noexcept {
+    return platformDevices_.capabilities;
+}
+
+bool ApplicationServices::hasCompletePlatformDevices() const noexcept {
+    return platformDevices_.isComplete();
 }
 
 void ApplicationServices::cleanupFailedDatabaseInitialization() noexcept {

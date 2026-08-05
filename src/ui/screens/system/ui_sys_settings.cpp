@@ -397,7 +397,7 @@ static void show_time_confirm_dialog(const char* time_str) {
 }
 
 static void get_current_time(int &hour, int &min, int &sec){
-    time_t now = time(nullptr);
+    time_t now = UiController::getInstance()->getCurrentUnixTime();
     struct tm *t =localtime(&now);
     hour = t->tm_hour;
     min = t->tm_min;
@@ -616,7 +616,7 @@ void load_sys_basic_date_screen() {
 
 // =================基础设置界面--日期设置（四级）================
 static void get_current_date(int &year, int &month, int &day) {
-    time_t now = time(nullptr);
+    time_t now = UiController::getInstance()->getCurrentUnixTime();
     struct tm *t = localtime(&now);
     year = t->tm_year + 1900;
     month = t->tm_mon + 1;

@@ -29,6 +29,7 @@ enum class ApplicationInitError {
     InvalidUiLifecycle,
     InvalidApplicationLoop,
     InvalidBusinessLifecycle,
+    InvalidPlatformDevices,
     RuntimeDirectoryUnavailable,
     DatabaseInitializationFailed,
     UiInitializationFailed
@@ -78,6 +79,7 @@ public:
      * @param frameDeliveryWorkerLifecycle UI 帧投递 Worker 入口。
      * @param captureWorkerLifecycle 摄像头采集 Worker 入口。
      * @param databaseWriterWorkerLifecycle 数据库写 Worker 入口和唤醒函数。
+     * @param platformDevices 当前构建平台的完整 HAL 对象集合，所有权转入 Application。
      * @param runtimeDirectory 运行时数据目录；初始化成功后成为进程工作目录。
      */
     Application(DatabaseLifecycle databaseLifecycle,
@@ -92,6 +94,7 @@ public:
                 WorkerLifecycle frameDeliveryWorkerLifecycle,
                 WorkerLifecycle captureWorkerLifecycle,
                 WorkerLifecycle databaseWriterWorkerLifecycle,
+                PlatformDevices platformDevices,
                 std::filesystem::path runtimeDirectory);
     ~Application() noexcept;
 
@@ -140,6 +143,12 @@ public:
 
     /** @brief 显式访问由 ApplicationServices 持有的人脸算法引擎。 */
     biometric::face::IFaceRecognitionEngine& faceRecognitionEngine() noexcept;
+
+    hal::ICamera& camera() noexcept;
+    hal::IDisplay& display() noexcept;
+    hal::IKeypad& keypad() noexcept;
+    hal::IRtc& rtc() noexcept;
+    hal::IStorageDevice& storage() noexcept;
 
     /** @brief 返回由组合根持有的员工角色 Presenter。 */
     ui::EmployeeLookupPresenter& employeeLookupPresenter() noexcept;

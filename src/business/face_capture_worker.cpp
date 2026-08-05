@@ -1,60 +1,34 @@
 /**
  * @file face_capture_worker.cpp
- * @brief 实现 PC 仿真摄像头采集循环并调用独立人脸算法模块。
+ * @brief 实现平台无关的摄像头采集循环并调用独立人脸算法模块。
  */
 
 #include "business/face_capture_worker.h"
 
-#include <cerrno>
 #include <chrono>
-#include <cstdint>
 #include <iostream>
 #include <map>
-#include <netinet/in.h>
 #include <opencv2/imgproc.hpp>
-#include <poll.h>
-#include <sys/socket.h>
 #include <thread>
-#include <unistd.h>
 #include <utility>
 
 namespace smart_attendance::business {
 
 namespace {
 
-constexpr std::uint16_t kSimulatorStreamPort = 5004;
-constexpr int kStreamProbeTimeoutMs = 200;
 constexpr int kSkippedFrames = 4;
 constexpr int kRecognitionCooldownMs = 2000;
-
-class ScopedFileDescriptor final {
-public:
-    explicit ScopedFileDescriptor(int descriptor) noexcept
-        : descriptor_(descriptor) {}
-
-    ~ScopedFileDescriptor() noexcept {
-        if (descriptor_ >= 0) {
-            close(descriptor_);
-        }
-    }
-
-    ScopedFileDescriptor(const ScopedFileDescriptor&) = delete;
-    ScopedFileDescriptor& operator=(const ScopedFileDescriptor&) = delete;
-
-    int get() const noexcept {
-        return descriptor_;
-    }
-
-private:
-    int descriptor_;
-};
 
 } // namespace
 
 FaceCaptureWorker::FaceCaptureWorker(
     biometric::face::IFaceRecognitionEngine& recognitionEngine,
+    hal::ICamera& camera,
+    hal::IRtc& rtc,
     FaceCaptureWorkerCallbacks callbacks)
     : recognitionEngine_(recognitionEngine),
+      camera_(camera),
+      rtc_(rtc),
       callbacks_(std::move(callbacks)) {}
 
 void FaceCaptureWorker::run(
@@ -71,14 +45,11 @@ void FaceCaptureWorker::run(
 
     while (!stopRequested.load()) {
         try {
-            if (!capture_.isOpened()) {
+            if (!camera_.isOpen()) {
                 if (++retryCount % 10 == 0) {
                     std::cout << "[Stream] 尝试重连 SDP..." << std::endl;
-                    capture_.release();
-                    if (waitForSimulatorStream(stopRequested)) {
-                        capture_ = openSimulatorStream();
-                    }
-                    if (capture_.isOpened()) {
+                    camera_.close();
+                    if (camera_.open()) {
                         consecutiveFailures = 0;
                     }
                 }
@@ -86,20 +57,27 @@ void FaceCaptureWorker::run(
                 continue;
             }
 
-            cv::Mat frame;
-            if (!capture_.read(frame) || frame.empty()) {
+            auto capturedFrame = camera_.read();
+            if (!capturedFrame || !capturedFrame.value().isValid()) {
                 ++consecutiveFailures;
                 if (consecutiveFailures > 60) {
                     std::cerr << "[Stream] 严重错误：流已中断，强制重启连接！"
                               << std::endl;
-                    capture_.release();
+                    camera_.close();
                     consecutiveFailures = 0;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
 
-            cv::Mat processFrame = frame.clone();
+            const auto& frame = capturedFrame.value();
+            const cv::Mat frameView(
+                frame.height,
+                frame.width,
+                CV_8UC3,
+                const_cast<std::uint8_t*>(frame.data.get()),
+                frame.strideBytes);
+            cv::Mat processFrame = frameView.clone();
             callbacks_.publishCurrentFrame(processFrame);
 
             const bool performDetection =
@@ -158,12 +136,15 @@ void FaceCaptureWorker::run(
                         }
 
                         if (!inCooldown) {
-                            const bool queued = callbacks_.submitPunch(
-                                userId,
-                                std::time(nullptr),
-                                processFrame,
-                                userName,
-                                stopRequested);
+                            const auto systemTime = rtc_.now();
+                            const bool queued = systemTime &&
+                                callbacks_.submitPunch(
+                                    userId,
+                                    static_cast<std::time_t>(
+                                        systemTime.value().unixSeconds),
+                                    processFrame,
+                                    userName,
+                                    stopRequested);
                             text += queued ? " [OK]" : " [Unavailable]";
                             userCooldowns[userId] = now;
                         }
@@ -210,64 +191,7 @@ void FaceCaptureWorker::run(
 }
 
 void FaceCaptureWorker::close() noexcept {
-    capture_.release();
-}
-
-bool FaceCaptureWorker::waitForSimulatorStream(
-    const std::atomic<bool>& stopRequested) const noexcept {
-    // TODO(refactor/phase-6): 将 UDP 探测和 GStreamer 管线迁入 platform/pc。
-    const ScopedFileDescriptor socketFd(
-        socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
-    if (socketFd.get() < 0) {
-        return false;
-    }
-
-    const int reuseAddress = 1;
-    (void)setsockopt(socketFd.get(), SOL_SOCKET, SO_REUSEADDR,
-                     &reuseAddress, sizeof(reuseAddress));
-
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(kSimulatorStreamPort);
-    if (bind(socketFd.get(), reinterpret_cast<sockaddr*>(&address),
-             sizeof(address)) != 0) {
-        return false;
-    }
-
-    pollfd descriptor{};
-    descriptor.fd = socketFd.get();
-    descriptor.events = POLLIN;
-    while (!stopRequested.load()) {
-        const int pollResult = poll(
-            &descriptor, 1, kStreamProbeTimeoutMs);
-        if (pollResult > 0 && (descriptor.revents & POLLIN) != 0) {
-            return true;
-        }
-        if (pollResult > 0 &&
-            (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-            return false;
-        }
-        if (pollResult < 0 && errno != EINTR) {
-            return false;
-        }
-    }
-    return false;
-}
-
-cv::VideoCapture FaceCaptureWorker::openSimulatorStream() const {
-    const std::string pipeline =
-        "udpsrc port=5004 timeout=2000000000 ! "
-        "application/x-rtp, media=(string)video, clock-rate=(int)90000, "
-        "encoding-name=(string)RAW, sampling=(string)YCbCr-4:2:2, "
-        "depth=(string)8, width=(string)640, height=(string)480, "
-        "colorimetry=(string)BT601-5, payload=(int)96 ! "
-        "rtpjitterbuffer latency=0 ! "
-        "rtpvrawdepay ! videoconvert ! "
-        "video/x-raw,format=BGR ! "
-        "appsink sync=false drop=true max-buffers=1";
-    std::cout << "[Stream] 使用硬编码管道连接..." << std::endl;
-    return cv::VideoCapture(pipeline, cv::CAP_GSTREAMER);
+    camera_.close();
 }
 
 } // namespace smart_attendance::business
