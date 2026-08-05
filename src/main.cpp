@@ -249,6 +249,8 @@ int main(int argc, char* argv[]) {
          business_wake_database_writer_task},
         runtimeDirectory);
     business_configure_punch_service(application.punchService());
+    business_configure_face_recognition_engine(
+        application.faceRecognitionEngine());
     ui_configure_background_jobs(application.uiBackgroundJobs());
     ui_configure_system_status(application.uiSystemStatus());
 

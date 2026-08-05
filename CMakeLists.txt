@@ -83,6 +83,34 @@ endif()
 # ==========================================
 # 4. 主程序配置
 # ==========================================
+add_library(smartattendance_biometric STATIC
+    src/biometric/face/face_detector.cpp
+    src/biometric/face/face_preprocessor.cpp
+    src/biometric/face/face_recognizer.cpp
+    src/biometric/face/face_model_manager.cpp
+    src/biometric/face/face_recognition_engine.cpp
+)
+target_include_directories(smartattendance_biometric PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(smartattendance_biometric PUBLIC ${OpenCV_LIBS})
+
+add_library(smartattendance_face_workers STATIC
+    src/business/face_capture_worker.cpp
+    src/business/face_punch_worker.cpp
+    src/business/punch_request_queue.cpp
+)
+target_include_directories(smartattendance_face_workers PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(smartattendance_face_workers PUBLIC
+    smartattendance_biometric
+    ${OpenCV_LIBS}
+    Threads::Threads
+)
+
 add_library(smartattendance_storage STATIC
     src/storage/database.cpp
     src/storage/sqlite/legacy_organization_dao.cpp
@@ -116,6 +144,8 @@ target_link_libraries(smartattendance_repositories PUBLIC
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(smartattendance_biometric PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(smartattendance_face_workers PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(smartattendance_storage PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(smartattendance_repositories PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -157,6 +187,13 @@ file(GLOB_RECURSE SRC_FILES
 
 )
 
+# 阶段五新 Worker 使用显式 Target，避免继续依赖旧 business GLOB 自动接入。
+list(REMOVE_ITEM SRC_FILES
+    ${CMAKE_SOURCE_DIR}/src/business/face_capture_worker.cpp
+    ${CMAKE_SOURCE_DIR}/src/business/face_punch_worker.cpp
+    ${CMAKE_SOURCE_DIR}/src/business/punch_request_queue.cpp
+)
+
 add_executable(attendance_app ${SRC_FILES})
 
 # 包含头文件路径
@@ -192,6 +229,8 @@ target_link_libraries(attendance_app PRIVATE
     ${XLSXWRITER_LIBRARIES}  # 链接 libxlsxwriter
     Threads::Threads  # 链接线程库
     smartattendance_repositories
+    smartattendance_face_workers
+    smartattendance_biometric
     # Deleted: wiringPi
 )
 
@@ -233,6 +272,7 @@ if(BUILD_TESTING)
         ${OpenCV_LIBS}
         Threads::Threads
         smartattendance_repositories
+        smartattendance_biometric
     )
     add_test(
         NAME application_lifecycle
@@ -255,6 +295,7 @@ if(BUILD_TESTING)
         ${OpenCV_LIBS}
         Threads::Threads
         smartattendance_repositories
+        smartattendance_biometric
     )
     add_test(
         NAME application_services
@@ -399,6 +440,29 @@ if(BUILD_TESTING)
     add_test(
         NAME punch_request_queue
         COMMAND punch_request_queue_test
+    )
+
+    add_executable(face_recognition_engine_test
+        tests/unit/face_recognition_engine_test.cpp
+    )
+    target_include_directories(face_recognition_engine_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(face_recognition_engine_test PRIVATE
+        smartattendance_biometric
+        ${OpenCV_LIBS}
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(face_recognition_engine_test PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+    add_test(
+        NAME face_recognition_engine
+        COMMAND face_recognition_engine_test
     )
 
     add_executable(legacy_punch_repositories_test

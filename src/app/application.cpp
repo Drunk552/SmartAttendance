@@ -178,6 +178,11 @@ services::PunchService& Application::punchService() noexcept {
     return services_.punchService();
 }
 
+biometric::face::IFaceRecognitionEngine&
+Application::faceRecognitionEngine() noexcept {
+    return services_.faceRecognitionEngine();
+}
+
 ui::EmployeeLookupPresenter& Application::employeeLookupPresenter() noexcept {
     return employeeLookupPresenter_;
 }
