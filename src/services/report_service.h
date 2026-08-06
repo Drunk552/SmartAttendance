@@ -19,6 +19,9 @@ public:
                   IReportDataSource& dataSource,
                   EmployeeSettingsImporter importer) noexcept;
 
+    /** @brief 由组合根绑定兼容 XLSX 导入实现；替换时不改变导出行为。 */
+    void configureImporter(EmployeeSettingsImporter importer) noexcept;
+
     bool exportUserReport(int userId,
                           const std::string& startDate,
                           const std::string& endDate);

@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file report_generator.cpp
  * @brief 报表导出实现
@@ -13,6 +14,12 @@
 #include <algorithm>
 #include <sys/stat.h> // 用于创建目录
 #include "attendance_rule.h"
+
+using AttendanceRecord = smart_attendance::services::ReportAttendanceRecord;
+using UserData = smart_attendance::services::ReportUser;
+using DeptInfo = smart_attendance::services::ReportDepartment;
+using ShiftInfo = smart_attendance::services::ReportShift;
+using RuleConfig = smart_attendance::services::ReportRules;
 
 /**
  * @brief 将时间字符串 "HH:MM" 转换为分钟数
@@ -54,7 +61,7 @@ long long ReportGenerator::parseDateToTimestamp(const std::string& date_str, boo
     }
 
     if (ss.fail()) {
-        std::cerr << "[Error] 无法解析日期: " << date_str << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Error] 无法解析日期: " << date_str << std::endl;
         return 0;
     }
 
@@ -332,7 +339,7 @@ std::vector<AttendanceRecord> ReportGenerator::loadRecords(
         records.push_back(rec);
     }
 
-    std::cout << "[Report] 从数据库获取 " << records.size()
+    SA_LOG_INFO_STREAM() << "[Report] 从数据库获取 " << records.size()
               << " 条考勤记录 (" << formatDate(start_ts)
               << " 到 " << formatDate(end_ts) << ")" << std::endl;
 
@@ -369,7 +376,7 @@ std::vector<UserData> ReportGenerator::loadUsers() {
         users.push_back(user);
     }
 
-    std::cout << "[Report] 从数据库获取 " << users.size() << " 个用户信息" << std::endl;
+    SA_LOG_INFO_STREAM() << "[Report] 从数据库获取 " << users.size() << " 个用户信息" << std::endl;
 
     return users;
 }
@@ -391,7 +398,7 @@ std::vector<UserData> ReportGenerator::loadUsersByDepartment(
         }
     }
 
-    std::cout << "[Report] 从部门 '" << dept_name << "' 获取 "
+    SA_LOG_INFO_STREAM() << "[Report] 从部门 '" << dept_name << "' 获取 "
               << result.size() << " 个用户" << std::endl;
 
     return result;
@@ -715,7 +722,7 @@ bool ReportGenerator::exportAllAttendanceReport(const std::string& start_date, c
             days_in_month = getDaysInMonth(year, month); // 获取当月天数
         }
     } catch (...) {
-        std::cerr << "解析日期失败" << std::endl;
+        SA_LOG_ERROR_STREAM() << "解析日期失败" << std::endl;
     }
     writeShiftInfoSheet(workbook, users, depts, shifts, start_date, end_date, year, month, days_in_month);
     writeSummarySheet(workbook, summaries, start_date, end_date);
@@ -725,7 +732,7 @@ bool ReportGenerator::exportAllAttendanceReport(const std::string& start_date, c
 
     // 5. 封存退出
     workbook_close(workbook);
-    std::cout << "[Success] 考勤报表(全员)生成完毕: " << output_path << std::endl;
+    SA_LOG_INFO_STREAM() << "[Success] 考勤报表(全员)生成完毕: " << output_path << std::endl;
     return true;
 }
 
@@ -738,7 +745,7 @@ bool ReportGenerator::exportIndividualAttendanceReport(int user_id, const std::s
     // 1. 获取该个人的详情数据
     std::optional<UserData> user_opt = dataSource_.user(user_id);
     if (!user_opt.has_value()) {
-        std::cerr << "[Error] 找不到该员工工号: " << user_id << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Error] 找不到该员工工号: " << user_id << std::endl;
         return false;
     }
     // 打包成 vector 以便兼容您的核心处理函数
@@ -774,7 +781,7 @@ bool ReportGenerator::exportIndividualAttendanceReport(int user_id, const std::s
             days_in_month = getDaysInMonth(year, month); // 获取当月天数
         }
     } catch (...) {
-        std::cerr << "解析日期失败" << std::endl;
+        SA_LOG_ERROR_STREAM() << "解析日期失败" << std::endl;
     }
     writeShiftInfoSheet(workbook, users, depts, shifts, start_date, end_date, year, month, days_in_month);
     writeSummarySheet(workbook, summaries, start_date, end_date);
@@ -783,7 +790,7 @@ bool ReportGenerator::exportIndividualAttendanceReport(int user_id, const std::s
     writeDetailSheet(workbook, detail_data, summaries, start_date, end_date, year, month, days_in_month);
 
     workbook_close(workbook);
-    std::cout << "[Success] 考勤报表(个人)生成完毕: " << output_path << std::endl;
+    SA_LOG_INFO_STREAM() << "[Success] 考勤报表(个人)生成完毕: " << output_path << std::endl;
     return true;
 }
 
@@ -798,7 +805,7 @@ bool ReportGenerator::exportSettingsReport(const std::string& output_path) {
     // 2. 创建工作簿
     lxw_workbook* workbook = workbook_new(output_path.c_str());
     if (!workbook) {
-        std::cerr << "[Error] 创建设置表文件失败: " << output_path << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Error] 创建设置表文件失败: " << output_path << std::endl;
         return false;
     }
 
@@ -826,7 +833,7 @@ bool ReportGenerator::exportSettingsReport(const std::string& output_path) {
     writeAttendanceSettingsSheet(workbook, config, depts, shifts);
 
     workbook_close(workbook);
-    std::cout << "[Success] 员工设置表(含设置)已生成: " << output_path << std::endl;
+    SA_LOG_INFO_STREAM() << "[Success] 员工设置表(含设置)已生成: " << output_path << std::endl;
     return true;
 }
 

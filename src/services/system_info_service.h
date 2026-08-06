@@ -9,7 +9,7 @@ class SystemInfoService final {
 public:
     explicit SystemInfoService(storage::ISystemInfoRepository& repository) noexcept
         : repository_(repository) {}
-    Result<SystemStats, storage::RepositoryError> statistics() {
+    Result<core::SystemStats, storage::RepositoryError> statistics() {
         return repository_.statistics();
     }
 private:

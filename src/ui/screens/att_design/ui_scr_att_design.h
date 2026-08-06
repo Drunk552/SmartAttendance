@@ -3,8 +3,11 @@
 
 #include <lvgl.h>
 
-class UiController;
-namespace ui::att_design { void configureController(UiController& controller) noexcept; }
+namespace smart_attendance::ui { struct AttendanceDesignPageDependencies; }
+namespace ui::att_design {
+void configureDependencies(
+    smart_attendance::ui::AttendanceDesignPageDependencies& dependencies) noexcept;
+}
 
 namespace ui {
 namespace att_design {

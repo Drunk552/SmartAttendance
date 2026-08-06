@@ -3,20 +3,21 @@
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
 #include "../menu/ui_scr_menu.h"
-#include "../../ui_controller.h"
+#include "../../ui_page_dependencies.h"
 #include <cstring> 
 
 namespace ui {
 namespace att_design {
 
-static UiController* controller_ = nullptr;
+static smart_attendance::ui::AttendanceDesignPageDependencies* dependencies_ = nullptr;
 
-void configureController(UiController& controller) noexcept {
-    controller_ = &controller;
+void configureDependencies(
+    smart_attendance::ui::AttendanceDesignPageDependencies& dependencies) noexcept {
+    dependencies_ = &dependencies;
 }
 
-static UiController& controller() {
-    return *controller_;
+static smart_attendance::ui::AttendanceDesignPageDependencies& dependencies() {
+    return *dependencies_;
 }
 
 // ================= [内部状态: 屏幕指针] =================
@@ -200,14 +201,14 @@ void load_att_design_menu_screen() {
     // 创建新屏幕并注册
     BaseScreenParts parts = create_base_screen("考勤设计");
     scr_design = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::ATT_DESIGN, &scr_design);
+    dependencies().uiManager.registerScreen(ScreenType::ATT_DESIGN, &scr_design);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_design, [](lv_event_t * e) {
         scr_design = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup(); // 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup(); // 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content); // 创建统一列表容器
 
@@ -218,7 +219,7 @@ void load_att_design_menu_screen() {
     create_sys_list_btn(list, "5. ", "", "定时响铃", design_event_cb, "BELL");
     uint32_t child_cnt = lv_obj_get_child_cnt(list);
     for(uint32_t i = 0; i < child_cnt; i++) {
-        UiManager::getInstance()->addObjToGroup(lv_obj_get_child(list, i));
+        dependencies().uiManager.addObjToGroup(lv_obj_get_child(list, i));
     }
 
     // 默认聚焦第一个
@@ -234,11 +235,11 @@ void load_att_design_menu_screen() {
     }, LV_EVENT_KEY, nullptr);
 
     // 把屏幕本身加入组以响应 ESC
-    UiManager::getInstance()->addObjToGroup(scr_design);
+    dependencies().uiManager.addObjToGroup(scr_design);
 
     // 加载与清理
     lv_screen_load(scr_design);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_design);
+    dependencies().uiManager.destroyAllScreensExcept(scr_design);
 }
 
 // ==================== 部门设置子界面 ====================
@@ -258,10 +259,10 @@ static void dept_set_event_cb(lv_event_t *e) {
             load_att_design_menu_screen(); // 返回主菜单
             return; // 拦截返回
         } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
+            lv_group_focus_next(dependencies().uiManager.getKeypadGroup());
             return;
         } else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
+            lv_group_focus_prev(dependencies().uiManager.getKeypadGroup());
             return;
         }
     }
@@ -287,25 +288,25 @@ void load_dept_set_screen() {
 
     BaseScreenParts parts = create_base_screen("部门设置");
     scr_dept_set = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::DEPT_SETTING, &scr_dept_set);
+    dependencies().uiManager.registerScreen(ScreenType::DEPT_SETTING, &scr_dept_set);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_dept_set, [](lv_event_t * e) {
         scr_dept_set = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
     //循环创建按钮
-    // 1. 通过 UiController 获取部门列表数据，实现与数据库层的解耦
-    std::vector<DeptInfo> departments = controller().getDepartmentList();
+    std::vector<smart_attendance::ui::DepartmentItem> departments;
+    (void)dependencies().departments.listDepartments(departments);
     
     // 2. 遍历部门数据，动态创建列表按钮
     for (const auto& dept : departments) {
-        // 通过 UiController 获取该部门下的员工人数，用于在右侧状态区域显示
-        int emp_count = controller().getDepartmentEmployeeCount(dept.id);
+        int emp_count = 0;
+        (void)dependencies().departments.employeeCount(dept.id, emp_count);
         
         // 构造按钮上显示的文本
         // 格式 - 左侧："ID. "  中间："部门名称"  右侧："XX人"
@@ -324,7 +325,7 @@ void load_dept_set_screen() {
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
@@ -332,7 +333,7 @@ void load_dept_set_screen() {
     }
 
     lv_screen_load(scr_dept_set);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_dept_set);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_dept_set);// 加载后销毁其他屏幕，保持资源清晰
 }
 
 // 部门设置详情界面事件回调
@@ -357,11 +358,11 @@ static void dept_set_info_event_cb(lv_event_t *e) {
             if (target == btn_dept_save && key == LV_KEY_ENTER) {
                 // 如果在按钮上按回车，放行交给后面的保存逻辑处理，不跳转焦点
             } else {
-                lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
+                lv_group_focus_next(dependencies().uiManager.getKeypadGroup());
                 return;
             }
         } else if (key == LV_KEY_UP) {
-            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
+            lv_group_focus_prev(dependencies().uiManager.getKeypadGroup());
             return;
         } else if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT) {
             // 拦截左右键焦点切换，但让 Textarea 内部默认处理光标移动
@@ -397,8 +398,8 @@ static void dept_set_info_event_cb(lv_event_t *e) {
             }
         }
 
-        // 4. 所有校验通过，调用 UiController 保存数据 (仅调用一次)
-        bool ok = controller().updateDeptSchedule(current_dept_id, dept_name, shifts);
+        const bool ok = dependencies().departments.updateSchedule(
+            current_dept_id, dept_name, shifts);
         if (ok) {
             show_popup_msg("保存成功", "部门排班已更新!", nullptr, "确认");
             lv_timer_handler(); // 刷新 UI
@@ -419,7 +420,7 @@ void load_dept_set_info_screen(int dept_id) {
     // 创建基础屏幕
     BaseScreenParts parts = create_base_screen("部门详细信息");
     scr_dept_info = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::DEPT_INFO, &scr_dept_info);
+    dependencies().uiManager.registerScreen(ScreenType::DEPT_INFO, &scr_dept_info);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_dept_info, [](lv_event_t * e) {
@@ -428,20 +429,23 @@ void load_dept_set_info_screen(int dept_id) {
 
     // 绑定全局 ESC 返回事件
     lv_obj_add_event_cb(scr_dept_info, dept_set_info_event_cb, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 1. 获取数据
-    DeptScheduleView schedule_view = controller().getDeptSchedule(dept_id);
+    smart_attendance::ui::DepartmentScheduleState schedule_view;
+    const bool scheduleLoaded =
+        dependencies().departments.loadSchedule(dept_id, schedule_view);
 
     // ================== 【安全补丁】 ==================
     // 因为 shifts 是固定的 int[7] 数组，不存在越界(size<7)的问题。
     // 我们只需要判断数据库是否返回了空的部门名称兜底即可。
-    if (schedule_view.dept_name.empty()) {
-        schedule_view.dept_name = "未命名部门";
+    if (!scheduleLoaded || schedule_view.departmentName.empty()) {
+        schedule_view.departmentId = dept_id;
+        schedule_view.departmentName = "未命名部门";
         
         // 如果数据库没有这条记录，保险起见，把这7天的班次都强制归零，防止出现内存里的乱码数字
         for(int i = 0; i < 7; i++) {
-            schedule_view.shifts[i] = 0;
+            schedule_view.shiftIds[i] = 0;
         }
     }
 
@@ -468,7 +472,7 @@ void load_dept_set_info_screen(int dept_id) {
     ta_dept_name = lv_textarea_create(cont);
     lv_obj_set_size(ta_dept_name, 200, 45); // 约束输入框宽度
     lv_textarea_set_one_line(ta_dept_name, true);
-    lv_textarea_set_text(ta_dept_name, schedule_view.dept_name.c_str());
+    lv_textarea_set_text(ta_dept_name, schedule_view.departmentName.c_str());
     lv_obj_add_style(ta_dept_name, &style_text_cn, 0);// 应用中文字体样式
     lv_obj_add_event_cb(ta_dept_name, dept_set_info_event_cb, LV_EVENT_ALL, nullptr);
 
@@ -535,7 +539,7 @@ void load_dept_set_info_screen(int dept_id) {
     const char* weekdays[] = {"日", "一", "二", "三", "四", "五", "六"};
     for(int i = 0; i < 7; i++) {
         // row 从 1 开始，对应 grid 中的第 1 到 7 行
-        create_input(i + 1, weekdays[i], schedule_view.shifts[i], ta_dept_shifts[i]);
+        create_input(i + 1, weekdays[i], schedule_view.shiftIds[i], ta_dept_shifts[i]);
     }
 
     // --- 确认下载按钮 ---
@@ -561,7 +565,7 @@ void load_dept_set_info_screen(int dept_id) {
     lv_obj_set_style_text_color(lbl_note, lv_color_hex(0xd19a66), 0); // 橙褐色
 
     // ==================== 输入组焦点设置 ====================
-    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+    lv_group_t* group = dependencies().uiManager.getKeypadGroup();
     // 严格控制焦点加入顺序，因为 lv_group_focus_next/prev 是按加入顺序导航的
     // 顺序：部门名称 -> 日 -> 一 -> 二 -> 三 -> 四 -> 五 -> 六 -> 确认下载
     lv_group_add_obj(group, ta_dept_name);
@@ -577,7 +581,7 @@ void load_dept_set_info_screen(int dept_id) {
     lv_group_focus_obj(ta_dept_name); // 进去之后默认聚焦第一个
 
     lv_screen_load(scr_dept_info);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_dept_info);
+    dependencies().uiManager.destroyAllScreensExcept(scr_dept_info);
 
 }
 
@@ -598,10 +602,10 @@ static void shift_set_event_cb(lv_event_t *e) {
             load_att_design_menu_screen(); // 返回主菜单
             return; // 拦截返回
         } else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());
+            lv_group_focus_next(dependencies().uiManager.getKeypadGroup());
             return;
         } else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());
+            lv_group_focus_prev(dependencies().uiManager.getKeypadGroup());
             return;
         }
     }
@@ -651,19 +655,20 @@ void load_shift_set_screen() {
 
     BaseScreenParts parts = create_base_screen("班次设置");
     scr_shift_set = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::SHIFT_SETTING, &scr_shift_set);
+    dependencies().uiManager.registerScreen(ScreenType::SHIFT_SETTING, &scr_shift_set);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_shift_set, [](lv_event_t * e) {
         scr_shift_set = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
     //循环创建按钮
-    std::vector<ShiftInfo> shifts = controller().getAllShifts();
+    const std::vector<smart_attendance::ui::ShiftItem> shifts =
+        dependencies().shifts.listAll();
     
     for (const auto& shift : shifts) {
         // 判断班次是否有排班信息
@@ -671,15 +676,15 @@ void load_shift_set_screen() {
         bool has_schedule = false;
         
         // 检查第一个时间段
-        if (!shift.s1_start.empty() && !shift.s1_end.empty()) {
+        if (!shift.firstStart.empty() && !shift.firstEnd.empty()) {
             has_schedule = true;
         }
         // 检查第二个时间段
-        else if (!shift.s2_start.empty() && !shift.s2_end.empty()) {
+        else if (!shift.secondStart.empty() && !shift.secondEnd.empty()) {
             has_schedule = true;
         }
         // 检查第三个时间段
-        else if (!shift.s3_start.empty() && !shift.s3_end.empty()) {
+        else if (!shift.thirdStart.empty() && !shift.thirdEnd.empty()) {
             has_schedule = true;
         }
         
@@ -700,7 +705,7 @@ void load_shift_set_screen() {
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
@@ -708,7 +713,7 @@ void load_shift_set_screen() {
     }
 
     lv_screen_load(scr_shift_set);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_shift_set);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_shift_set);// 加载后销毁其他屏幕，保持资源清晰
 }
 
 //班次详细信息界面事件回调
@@ -807,12 +812,16 @@ static void shift_info_event_cb(lv_event_t *e) {
             s3_end   = s3_input.empty() ? "" : s3_input.substr(6, 5);
 
             // 写入数据库 
-            bool success = controller().updateShiftInfo(
-                g_current_edit_shift_id,
-                s1_start, s1_end,
-                s2_start, s2_end,
-                s3_start, s3_end
-            );
+            smart_attendance::ui::ShiftItem item;
+            const bool found = dependencies().shifts.findById(
+                g_current_edit_shift_id, item);
+            item.firstStart = s1_start;
+            item.firstEnd = s1_end;
+            item.secondStart = s2_start;
+            item.secondEnd = s2_end;
+            item.thirdStart = s3_start;
+            item.thirdEnd = s3_end;
+            const bool success = found && dependencies().shifts.update(item);
 
             if (success) {
                 show_popup_msg("保存成功", "班次信息已更新！", nullptr, "确认");
@@ -841,7 +850,7 @@ void load_shift_info_screen(int shift_id) {
     // 1. 创建基础屏幕
     BaseScreenParts parts = create_base_screen("班次详细信息");
     scr_shift_info = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::SHIFT_INFO, &scr_shift_info);
+    dependencies().uiManager.registerScreen(ScreenType::SHIFT_INFO, &scr_shift_info);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_shift_info, [](lv_event_t * e) {
@@ -854,24 +863,24 @@ void load_shift_info_screen(int shift_id) {
 
     // 绑定全局 ESC 返回事件
     lv_obj_add_event_cb(scr_shift_info, shift_info_event_cb, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 创建统一表单容器
     lv_obj_t* form_cont = create_form_container(parts.content);
 
     // ================== [数据加载] ==================
-    auto shift_opt = controller().getShiftInfo(shift_id);
+    smart_attendance::ui::ShiftItem info;
+    const bool shiftFound = dependencies().shifts.findById(shift_id, info);
     std::string s1_text = "", s2_text = "", s3_text = "";
     
-    if (shift_opt.has_value()) {
-        ShiftInfo info = shift_opt.value();
+    if (shiftFound) {
         // 如果数据库中有数据并且不是无效的 "--:--" 标识，则拼接为 "08:00-12:00" 显示
-        if (!info.s1_start.empty() && info.s1_start != "--:--") 
-            s1_text = info.s1_start + "-" + info.s1_end;
-        if (!info.s2_start.empty() && info.s2_start != "--:--") 
-            s2_text = info.s2_start + "-" + info.s2_end;
-        if (!info.s3_start.empty() && info.s3_start != "--:--") 
-            s3_text = info.s3_start + "-" + info.s3_end;
+        if (!info.firstStart.empty() && info.firstStart != "--:--")
+            s1_text = info.firstStart + "-" + info.firstEnd;
+        if (!info.secondStart.empty() && info.secondStart != "--:--")
+            s2_text = info.secondStart + "-" + info.secondEnd;
+        if (!info.thirdStart.empty() && info.thirdStart != "--:--")
+            s3_text = info.thirdStart + "-" + info.thirdEnd;
     }
 
     // 1. 时段一输入框
@@ -880,7 +889,7 @@ void load_shift_info_screen(int shift_id) {
     lv_textarea_set_max_length(g_ta_time_frame1, 11);                 // 限制最大字符数 (HH:MM-HH:MM 即11个字符)
     lv_obj_add_event_cb(g_ta_time_frame1, time_input_format_cb, LV_EVENT_VALUE_CHANGED, nullptr); // 绑定自动补全
     lv_obj_add_event_cb(g_ta_time_frame1, shift_info_event_cb, LV_EVENT_ALL, nullptr);// 绑定全局事件处理
-    UiManager::getInstance()->addObjToGroup(g_ta_time_frame1);
+    dependencies().uiManager.addObjToGroup(g_ta_time_frame1);
 
     // 2. 时段二输入框
     g_ta_time_frame2 = create_form_input(form_cont, "时段二:", "如: 14:00-18:00", s2_text.c_str(), false);
@@ -888,7 +897,7 @@ void load_shift_info_screen(int shift_id) {
     lv_textarea_set_max_length(g_ta_time_frame2, 11);
     lv_obj_add_event_cb(g_ta_time_frame2, time_input_format_cb, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(g_ta_time_frame2, shift_info_event_cb, LV_EVENT_ALL, nullptr);// 绑定全局事件处理
-    UiManager::getInstance()->addObjToGroup(g_ta_time_frame2);
+    dependencies().uiManager.addObjToGroup(g_ta_time_frame2);
 
     // 3. 加班输入框
     g_ta_overtime = create_form_input(form_cont, "加班:", "为空则不显示", s3_text.c_str(), false);
@@ -896,18 +905,18 @@ void load_shift_info_screen(int shift_id) {
     lv_textarea_set_max_length(g_ta_overtime, 11);
     lv_obj_add_event_cb(g_ta_overtime, time_input_format_cb, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(g_ta_overtime, shift_info_event_cb, LV_EVENT_ALL, nullptr);// 绑定全局事件处理
-    UiManager::getInstance()->addObjToGroup(g_ta_overtime);
+    dependencies().uiManager.addObjToGroup(g_ta_overtime);
 
     // 4. 确认修改按钮
     g_btn_a1_amend = create_form_btn(form_cont, "确认下载", shift_info_event_cb, nullptr);
     lv_obj_add_event_cb(g_btn_a1_amend, shift_info_event_cb, LV_EVENT_KEY, nullptr); 
-    UiManager::getInstance()->addObjToGroup(g_btn_a1_amend);
+    dependencies().uiManager.addObjToGroup(g_btn_a1_amend);
 
     // 默认聚焦在开始时间
     lv_group_focus_obj(g_ta_time_frame1);
 
     lv_screen_load(scr_shift_info);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_shift_info);
+    dependencies().uiManager.destroyAllScreensExcept(scr_shift_info);
 }
 
 
@@ -940,13 +949,13 @@ static void rule_btn_event_cb(lv_event_t *e) {
         else if (key == LV_KEY_ENTER) {
             const char* tag = (const char*)lv_event_get_user_data(e);
             if (strcmp(tag, "ADD") == 0) {
-                // TODO: 新增班次逻辑
+                // TODO(refactor/schedule-service): 接入班次创建用例并完成失败路径测试后移除。
                 show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "EDIT") == 0) {
-                // TODO: 修改班次逻辑
+                // TODO(refactor/schedule-service): 接入班次更新用例并完成失败路径测试后移除。
                 show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "DELETE") == 0) {
-                // TODO: 删除班次逻辑
+                // TODO(refactor/schedule-service): 接入班次删除用例并完成关联排班测试后移除。
                 show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             }
         }
@@ -963,14 +972,14 @@ void load_rule_screen() {
     // 创建新屏幕并注册
     BaseScreenParts parts = create_base_screen("考勤规则");
     scr_rule = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::RULE_SETTING, &scr_rule);
+    dependencies().uiManager.registerScreen(ScreenType::RULE_SETTING, &scr_rule);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_rule, [](lv_event_t *e) {
         scr_rule = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 创建列表容器
     lv_obj_t* list = create_list_container(parts.content);
@@ -983,7 +992,7 @@ void load_rule_screen() {
     // 将按钮加入输入组
     uint32_t child_cnt = lv_obj_get_child_cnt(list);
     for (uint32_t i = 0; i < child_cnt; i++) {
-        UiManager::getInstance()->addObjToGroup(lv_obj_get_child(list, i));
+        dependencies().uiManager.addObjToGroup(lv_obj_get_child(list, i));
     }
 
     // 默认聚焦第一个按钮
@@ -999,11 +1008,11 @@ void load_rule_screen() {
     }, LV_EVENT_KEY, nullptr);
 
     // 把屏幕本身加入组以响应 ESC
-    UiManager::getInstance()->addObjToGroup(scr_rule);
+    dependencies().uiManager.addObjToGroup(scr_rule);
 
     // 加载与清理
     lv_screen_load(scr_rule);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_rule);
+    dependencies().uiManager.destroyAllScreensExcept(scr_rule);
 }
 
 
@@ -1053,7 +1062,7 @@ static void company_btn_event_cb(lv_event_t* e) {
                 return;
             }
 
-            bool success = controller().saveCompanyName(name_str);
+            const bool success = dependencies().settings.saveCompanyName(name_str);
 
             if (success) {
                 show_popup_msg("保存成功", "公司名称已保存!", nullptr, "确认");
@@ -1078,7 +1087,7 @@ void load_company_screen() {
     // 2. 创建屏幕并注册 
     BaseScreenParts parts = create_base_screen("公司设置");
     scr_company = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::COMPANY_SETTING, &scr_company);
+    dependencies().uiManager.registerScreen(ScreenType::COMPANY_SETTING, &scr_company);
 
     // 3. 绑定销毁回调 
     lv_obj_add_event_cb(scr_company, [](lv_event_t * e) {
@@ -1088,14 +1097,14 @@ void load_company_screen() {
     }, LV_EVENT_DELETE, NULL);
 
     // 4. 重置输入组 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 5. 创建表单容器 
     lv_obj_t* form_cont = create_form_container(parts.content);
 
     // 6. 加载当前数据 
     std::string name;
-    controller().loadCompanyName(name);
+    (void)dependencies().settings.loadCompanyName(name);
 
     // 7. 创建公司名称输入框 
     ta_company_save = create_form_input(form_cont, "公司名称:", "请输入公司名称", name.c_str(), false);
@@ -1108,15 +1117,15 @@ void load_company_screen() {
     lv_obj_add_event_cb(btn_company_save, company_btn_event_cb, LV_EVENT_ALL, nullptr);
 
     // 10. 加入焦点组 
-    UiManager::getInstance()->addObjToGroup(ta_company_save);
-    UiManager::getInstance()->addObjToGroup(btn_company_save);
+    dependencies().uiManager.addObjToGroup(ta_company_save);
+    dependencies().uiManager.addObjToGroup(btn_company_save);
 
     // 11. 设置默认焦点 
     lv_group_focus_obj(ta_company_save);
 
     // 12. 加载屏幕 
     lv_screen_load(scr_company);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_company);
+    dependencies().uiManager.destroyAllScreensExcept(scr_company);
 }
 
 // ==================== 定时响铃子界面 ====================
@@ -1148,13 +1157,13 @@ static void bell_btn_event_cb(lv_event_t *e) {
         else if (key == LV_KEY_ENTER) {
             const char* tag = (const char*)lv_event_get_user_data(e);
             if (strcmp(tag, "ADD") == 0) {
-                // TODO: 新增响铃逻辑
+                // TODO(refactor/bell-service): 响铃配置服务及持久化接口落地后接入。
                 show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "EDIT") == 0) {
-                // TODO: 修改响铃逻辑
+                // TODO(refactor/bell-service): 响铃配置服务及持久化接口落地后接入。
                 show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             } else if (strcmp(tag, "DELETE") == 0) {
-                // TODO: 删除响铃逻辑
+                // TODO(refactor/bell-service): 响铃配置服务及持久化接口落地后接入。
                 show_popup_msg("班次设置", "该功能正在开发中!\n尽请期待! ", nullptr, "我知道了");
             }
         }
@@ -1171,14 +1180,14 @@ void load_bell_screen() {
     // 创建新屏幕并注册
     BaseScreenParts parts = create_base_screen("定时响铃");
     scr_bell = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::BELL_SETTING, &scr_bell); // 需在 ui_manager.h 中添加枚举
+    dependencies().uiManager.registerScreen(ScreenType::BELL_SETTING, &scr_bell); // 需在 ui_manager.h 中添加枚举
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_bell, [](lv_event_t *e) {
         scr_bell = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 创建列表容器
     lv_obj_t* list = create_list_container(parts.content);
@@ -1191,7 +1200,7 @@ void load_bell_screen() {
     // 将按钮加入输入组
     uint32_t child_cnt = lv_obj_get_child_cnt(list);
     for (uint32_t i = 0; i < child_cnt; i++) {
-        UiManager::getInstance()->addObjToGroup(lv_obj_get_child(list, i));
+        dependencies().uiManager.addObjToGroup(lv_obj_get_child(list, i));
     }
 
     // 默认聚焦第一个按钮
@@ -1207,11 +1216,11 @@ void load_bell_screen() {
     }, LV_EVENT_KEY, nullptr);
 
     // 把屏幕本身加入组以响应 ESC
-    UiManager::getInstance()->addObjToGroup(scr_bell);
+    dependencies().uiManager.addObjToGroup(scr_bell);
 
     // 加载与清理
     lv_screen_load(scr_bell);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_bell);
+    dependencies().uiManager.destroyAllScreensExcept(scr_bell);
 }
 } // namespace att_design
 } // namespace ui

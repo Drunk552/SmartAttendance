@@ -65,6 +65,9 @@ public:
      */
     std::vector<ListItem> listAll();
 
+    /** @return 当前最大工号加一；没有员工或读取失败时保持旧行为返回 1。 */
+    int nextAvailableId();
+
 private:
     services::EmployeeService& service_;
 };

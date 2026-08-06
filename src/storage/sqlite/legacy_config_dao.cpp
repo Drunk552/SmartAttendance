@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file
  * @brief 承接旧公司、配置、节假日和维护 SQLite DAO。
@@ -246,7 +247,7 @@ long long data_getLastImageID() {
     std::shared_lock<std::shared_mutex> lock(g_db_mutex);//共享锁
 
     if (!db) {
-        std::cerr << "[Data] Error: Database not initialized!" << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Error: Database not initialized!" << std::endl;
         return -1;
     }// 校验数据库连接
 
@@ -255,7 +256,7 @@ long long data_getLastImageID() {
 
     int rc = sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0);// 预编译 SQL
     if (rc != SQLITE_OK) {
-        std::cerr << "[Data] Prepare failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare failed: " << sqlite3_errmsg(db) << std::endl;
         return -1;
     }// 预编译失败
 
@@ -265,7 +266,7 @@ long long data_getLastImageID() {
         last_id = sqlite3_column_int64(stmt.get(), 0);
     }// 成功获取到数据
     else {
-        std::cerr << "[Data] No images found in database." << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] No images found in database." << std::endl;
     }// 未找到数据
 
     return last_id;// 返回最后保存的ID
@@ -282,7 +283,7 @@ bool db_clear_attendance() {
 
     std::unique_lock<std::shared_mutex> lock(g_db_mutex);//排他锁（写锁）
 
-    std::cout << "[Data] Clearing all attendance records..." << std::endl;
+    SA_LOG_INFO_STREAM() << "[Data] Clearing all attendance records..." << std::endl;
     // 清空表数据
     bool ret = exec_sql("DELETE FROM attendance;", "Clear Att") &&
                exec_sql("DELETE FROM sqlite_sequence WHERE name='attendance';", "Reset Seq");
@@ -318,7 +319,7 @@ bool db_clear_users() {
 
     if (rc != SQLITE_OK) {
         if (errMsg) {
-            std::cerr << "[Data] Clear Users Error: " << errMsg << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Clear Users Error: " << errMsg << std::endl;
             sqlite3_free(errMsg);
         }
         return false;
@@ -327,7 +328,7 @@ bool db_clear_users() {
     // 如果启用了级联删除，考勤记录会自动删除
     // 如果没有，可能需要额外执行 DELETE FROM attendance;
 
-    std::cout << "[Data] All users cleared." << std::endl;
+    SA_LOG_INFO_STREAM() << "[Data] All users cleared." << std::endl;
     return true;
 }
 
@@ -367,10 +368,10 @@ bool db_clear_all_employee_data(bool keep_admin) {
     // 3. 提交或回滚事务
     if (success) {
         exec_sql("COMMIT;", "Commit Transaction");
-        std::cout << "[Data] Successfully deleted employee and attendance data." << std::endl;
+        SA_LOG_INFO_STREAM() << "[Data] Successfully deleted employee and attendance data." << std::endl;
     } else {
         exec_sql("ROLLBACK;", "Rollback Transaction");
-        std::cerr << "[Data] Failed to delete data, transaction rolled back." << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Failed to delete data, transaction rolled back." << std::endl;
         return false;
     }
 
@@ -394,7 +395,7 @@ bool db_clear_all_employee_data(bool keep_admin) {
             }
         }
     } catch (const std::exception& e) {
-        std::cerr << "[Data] Error clearing image files: " << e.what() << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Error clearing image files: " << e.what() << std::endl;
         return false;
     }
 
@@ -406,7 +407,7 @@ bool db_clear_all_employee_data(bool keep_admin) {
  * @details 清除所有数据库数据和图片，重置系统
  */
 bool db_factory_reset() {
-    std::cout << "[Data] !!! FACTORY RESET !!!" << std::endl;
+    SA_LOG_INFO_STREAM() << "[Data] !!! FACTORY RESET !!!" << std::endl;
 
     // 1. 关闭数据库（data_close 内部自带写锁，这里不需要我们在外层加锁）
     data_close();
@@ -418,7 +419,7 @@ bool db_factory_reset() {
             if (fs::exists(DB_NAME)) fs::remove(DB_NAME);
             if (fs::exists(IMAGE_DIR)) fs::remove_all(IMAGE_DIR);
         } catch (const std::exception& e) {
-            std::cerr << "[Data] Factory Reset FS Error: " << e.what() << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Factory Reset FS Error: " << e.what() << std::endl;
         }
     } // 离开大括号，写锁自动释放
 
@@ -522,7 +523,7 @@ DbTextLookupResult db_find_system_config(const std::string& key) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Get System Config Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Get System Config Failed: " << sqlite3_errmsg(db) << std::endl;
         return {DbTextLookupStatus::ReadError, std::nullopt};
     }
 
@@ -555,7 +556,7 @@ bool db_set_system_config(const std::string& key, const std::string& value) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Set System Config Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Set System Config Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -563,7 +564,7 @@ bool db_set_system_config(const std::string& key, const std::string& value) {
     sqlite3_bind_text(stmt.get(), 2, value.c_str(), -1, SQLITE_STATIC);
 
     if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-        std::cerr << "[Data] Set System Config Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Set System Config Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -581,7 +582,7 @@ bool db_set_holiday(const std::string& date_str, const std::string& holiday_name
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Set Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Set Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -589,7 +590,7 @@ bool db_set_holiday(const std::string& date_str, const std::string& holiday_name
     sqlite3_bind_text(stmt.get(), 2, holiday_name.c_str(), -1, SQLITE_STATIC);
 
     if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-        std::cerr << "[Data] Set Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Set Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -604,7 +605,7 @@ bool db_delete_holiday(const std::string& date_str) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Delete Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Delete Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -624,7 +625,7 @@ DbTextLookupResult db_find_holiday(const std::string& date_str) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Get Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Get Holiday Failed: " << sqlite3_errmsg(db) << std::endl;
         return {DbTextLookupStatus::ReadError, std::nullopt};
     }
 

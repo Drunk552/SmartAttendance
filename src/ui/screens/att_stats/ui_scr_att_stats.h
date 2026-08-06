@@ -3,8 +3,11 @@
 
 #include <lvgl.h>
 
-class UiController;
-namespace ui::att_stats { void configureController(UiController& controller) noexcept; }
+namespace smart_attendance::ui { struct AttendanceStatisticsPageDependencies; }
+namespace ui::att_stats {
+void configureDependencies(
+    smart_attendance::ui::AttendanceStatisticsPageDependencies& dependencies) noexcept;
+}
 
 namespace smart_attendance::app {
 class UiBackgroundJobQueue;

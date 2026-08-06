@@ -9,7 +9,7 @@ class SystemInfoPresenter final {
 public:
     explicit SystemInfoPresenter(services::SystemInfoService& service) noexcept
         : service_(service) {}
-    bool statistics(SystemStats& stats) {
+    bool statistics(core::SystemStats& stats) {
         const auto result = service_.statistics();
         if (!result) return false;
         stats = result.value();

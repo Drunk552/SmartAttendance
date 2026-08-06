@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "simulator-full",
+      "displayName": "PC/WSL full simulator",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/simulator-full",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SA_PLATFORM": "pc",
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "simulator-full",
+      "configurePreset": "simulator-full",
+      "jobs": 4
+    }
+  ]
+}

@@ -23,6 +23,7 @@ find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)  
 
 include(CTest)
+include(cmake/CompilerOptions.cmake)
 
 # 2.2 LVGL 依赖 (SDL2, Freetype)
 pkg_check_modules(SDL2 REQUIRED sdl2)
@@ -86,6 +87,12 @@ endif()
 set(SA_PLATFORM "pc" CACHE STRING "SmartAttendance platform implementation")
 set_property(CACHE SA_PLATFORM PROPERTY STRINGS pc raspberry_pi lowmem_linux)
 
+add_library(smartattendance_logging STATIC
+    src/infrastructure/logging/logger.cpp
+)
+target_include_directories(smartattendance_logging PUBLIC ${CMAKE_SOURCE_DIR}/src)
+sa_enable_warnings(smartattendance_logging)
+
 if(SA_PLATFORM STREQUAL "pc")
     add_library(smartattendance_platform STATIC
         src/platform/pc/gstreamer_camera.cpp
@@ -105,6 +112,7 @@ target_include_directories(smartattendance_platform PUBLIC
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(smartattendance_platform PUBLIC
+    smartattendance_logging
     lvgl
     ${OpenCV_LIBS}
     Threads::Threads
@@ -122,6 +130,7 @@ target_include_directories(smartattendance_biometric PUBLIC
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(smartattendance_biometric PUBLIC ${OpenCV_LIBS})
+target_link_libraries(smartattendance_biometric PUBLIC smartattendance_logging)
 
 add_library(smartattendance_face_workers STATIC
     src/business/face_capture_worker.cpp
@@ -133,6 +142,7 @@ target_include_directories(smartattendance_face_workers PUBLIC
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(smartattendance_face_workers PUBLIC
+    smartattendance_logging
     smartattendance_biometric
     ${OpenCV_LIBS}
     Threads::Threads
@@ -151,6 +161,7 @@ target_include_directories(smartattendance_storage PUBLIC
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(smartattendance_storage PUBLIC
+    smartattendance_logging
     SQLite::SQLite3
     ${OpenCV_LIBS}
     Threads::Threads
@@ -175,76 +186,69 @@ target_include_directories(smartattendance_repositories PUBLIC
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(smartattendance_repositories PUBLIC
+    smartattendance_logging
     smartattendance_storage
 )
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(smartattendance_platform PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(smartattendance_biometric PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(smartattendance_face_workers PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(smartattendance_storage PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(smartattendance_repositories PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+sa_enable_warnings(smartattendance_platform)
+sa_enable_warnings(smartattendance_biometric)
+sa_enable_warnings(smartattendance_face_workers)
+sa_enable_warnings(smartattendance_storage)
+sa_enable_warnings(smartattendance_repositories)
 
-# 自动查找 src 下的源文件 (实际开发建议显式列出以避免遗漏)
-file(GLOB_RECURSE SRC_FILES
-    "src/main.cpp"
-
-    # 应用生命周期层
-    "src/app/*.cpp"
-
-    # 核心打卡规则与阶段三过渡服务
-    "src/core/attendance/punch_rule.cpp"
-    "src/services/config_service.cpp"
-    "src/services/department_service.cpp"
-    "src/services/employee_service.cpp"
-    "src/services/punch_service.cpp"
-    "src/services/shift_service.cpp"
-    "src/services/attendance_query_service.cpp"
-    "src/services/maintenance_service.cpp"
-    "src/services/report_service.cpp"
-    "src/ui/presenters/employee_lookup_presenter.cpp"
-    "src/ui/presenters/settings_presenter.cpp"
-    "src/ui/presenters/department_presenter.cpp"
-    "src/ui/presenters/shift_presenter.cpp"
-    "src/ui/presenters/attendance_query_presenter.cpp"
-    "src/ui/presenters/maintenance_presenter.cpp"
-    
-    # UI 层 - 显式列出需要的文件
-    "src/ui/common/ui_style.cpp"
-    "src/ui/common/ui_widgets.cpp"
-    "src/ui/common/t9_keyboard.cpp"
-    "src/ui/common/t9_keymap.cpp"
-    "src/ui/common/matrix_t9_keyboard.cpp"
-    "src/ui/managers/*.cpp"
-    "src/ui/screens/home/*.cpp"
-    "src/ui/screens/menu/*.cpp"
-    "src/ui/screens/user_mgmt/*.cpp"
-    "src/ui/screens/record_query/*.cpp"
-    "src/ui/screens/att_stats/*.cpp"
-    "src/ui/screens/att_design/*.cpp"
-    "src/ui/screens/system/*.cpp"
-    "src/ui/screens/sys_info/*.cpp"
-    "src/ui/ui_app.cpp"
-    "src/ui/ui_controller.cpp"
-    "src/ui/*.c"
-
-    # 业务层
-    "src/business/*.cpp"
-
-)
-
-# 阶段五新 Worker 使用显式 Target，避免继续依赖旧 business GLOB 自动接入。
-list(REMOVE_ITEM SRC_FILES
-    ${CMAKE_SOURCE_DIR}/src/business/face_capture_worker.cpp
-    ${CMAKE_SOURCE_DIR}/src/business/face_punch_worker.cpp
-    ${CMAKE_SOURCE_DIR}/src/business/punch_request_queue.cpp
+set(SRC_FILES
+    src/main.cpp
+    src/app/application.cpp
+    src/app/application_entry.cpp
+    src/app/application_runtime_bindings.cpp
+    src/app/application_runtime_services.cpp
+    src/app/application_services.cpp
+    src/app/task_manager.cpp
+    src/app/ui_background_job_queue.cpp
+    src/app/ui_system_status_mailbox.cpp
+    src/core/attendance/punch_rule.cpp
+    src/services/attendance_query_service.cpp
+    src/services/config_service.cpp
+    src/services/department_service.cpp
+    src/services/employee_service.cpp
+    src/services/maintenance_service.cpp
+    src/services/punch_service.cpp
+    src/services/report_service.cpp
+    src/services/shift_service.cpp
+    src/ui/presenters/attendance_query_presenter.cpp
+    src/ui/presenters/department_presenter.cpp
+    src/ui/presenters/employee_lookup_presenter.cpp
+    src/ui/presenters/maintenance_presenter.cpp
+    src/ui/presenters/settings_presenter.cpp
+    src/ui/presenters/shift_presenter.cpp
+    src/ui/common/matrix_t9_keyboard.cpp
+    src/ui/common/t9_keyboard.cpp
+    src/ui/common/t9_keymap.cpp
+    src/ui/common/ui_style.cpp
+    src/ui/common/ui_widgets.cpp
+    src/ui/managers/ui_manager.cpp
+    src/ui/screens/att_design/ui_scr_att_design.cpp
+    src/ui/screens/att_stats/ui_scr_att_stats.cpp
+    src/ui/screens/home/ui_scr_home.cpp
+    src/ui/screens/menu/ui_scr_menu.cpp
+    src/ui/screens/record_query/ui_scr_record_query.cpp
+    src/ui/screens/sys_info/ui_scr_sys_info.cpp
+    src/ui/screens/system/ui_sys_settings.cpp
+    src/ui/screens/user_mgmt/ui_user_mgmt.cpp
+    src/ui/ui_app.cpp
+    src/ui/ui_runtime.cpp
+    src/ui/font_noto_16.c
+    src/business/attendance_rule.cpp
+    src/business/auth_service.cpp
+    src/business/face_demo.cpp
+    src/business/report_generator.cpp
 )
 
 add_executable(attendance_app ${SRC_FILES})
 
 # 包含头文件路径
 target_include_directories(attendance_app PRIVATE
+    ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/business
@@ -264,6 +268,7 @@ target_include_directories(attendance_app PRIVATE
 
 # 链接所有库
 target_link_libraries(attendance_app PRIVATE
+    smartattendance_logging
     lvgl                # UI 库
     ${OpenCV_LIBS}      # 图像处理库
     SQLite::SQLite3     # 数据库
@@ -286,6 +291,10 @@ message(STATUS "  LVGL Conf: ${CMAKE_SOURCE_DIR}/lv_conf.h")
 message(STATUS "Compile Commands Export: ${CMAKE_EXPORT_COMPILE_COMMANDS}")
 
 if(BUILD_TESTING)
+    add_executable(logger_test tests/unit/logger_test.cpp)
+    target_link_libraries(logger_test PRIVATE smartattendance_logging)
+    add_test(NAME logger COMMAND logger_test)
+
     add_executable(application_lifecycle_test
         src/app/application.cpp
         src/app/application_services.cpp

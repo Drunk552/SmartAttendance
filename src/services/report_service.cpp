@@ -13,6 +13,11 @@ ReportService::ReportService(hal::IStorageDevice& storage,
                              EmployeeSettingsImporter importer) noexcept
     : storage_(storage), dataSource_(dataSource), importer_(std::move(importer)) {}
 
+void ReportService::configureImporter(
+    EmployeeSettingsImporter importer) noexcept {
+    importer_ = std::move(importer);
+}
+
 std::filesystem::path ReportService::ensureDirectory(const char* name) {
     const auto result = storage_.ensureDirectory(name);
     if (!result) {

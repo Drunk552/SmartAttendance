@@ -3,8 +3,11 @@
 
 #include <lvgl.h>
 
-class UiController;
-namespace ui::record_query { void configureController(UiController& controller) noexcept; }
+namespace smart_attendance::ui { struct RecordQueryPageDependencies; }
+namespace ui::record_query {
+void configureDependencies(
+    smart_attendance::ui::RecordQueryPageDependencies& dependencies) noexcept;
+}
 
 namespace smart_attendance::app {
 class UiBackgroundJobQueue;

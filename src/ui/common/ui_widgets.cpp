@@ -1,6 +1,7 @@
 #include "ui_widgets.h"
 #include "ui_style.h"
 #include <cstring>
+#include <memory>
 #include <cstdio>
 #include <ctime>
 #include <string>
@@ -575,7 +576,7 @@ lv_obj_t* create_form_btn(lv_obj_t *parent, const char *btn_text, lv_event_cb_t 
 
 // 异步销毁任务 
 static void popup_close_async_task(void * p) {
-    PopupContext * ctx = (PopupContext *)p;
+    std::unique_ptr<PopupContext> ctx(static_cast<PopupContext*>(p));
 
     // 1. 将键盘控制权安全地还给背景界面
     lv_indev_t * indev = lv_indev_get_next(nullptr);
@@ -605,7 +606,6 @@ static void popup_close_async_task(void * p) {
         lv_obj_delete(ctx->overlay);
     }
 
-    delete ctx; // 释放结构体内存，防止内存泄漏
 }
 
 //  弹窗销毁的回调函数 
@@ -722,12 +722,13 @@ void show_popup_msg(const char* title, const char* msg, lv_obj_t* focus_back_obj
     lv_obj_center(lbl_btn);
 
     // 6. 绑定事件与上下文
-    PopupContext * ctx = new PopupContext;
+    auto ctx = std::make_unique<PopupContext>();
     ctx->overlay = overlay;
     ctx->focus_back_obj = focus_back_obj;
 
-    lv_obj_add_event_cb(btn_ok, popup_close_event_cb, LV_EVENT_CLICKED, ctx);
-    lv_obj_add_event_cb(btn_ok, popup_close_event_cb, LV_EVENT_KEY, ctx);
+    lv_obj_add_event_cb(btn_ok, popup_close_event_cb, LV_EVENT_CLICKED, ctx.get());
+    lv_obj_add_event_cb(btn_ok, popup_close_event_cb, LV_EVENT_KEY, ctx.get());
+    ctx.release(); // LVGL 异步关闭回调重新接管所有权。
 
     // 7. 物理隔离与抢占焦点
     lv_indev_t * indev = lv_indev_get_next(nullptr);

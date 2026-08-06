@@ -1,8 +1,10 @@
+#include "infrastructure/logging/logger.h"
 #include "ui_scr_menu.h"
 #include <cstring>
 #include "../../managers/ui_manager.h"
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
+#include "../../ui_page_dependencies.h"
 
 // 引入各模块入口
 #include "../home/ui_scr_home.h"
@@ -15,6 +17,17 @@
 
 namespace ui {
 namespace menu {
+
+static smart_attendance::ui::MenuPageDependencies* dependencies_ = nullptr;
+
+void configureDependencies(
+    smart_attendance::ui::MenuPageDependencies& dependencies) noexcept {
+    dependencies_ = &dependencies;
+}
+
+static smart_attendance::ui::MenuPageDependencies& dependencies() {
+    return *dependencies_;
+}
 
 static lv_obj_t *screen_menu = nullptr;
 static lv_obj_t *obj_grid = nullptr;
@@ -59,12 +72,12 @@ static void menu_btn_event_cb(lv_event_t *e) {
         if (key == LV_KEY_DOWN) {
             // 向下：下一个，循环 (+1)
             next_index = (index + 1) % total;
-            std::printf("[UI] Nav: DOWN (%d -> %d)\n", index, next_index);
+            SA_LOG_INFO("[UI] Nav: DOWN (%d -> %d)\n", index, next_index);
         }
         else if (key == LV_KEY_UP) {
             // 向上：上一个，循环 (-1，加 total 防止负数)
             next_index = (index + total - 1) % total;
-            std::printf("[UI] Nav: UP (%d -> %d)\n", index, next_index);
+            SA_LOG_INFO("[UI] Nav: UP (%d -> %d)\n", index, next_index);
         }
 
         // --- 执行跳转 ---
@@ -119,14 +132,14 @@ void load_menu_screen() {
 
     BaseScreenParts parts = create_base_screen("主菜单");
     screen_menu = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::MENU, &screen_menu);
+    dependencies().uiManager.registerScreen(ScreenType::MENU, &screen_menu);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(screen_menu, [](lv_event_t * e) {
         screen_menu = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 4. 定义九宫格布局
     //使用 LV_GRID_FR(1) 让两列平分宽度，自动填满容器
@@ -196,7 +209,7 @@ void load_menu_screen() {
         // 使用全局样式 style_text_cn
         lv_obj_add_style(lbl, &style_text_cn, 0);
         
-        UiManager::getInstance()->addObjToGroup(btn);
+        dependencies().uiManager.addObjToGroup(btn);
     }
 
     // 默认聚焦第一个
@@ -207,10 +220,10 @@ void load_menu_screen() {
     lv_obj_add_event_cb(screen_menu, [](lv_event_t* e){
         if(lv_event_get_key(e) == LV_KEY_ESC) ui::home::load_screen();
     }, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(screen_menu);
+    dependencies().uiManager.addObjToGroup(screen_menu);
 
     lv_screen_load(screen_menu);
-    UiManager::getInstance()->destroyAllScreensExcept(screen_menu);
+    dependencies().uiManager.destroyAllScreensExcept(screen_menu);
 }
 
 } // namespace menu

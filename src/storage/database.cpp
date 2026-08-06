@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file database.cpp
  * @brief 管理旧 SQLite 数据库连接、Schema 初始化和播种生命周期
@@ -74,7 +75,7 @@ std::string normalize_time_string(const std::string& time_str) {
 bool exec_sql(const char* sql, const char* tag) {
     char* zErrMsg = 0;
     if (sqlite3_exec(db, sql, 0, 0, &zErrMsg) != SQLITE_OK) {
-        std::cerr << "[Data] SQL Error (" << tag << "): " << zErrMsg << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] SQL Error (" << tag << "): " << zErrMsg << std::endl;
         sqlite3_free(zErrMsg);
         return false;
     }
@@ -89,18 +90,18 @@ bool data_init() {
     try {
         if (!fs::exists(IMAGE_DIR)) fs::create_directories(IMAGE_DIR);
     } catch (const std::exception& e) {
-        std::cerr << "[Data] FS Init Error: " << e.what() << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] FS Init Error: " << e.what() << std::endl;
         return false;
     }
 
     // 连接数据库
     if (sqlite3_open(DB_NAME.c_str(), &db)) {
-        std::cerr << "[Data] Can't open DB: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Can't open DB: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
     // ================= 性能调优：SQLite Pragmas =================
-    std::cout << "[DB] Applying performance pragmas..." << std::endl;
+    SA_LOG_INFO_STREAM() << "[DB] Applying performance pragmas..." << std::endl;
     // 1. 启用 WAL 模式 (极大提升读写并发性能，读写不互斥)
     exec_sql("PRAGMA journal_mode=WAL;", "Enable WAL mode");
     // 2. 调整同步模式 (WAL模式下 NORMAL 既安全又快)
@@ -270,16 +271,16 @@ bool data_init() {
                exec_sql(sql_dept_company_idx, "Create Dept Company Index");
 
     if (ret) {
-        std::cout << "[Data] DAO Layer Initialized." << std::endl;
+        SA_LOG_INFO_STREAM() << "[Data] DAO Layer Initialized." << std::endl;
         // 执行播种
         data_seed();
 
         // 预编译高频使用的插入打卡记录语句，并存入全局变量
         const char* sql_log = "INSERT INTO attendance (user_id, shift_id, image_path, timestamp, status) VALUES (?, ?, ?, ?, ?);";
         if (sqlite3_prepare_v2(db, sql_log, -1, &g_stmt_log_attendance, nullptr) != SQLITE_OK) {
-            std::cerr << "[Data] Warning: Failed to precompile log_attendance statement: " << sqlite3_errmsg(db) << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Warning: Failed to precompile log_attendance statement: " << sqlite3_errmsg(db) << std::endl;
         } else {
-            std::cout << "[Data] Precompiled log_attendance statement successfully." << std::endl;
+            SA_LOG_INFO_STREAM() << "[Data] Precompiled log_attendance statement successfully." << std::endl;
         }
     }
 
@@ -326,13 +327,13 @@ std::string db_hash_password(const std::string& raw_pwd) {
 
 bool data_seed() {
 
-    std::cout << ">>> [Data] Checking for data seeding..." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Data] Checking for data seeding..." << std::endl;
 
     // 0. 播种默认公司 (如果为空)
     if (is_table_empty("companies")) {
         const char* sql = "INSERT INTO companies (id, name, code, address) VALUES (1, '777', 'SmartAtt', '中国');";
         if (exec_sql(sql, "Seed Company")) {
-            std::cout << "   [Seed] Created default company: '777'" << std::endl;
+            SA_LOG_INFO_STREAM() << "   [Seed] Created default company: '777'" << std::endl;
         }
     }
 
@@ -363,7 +364,7 @@ bool data_seed() {
             exec_sql(sql.c_str(), ("Seed Dept " + dept_name).c_str());
         }
 
-        std::cout << "   [Seed] Created 16 default departments for company ID: 1" << std::endl;
+        SA_LOG_INFO_STREAM() << "   [Seed] Created 16 default departments for company ID: 1" << std::endl;
     }
 
     // 2. 播种默认班次
@@ -375,7 +376,7 @@ bool data_seed() {
                      "", "",            // 无加班
                      0);
 
-        std::cout << "   [Seed] Created Standard Shift (Seg1: 08-12, Seg2: 14-18)." << std::endl;
+        SA_LOG_INFO_STREAM() << "   [Seed] Created Standard Shift (Seg1: 08-12, Seg2: 14-18)." << std::endl;
     }
 
     //  3. 播种默认考勤规则
@@ -383,7 +384,7 @@ bool data_seed() {
         // 默认允许迟到 15 分钟；周六/周日默认不上班（流程图节点K缺省安全封闭）
         const char* sql = "INSERT INTO attendance_rules (company_name, late_threshold, early_leave_threshold, sat_work, sun_work) VALUES ('Smart Co.', 15, 0, 0, 0);";
         exec_sql(sql, "Seed Rules");
-        std::cout << "   [Seed] Created default rules (Late Threshold: 15m, Sat/Sun off)." << std::endl;
+        SA_LOG_INFO_STREAM() << "   [Seed] Created default rules (Late Threshold: 15m, Sat/Sun off)." << std::endl;
     }
 
     // 4. 播种默认管理员 (如果用户表为空)
@@ -403,7 +404,7 @@ bool data_seed() {
 
         int uid = db_add_user(admin, dummy_face);
         if (uid > 0) {
-            std::cout << "   [Seed] Created default admin: 'SuperAdmin' (ID: " << uid << ", Pwd: 888888)" << std::endl;
+            SA_LOG_INFO_STREAM() << "[Seed] Created default administrator (ID: " << uid << ")" << std::endl;
         }
     }
 
@@ -417,7 +418,7 @@ bool data_seed() {
             exec_sql(sql.c_str(), "Seed Bell");
         }
         db_commit_transaction();
-        std::cout << "   [Seed] Created 16 empty bell schedules." << std::endl;
+        SA_LOG_INFO_STREAM() << "   [Seed] Created 16 empty bell schedules." << std::endl;
     }
 
     return true;
@@ -436,6 +437,6 @@ void data_close() {
     if (db) {
         sqlite3_close(db);
         db = nullptr;
-        std::cout << "[Data] Database connection closed." << std::endl;
+        SA_LOG_INFO_STREAM() << "[Data] Database connection closed." << std::endl;
     }
 }

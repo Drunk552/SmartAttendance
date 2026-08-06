@@ -107,4 +107,15 @@ EmployeeLookupPresenter::listAll() {
     }
 }
 
+int EmployeeLookupPresenter::nextAvailableId() {
+    const auto employees = listAll();
+    int maxId = 0;
+    for (const auto& employee : employees) {
+        if (employee.id > maxId) {
+            maxId = employee.id;
+        }
+    }
+    return maxId == 0 ? 1 : maxId + 1;
+}
+
 } // namespace smart_attendance::ui

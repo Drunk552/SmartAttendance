@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file ui_scr_home.cpp
  * @brief 主页/摄像头预览界面 
@@ -14,7 +15,7 @@
 #include "../../managers/ui_manager.h"
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
-#include "../../ui_controller.h"
+#include "../../ui_page_dependencies.h"
 #include "../../../business/face_demo.h"
 #include "../menu/ui_scr_menu.h"
 
@@ -32,14 +33,15 @@ extern "C" {
 namespace ui {
 namespace home {
 
-static UiController* controller_ = nullptr;
+static smart_attendance::ui::HomePageDependencies* dependencies_ = nullptr;
 
-void configureController(UiController& controller) noexcept {
-    controller_ = &controller;
+void configureDependencies(
+    smart_attendance::ui::HomePageDependencies& dependencies) noexcept {
+    dependencies_ = &dependencies;
 }
 
-static UiController& controller() {
-    return *controller_;
+static smart_attendance::ui::HomePageDependencies& dependencies() {
+    return *dependencies_;
 }
 
 static lv_obj_t * screen = nullptr;
@@ -90,7 +92,7 @@ static void screen_cleanup_cb(lv_event_t * e) {
     // 页面生命周期使用同步调用，保证业务状态在页面销毁完成前停止接收新输入。
     business_leave_home_screen();
 
-    printf("[Home] Resources cleaned up safely.\n");
+    SA_LOG_INFO("[Home] Resources cleaned up safely.\n");
 }
 
 /**
@@ -120,19 +122,22 @@ static void screen_event_cb(lv_event_t * e) {
 static void timer_cam_cb(lv_timer_t * t) {
     if (lv_screen_active() == screen && img_camera) {
         // 使用 UiManager 的同步机制
-        if (UiManager::getInstance()->trySetFramePending()) {
+        if (dependencies().uiManager.trySetFramePending()) {
             // 获取最新帧到共享 Buffer 并使对象失效触发重绘
-            controller().getDisplayFrame(
-                UiManager::getInstance()->getCameraDisplayBuffer(), CAM_W, CAM_H);
+            dependencies().readDisplayFrame(
+                dependencies().uiManager.getCameraDisplayBuffer(), CAM_W, CAM_H);
             lv_obj_invalidate(img_camera);
-            UiManager::getInstance()->clearFramePending();
+            dependencies().uiManager.clearFramePending();
         }
     }
 }
 
 // 辅助函数：获取当前格式化日期 (YYYY-MM-DD)
 static std::string get_current_date() {
-    std::time_t now = controller().getCurrentUnixTime();
+    const auto nowResult = dependencies().rtc.now();
+    const std::time_t now = nowResult
+        ? static_cast<std::time_t>(nowResult.value().unixSeconds)
+        : 0;
     char buf[20];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::localtime(&now));
     return std::string(buf);
@@ -158,14 +163,14 @@ static void create_screen() {
     // create_base_screen 默认会创建 Title 和 Time，我们不需要默认的，直接清空
     lv_obj_clean(parts.header); 
 
-    UiManager::getInstance()->registerScreen(ScreenType::MAIN, &screen);
+    dependencies().uiManager.registerScreen(ScreenType::MAIN, &screen);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(screen, [](lv_event_t * e) {
         screen = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 设置 Flex 布局：两端对齐
     lv_obj_set_flex_flow(parts.header, LV_FLEX_FLOW_ROW); // 行布局
@@ -206,7 +211,7 @@ static void create_screen() {
     lv_obj_set_style_pad_all(parts.content, 0, 0);// 让摄像头画面能贴边显示
 
     // 创建摄像头图像对象，父对象直接设为 parts.content
-    img_dsc.data = UiManager::getInstance()->getCameraDisplayBuffer();
+    img_dsc.data = dependencies().uiManager.getCameraDisplayBuffer();
     img_camera = lv_image_create(parts.content);
     lv_image_set_src(img_camera, &img_dsc);
     lv_obj_center(img_camera);// 让摄像头画面居中显示在中间区域
@@ -255,8 +260,8 @@ void load_screen(void) {
     if (!screen) create_screen();
 
     // 绑定输入设备组
-    UiManager::getInstance()->resetKeypadGroup();
-    UiManager::getInstance()->addObjToGroup(screen);
+    dependencies().uiManager.resetKeypadGroup();
+    dependencies().uiManager.addObjToGroup(screen);
     lv_group_focus_obj(screen);
 
     // 启动定时器刷新摄像头
@@ -267,7 +272,7 @@ void load_screen(void) {
     business_enter_home_screen();
 
     lv_screen_load(screen);
-    UiManager::getInstance()->destroyAllScreensExcept(screen);
+    dependencies().uiManager.destroyAllScreensExcept(screen);
 }
 
 void update_time(const std::string& time_str, const std::string& date_str) {

@@ -29,16 +29,27 @@ Application::Application(DatabaseLifecycle databaseLifecycle,
       services_(databaseLifecycle,
                 businessLifecycle,
                 std::move(platformDevices)),
+      uiManager_(),
       employeeLookupPresenter_(services_.employeeService()),
       settingsPresenter_(services_.configService()),
       departmentPresenter_(services_.departmentService()),
       shiftPresenter_(services_.shiftService()),
       attendanceQueryPresenter_(services_.attendanceQueryService()),
       maintenancePresenter_(services_.maintenanceService()),
-      taskManager_(userReportExporter,
-                   customReportExporter,
-                   employeeSettingsExporter,
-                   employeeSettingsImporter,
+      systemInfoPresenter_(services_.systemInfoService()),
+      uiPageDependencies_{
+          {uiManager_, services_.rtc(), nullptr},
+          {uiManager_, settingsPresenter_, departmentPresenter_, shiftPresenter_},
+          {uiManager_, services_.rtc(), employeeLookupPresenter_},
+          {uiManager_, services_.rtc(), employeeLookupPresenter_, attendanceQueryPresenter_},
+          {uiManager_, systemInfoPresenter_},
+          {uiManager_, services_.rtc(), maintenancePresenter_},
+          {uiManager_, employeeLookupPresenter_, departmentPresenter_, nullptr, nullptr},
+          {uiManager_}},
+      taskManager_(std::move(userReportExporter),
+                   std::move(customReportExporter),
+                   std::move(employeeSettingsExporter),
+                   std::move(employeeSettingsImporter),
                    std::move(monitorWorkerLifecycle),
                    std::move(frameDeliveryWorkerLifecycle),
                    std::move(captureWorkerLifecycle),
@@ -237,7 +248,6 @@ ui::AttendanceQueryPresenter& Application::attendanceQueryPresenter() noexcept {
 ui::MaintenancePresenter& Application::maintenancePresenter() noexcept {
     return maintenancePresenter_;
 }
-
 
 bool Application::shutdownUiNoexcept() noexcept {
     if (!uiInitialized_) {
