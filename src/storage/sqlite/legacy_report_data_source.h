@@ -7,16 +7,16 @@ namespace smart_attendance::storage::sqlite {
 
 class LegacyReportDataSource final : public services::IReportDataSource {
 public:
-    std::vector<AttendanceRecord> records(
+    std::vector<services::ReportAttendanceRecord> records(
         long long startTimestamp, long long endTimestamp) override;
-    std::vector<AttendanceRecord> recordsForUser(
+    std::vector<services::ReportAttendanceRecord> recordsForUser(
         int userId, long long startTimestamp, long long endTimestamp) override;
-    std::vector<UserData> users() override;
-    std::optional<UserData> user(int userId) override;
-    std::vector<DeptInfo> departments() override;
-    std::vector<ShiftInfo> shifts() override;
-    RuleConfig globalRules() override;
-    std::optional<ShiftInfo> shiftForUserAt(
+    std::vector<services::ReportUser> users() override;
+    std::optional<services::ReportUser> user(int userId) override;
+    std::vector<services::ReportDepartment> departments() override;
+    std::vector<services::ReportShift> shifts() override;
+    services::ReportRules globalRules() override;
+    std::optional<services::ReportShift> shiftForUserAt(
         int userId, long long timestamp) override;
 };
 

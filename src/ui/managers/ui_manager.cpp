@@ -1,16 +1,9 @@
+#include "infrastructure/logging/logger.h"
 #include "ui_manager.h"
+#include <lvgl.h>
 #include <cstdio>
 #include <algorithm>
 #include <cstring>
-
-UiManager* UiManager::getInstance() {
-    static UiManager instance;
-    return &instance;
-}
-
-UiManager::UiManager() {
-    // 构造时初始化缓冲区（可选，std::array 自动管理内存）
-}
 
 // --- 输入设备管理实现 ---
 void UiManager::init() {
@@ -64,7 +57,7 @@ void UiManager::registerScreen(ScreenType type, lv_obj_t** screen_ptr_ref) {
         if (ms.ptr_ref == screen_ptr_ref) return;
     }
     managed_screens.push_back({type, screen_ptr_ref});
-    std::printf("[UiManager] Screen Registered. Total: %zu\n", managed_screens.size());
+    SA_LOG_INFO("[UiManager] Screen Registered. Total: %zu\n", managed_screens.size());
 }
 
 // 清理特定屏幕资源
@@ -72,14 +65,14 @@ void UiManager::freeScreenResources(lv_obj_t** screen_ptr) {
     if (screen_ptr == nullptr || *screen_ptr == nullptr) return;
 
     // 1. 销毁 LVGL 对象 (这会递归销毁所有子对象)
-    std::printf("[Memory] Freeing Screen %p...\n", *screen_ptr);
+    SA_LOG_INFO("[Memory] Freeing Screen %p...\n", *screen_ptr);
     lv_obj_delete(*screen_ptr);
     
     // 2. 将屏幕指针置空，标记为已销毁
     // 这一步至关重要，防止重复释放或野指针访问
     *screen_ptr = nullptr;
     
-    std::printf("[Memory] Screen Freed.\n");
+    SA_LOG_INFO("[Memory] Screen Freed.\n");
 }
 
 /**

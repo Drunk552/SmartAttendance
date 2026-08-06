@@ -7,7 +7,7 @@ namespace smart_attendance::storage::sqlite {
 
 class LegacySystemInfoRepository final : public ISystemInfoRepository {
 public:
-    Result<SystemStats, RepositoryError> statistics() override;
+    Result<core::SystemStats, RepositoryError> statistics() override;
 };
 
 } // namespace smart_attendance::storage::sqlite

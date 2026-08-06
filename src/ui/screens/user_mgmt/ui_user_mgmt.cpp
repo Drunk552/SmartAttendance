@@ -2,7 +2,7 @@
 #include "../../managers/ui_manager.h"
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
-#include "../../ui_controller.h"
+#include "../../ui_page_dependencies.h"
 #include "../menu/ui_scr_menu.h" // 用于返回主菜单
 
 #include <string>
@@ -15,14 +15,30 @@ LV_FONT_DECLARE(font_noto_16);
 namespace ui {
 namespace user_mgmt {
 
-static UiController* controller_ = nullptr;
+static smart_attendance::ui::UserManagementPageDependencies* dependencies_ = nullptr;
 
-void configureController(UiController& controller) noexcept {
-    controller_ = &controller;
+void configureDependencies(
+    smart_attendance::ui::UserManagementPageDependencies& dependencies) noexcept {
+    dependencies_ = &dependencies;
 }
 
-static UiController& controller() {
-    return *controller_;
+static smart_attendance::ui::UserManagementPageDependencies& dependencies() {
+    return *dependencies_;
+}
+
+using UserDisplayInfo =
+    smart_attendance::ui::EmployeeLookupPresenter::DisplayDetails;
+
+static UserDisplayInfo userDisplayInfo(int employeeId) {
+    const auto details =
+        dependencies().employees.findDisplayDetailsById(employeeId);
+    return details ? *details : UserDisplayInfo{};
+}
+
+static std::vector<smart_attendance::ui::DepartmentItem> departmentItems() {
+    std::vector<smart_attendance::ui::DepartmentItem> departments;
+    (void)dependencies().departments.listDepartments(departments);
+    return departments;
 }
 
 // ================= [内部状态: 屏幕指针] =================
@@ -126,10 +142,10 @@ static void user_menu_btn_event_cb(lv_event_t *e) {
          }
         // 导航
         if (key == LV_KEY_DOWN) {
-            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下导航
+            lv_group_focus_next(dependencies().uiManager.getKeypadGroup());// 向下导航
         }
         else if (key == LV_KEY_UP) {
-            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上导航
+            lv_group_focus_prev(dependencies().uiManager.getKeypadGroup());// 向上导航
         }
     }
 
@@ -158,14 +174,14 @@ void load_user_menu_screen() {
 
     BaseScreenParts parts = create_base_screen("员工管理");
     scr_menu = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_MGMT, &scr_menu);
+    dependencies().uiManager.registerScreen(ScreenType::USER_MGMT, &scr_menu);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_menu, [](lv_event_t * e) {
         scr_menu = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
@@ -177,7 +193,7 @@ void load_user_menu_screen() {
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
@@ -185,7 +201,7 @@ void load_user_menu_screen() {
     }
 
     lv_screen_load(scr_menu);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_menu);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_menu);// 加载后销毁其他屏幕，保持资源清晰
 }
 
 // =========================================================
@@ -210,11 +226,11 @@ static void list_item_event_cb(lv_event_t *e) {
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
          }
         else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下或向右导航
+            lv_group_focus_next(dependencies().uiManager.getKeypadGroup());// 向下或向右导航
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
         }
         else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上或向左导航
+            lv_group_focus_prev(dependencies().uiManager.getKeypadGroup());// 向上或向左导航
             return;
          }
     }
@@ -241,7 +257,7 @@ void load_user_list_screen() {
 
     BaseScreenParts parts = create_base_screen("员工列表");
     scr_list = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_LIST, &scr_list);
+    dependencies().uiManager.registerScreen(ScreenType::USER_LIST, &scr_list);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_list, [](lv_event_t * e) {
@@ -249,7 +265,7 @@ void load_user_list_screen() {
         obj_list_view = nullptr; // 把这个全局内容区指针也清空！
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // ==========================================
     // 将内容区改为 Flex 垂直布局，方便表头和列表堆叠
@@ -307,7 +323,7 @@ void load_user_list_screen() {
     lv_obj_set_flex_flow(obj_list_view, LV_FLEX_FLOW_COLUMN); // 开启垂直滚动的流式布局
 
     // 获取业务数据并动态生成列表项
-    auto users = controller().getAllUsers();
+    const auto users = dependencies().employees.listAll();
 
     if (users.empty()) {
         // 无数据时的缺省页显示
@@ -332,7 +348,7 @@ void load_user_list_screen() {
             lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-            std::string dname = u.dept_name.empty() ? "-" : u.dept_name;// 部门名称可能为空，显示为“-”
+            std::string dname = u.departmentName.empty() ? "-" : u.departmentName;// 部门名称可能为空，显示为“-”
 
             // 第 1 列：工号 (25% 宽度)
             lv_obj_t * l_id = lv_label_create(btn);
@@ -361,7 +377,7 @@ void load_user_list_screen() {
             // 绑定事件时传入 User ID 作为 user_data，方便在回调中识别哪个用户被点击了
             lv_obj_add_event_cb(btn, list_item_event_cb, LV_EVENT_ALL, (void*)(intptr_t)u.id);
 
-            UiManager::getInstance()->addObjToGroup(btn);
+            dependencies().uiManager.addObjToGroup(btn);
         }
 
         // 列表生成完后，默认聚焦第一项
@@ -380,7 +396,7 @@ void load_user_list_screen() {
 
     // 加载这个全新生成的屏幕，并销毁其他老旧屏幕
     lv_screen_load(scr_list);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_list);
+    dependencies().uiManager.destroyAllScreensExcept(scr_list);
 }
 
 
@@ -405,11 +421,11 @@ static void user_info_event_cb(lv_event_t *e) {
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
          }
         else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
-            lv_group_focus_next(UiManager::getInstance()->getKeypadGroup());// 向下或向右导航
+            lv_group_focus_next(dependencies().uiManager.getKeypadGroup());// 向下或向右导航
             return;// 处理完返回后直接返回，避免继续执行下面的导航逻辑
         }
         else if (key == LV_KEY_UP || key == LV_KEY_LEFT) {
-            lv_group_focus_prev(UiManager::getInstance()->getKeypadGroup());// 向上或向左导航
+            lv_group_focus_prev(dependencies().uiManager.getKeypadGroup());// 向上或向左导航
             return;
          }
     }
@@ -445,8 +461,7 @@ static void user_info_event_cb(lv_event_t *e) {
             //跳转到修改卡号界面
         }
         else if (index == 6) {
-            UserDisplayInfo user =
-                controller().getUserDisplayInfo(g_current_info_uid);
+            const UserDisplayInfo user = userDisplayInfo(g_current_info_uid);
             // 如果密码为空，跳转到“注册密码”
             if (!user.passwordRegistered) {
                 load_user_register_password_screen();
@@ -475,7 +490,7 @@ void load_user_info_screen(int user_id) {
         scr_info = nullptr;
     }
 
-    UserDisplayInfo display = controller().getUserDisplayInfo(user_id);
+    const UserDisplayInfo display = userDisplayInfo(user_id);
     if (display.id == 0) {
         show_popup_msg("显示错误", "用户未找到! ", nullptr, "我知道了");
         load_user_list_screen();// 返回员工列表界面
@@ -484,14 +499,14 @@ void load_user_info_screen(int user_id) {
 
     BaseScreenParts parts = create_base_screen("员工详情");
     scr_info = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_INFO, &scr_info);
+    dependencies().uiManager.registerScreen(ScreenType::USER_INFO, &scr_info);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_info, [](lv_event_t * e) {
         scr_info = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
@@ -506,8 +521,6 @@ void load_user_info_screen(int user_id) {
     std::string str_card  = display.cardId.empty() ? "未绑定" : display.cardId;//卡号
     std::string str_pwd   = display.passwordRegistered ? "***" : "未注册";//密码
     std::string str_role  = (display.role == 1) ? "管理员" : "普通";//权限
-
-    int* pass_id = new int(user_id);// 需要在事件回调中使用用户 ID，所以放在堆上并传递指针
 
     // 第0行：工号
     create_sys_list_btn(list, "1.", "工号", str_id.c_str(), user_info_event_cb, (const char*)(intptr_t)0);
@@ -529,21 +542,15 @@ void load_user_info_screen(int user_id) {
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
         lv_group_focus_obj(lv_obj_get_child(list, 0));
     }
 
-    // 防止内存泄漏：当 list 销毁时，释放 pass_id
-    lv_obj_add_event_cb(list, [](lv_event_t* e){
-        int* id_ptr = (int*)lv_event_get_user_data(e);
-        if(id_ptr) delete id_ptr;
-    }, LV_EVENT_DELETE, pass_id);
-
     lv_screen_load(scr_info);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_info);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_info);// 加载后销毁其他屏幕，保持资源清晰
 
 }
 
@@ -611,7 +618,8 @@ static void edit_name_event_cb(lv_event_t *e) {
                 }
 
                 // 调用数据库更新逻辑
-                controller().updateUserName(g_current_info_uid, new_name);
+                (void)dependencies().employees.updateName(
+                    g_current_info_uid, new_name);
 
                 // 修改成功后，重新加载员工详情页
                 load_user_info_screen(g_current_info_uid);
@@ -623,8 +631,7 @@ static void edit_name_event_cb(lv_event_t *e) {
 // 修改姓名界面
 void load_user_edit_name_screen() {
 
-    UserDisplayInfo user =
-        controller().getUserDisplayInfo(g_current_info_uid);
+    const UserDisplayInfo user = userDisplayInfo(g_current_info_uid);
 
     if (scr_edit_name){
         lv_obj_delete(scr_edit_name);
@@ -633,14 +640,14 @@ void load_user_edit_name_screen() {
 
     BaseScreenParts parts = create_base_screen("修改姓名");
     scr_edit_name = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_EDIT_NAME, &scr_edit_name);
+    dependencies().uiManager.registerScreen(ScreenType::USER_EDIT_NAME, &scr_edit_name);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_edit_name, [](lv_event_t * e) {
         scr_edit_name = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* form_cont = create_form_container(parts.content);
 
@@ -650,15 +657,15 @@ void load_user_edit_name_screen() {
 
     // 绑定事件与焦点
     lv_obj_add_event_cb(ta_new, edit_name_event_cb, LV_EVENT_ALL, ta_new);
-    UiManager::getInstance()->addObjToGroup(ta_new);
+    dependencies().uiManager.addObjToGroup(ta_new);
 
     // 创建确认按钮，并手动加入按键组
     lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认修改", edit_name_event_cb, ta_new);
-    UiManager::getInstance()->addObjToGroup(btn_confirm);
+    dependencies().uiManager.addObjToGroup(btn_confirm);
 
     lv_group_focus_obj(ta_new);
     lv_screen_load(scr_edit_name);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_edit_name);
+    dependencies().uiManager.destroyAllScreensExcept(scr_edit_name);
 }
 
 // ========================== 1.1.2. 修改员工部门 ===============================
@@ -727,11 +734,12 @@ static void edit_dept_event_cb(lv_event_t *e) {
                 uint16_t selected_index = lv_dropdown_get_selected(dd_new);
 
                 // 获取部门列表以匹配对应的 ID
-                std::vector<DeptInfo> depts = controller().getDepartmentList();
+                const auto depts = departmentItems();
                 if (selected_index < depts.size()) {
                     int new_dept_id = depts[selected_index].id;
 
-                    controller().updateUserDept(g_current_info_uid, new_dept_id);
+                    (void)dependencies().employees.updateDepartment(
+                        g_current_info_uid, new_dept_id);
 
                     // 修改成功后，重新加载员工详情页
                     load_user_info_screen(g_current_info_uid);
@@ -744,8 +752,7 @@ static void edit_dept_event_cb(lv_event_t *e) {
 // 修改部门界面
 void load_user_edit_dept_screen() {
 
-    UserDisplayInfo user =
-        controller().getUserDisplayInfo(g_current_info_uid);
+    const UserDisplayInfo user = userDisplayInfo(g_current_info_uid);
 
     if (scr_edit_dept){
         lv_obj_delete(scr_edit_dept);
@@ -754,14 +761,14 @@ void load_user_edit_dept_screen() {
 
     BaseScreenParts parts = create_base_screen("修改部门");
     scr_edit_dept = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_MGMT, &scr_edit_dept);
+    dependencies().uiManager.registerScreen(ScreenType::USER_MGMT, &scr_edit_dept);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_edit_dept, [](lv_event_t * e) {
         scr_edit_dept = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     lv_obj_t* form_cont = create_form_container(parts.content);
 
@@ -773,7 +780,7 @@ void load_user_edit_dept_screen() {
                       true);
 
     //// 1. 从控制器获取原生数据
-    std::vector<DeptInfo> depts = controller().getDepartmentList();
+    const auto depts = departmentItems();
 
     // 2. 转换为通用 items 格式
     std::vector<std::pair<int, std::string>> dept_items;
@@ -786,15 +793,15 @@ void load_user_edit_dept_screen() {
 
     // 绑定事件与焦点
     lv_obj_add_event_cb(dd_new, edit_dept_event_cb, LV_EVENT_ALL, dd_new);
-    UiManager::getInstance()->addObjToGroup(dd_new);
+    dependencies().uiManager.addObjToGroup(dd_new);
 
     // 创建确认按钮，并手动加入按键组
     lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认修改", edit_dept_event_cb, dd_new);
-    UiManager::getInstance()->addObjToGroup(btn_confirm);
+    dependencies().uiManager.addObjToGroup(btn_confirm);
 
     lv_group_focus_obj(dd_new);
     lv_screen_load(scr_edit_dept);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_edit_dept);
+    dependencies().uiManager.destroyAllScreensExcept(scr_edit_dept);
 }
 
 // ========================== 1.1.3. 注册/修改员工密码 ===============================
@@ -861,7 +868,8 @@ static void register_password_event_cb(lv_event_t *e) {
             if (strcmp(pwd1, pwd2) != 0) return;
 
             // 调用数据库更新逻辑
-            controller().updateUserPassword(g_current_info_uid, pwd1);
+            (void)dependencies().employees.updatePassword(
+                g_current_info_uid, pwd1);
 
             // 修改成功后，重新加载员工详情页
             load_user_info_screen(g_current_info_uid);
@@ -879,7 +887,7 @@ void load_user_register_password_screen() {
 
     BaseScreenParts parts = create_base_screen("密码登记");
     scr_register_password = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_REGISTER_PASSWORD, &scr_register_password);
+    dependencies().uiManager.registerScreen(ScreenType::USER_REGISTER_PASSWORD, &scr_register_password);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_register_password, [](lv_event_t * e) {
@@ -888,7 +896,7 @@ void load_user_register_password_screen() {
         g_ta_confirm_pwd = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* form_cont = create_form_container(parts.content);
 
@@ -901,8 +909,8 @@ void load_user_register_password_screen() {
     lv_textarea_set_password_mode(g_ta_confirm_pwd, true);
 
     // 2. 将输入框按顺序加入输入组
-    UiManager::getInstance()->addObjToGroup(g_ta_new_pwd);
-    UiManager::getInstance()->addObjToGroup(g_ta_confirm_pwd);
+    dependencies().uiManager.addObjToGroup(g_ta_new_pwd);
+    dependencies().uiManager.addObjToGroup(g_ta_confirm_pwd);
 
     // 绑定事件与焦点
     lv_obj_add_event_cb(g_ta_new_pwd, register_password_event_cb, LV_EVENT_ALL, g_ta_new_pwd);
@@ -910,11 +918,11 @@ void load_user_register_password_screen() {
 
     // 创建确认按钮，并手动加入按键组
     lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认注册", register_password_event_cb, nullptr);
-    UiManager::getInstance()->addObjToGroup(btn_confirm);
+    dependencies().uiManager.addObjToGroup(btn_confirm);
 
     lv_group_focus_obj(g_ta_new_pwd);
     lv_screen_load(scr_register_password);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_register_password);
+    dependencies().uiManager.destroyAllScreensExcept(scr_register_password);
 }
 
 //修改密码事件回调 (兼容点击和键盘事件)
@@ -976,7 +984,7 @@ static void edit_password_event_cb(lv_event_t *e) {
             const char* confirm_pwd = lv_textarea_get_text(g_ta_confirm_pwd);
 
             // 业务校验逻辑
-            if (!controller().verifyUserPassword(
+            if (!dependencies().employees.verifyPassword(
                     g_current_info_uid, old_pwd)) {
                 show_popup_msg("修改失败", "旧密码不正确! ", g_ta_old_pwd, "我知道了");
                 return;
@@ -991,7 +999,8 @@ static void edit_password_event_cb(lv_event_t *e) {
             }
 
             // 调用数据库更新逻辑
-            controller().updateUserPassword(g_current_info_uid, new_pwd);
+            (void)dependencies().employees.updatePassword(
+                g_current_info_uid, new_pwd);
 
             // 修改成功后，重新加载员工详情页
             load_user_info_screen(g_current_info_uid);
@@ -1009,7 +1018,7 @@ void load_user_edit_password_screen() {
 
     BaseScreenParts parts = create_base_screen("修改密码");
     scr_edit_password = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::USER_EDIT_PASSWORD, &scr_edit_password);
+    dependencies().uiManager.registerScreen(ScreenType::USER_EDIT_PASSWORD, &scr_edit_password);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_edit_password, [](lv_event_t * e) {
@@ -1019,7 +1028,7 @@ void load_user_edit_password_screen() {
         g_ta_confirm_pwd = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
     lv_obj_t* form_cont = create_form_container(parts.content);
 
     // 1. 创建三个输入框
@@ -1033,9 +1042,9 @@ void load_user_edit_password_screen() {
     lv_textarea_set_password_mode(g_ta_confirm_pwd, true);
 
     // 2. 按顺序加入输入组
-    UiManager::getInstance()->addObjToGroup(g_ta_old_pwd);
-    UiManager::getInstance()->addObjToGroup(g_ta_new_pwd);
-    UiManager::getInstance()->addObjToGroup(g_ta_confirm_pwd);
+    dependencies().uiManager.addObjToGroup(g_ta_old_pwd);
+    dependencies().uiManager.addObjToGroup(g_ta_new_pwd);
+    dependencies().uiManager.addObjToGroup(g_ta_confirm_pwd);
 
     // 绑定事件回调
     lv_obj_add_event_cb(g_ta_old_pwd, edit_password_event_cb, LV_EVENT_KEY, nullptr);
@@ -1044,12 +1053,12 @@ void load_user_edit_password_screen() {
 
     // 3. 创建确认按钮 (绑定 btn_modify_password_cb)
     lv_obj_t* btn_confirm = create_form_btn(form_cont, "确认修改", edit_password_event_cb, nullptr);
-    UiManager::getInstance()->addObjToGroup(btn_confirm);
+    dependencies().uiManager.addObjToGroup(btn_confirm);
     lv_obj_add_event_cb(btn_confirm, edit_password_event_cb, LV_EVENT_KEY, nullptr);
 
     lv_group_focus_obj(g_ta_old_pwd); // 默认焦点在旧密码框
     lv_screen_load(scr_edit_password);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_edit_password);
+    dependencies().uiManager.destroyAllScreensExcept(scr_edit_password);
 }
 
 
@@ -1135,21 +1144,23 @@ static void edit_rols_event_cb(lv_event_t *e) {
 
             // 业务校验逻辑
             UserDisplayInfo user =
-                controller().getUserDisplayInfo(g_current_info_uid);
+                userDisplayInfo(g_current_info_uid);
 
             if (!user.passwordRegistered) {
                 show_popup_msg("修改失败！", "该员工未设置密码，请先设置密码!", nullptr, "我知道了");
                 return;
             }
 
-            if (!controller().verifyUserPassword(g_current_info_uid, role_pwd_plaintext)) {
+            if (!dependencies().employees.verifyPassword(
+                    g_current_info_uid, role_pwd_plaintext)) {
                 show_popup_msg("验证失败！", "密码错误，无法修改权限!", g_ta_role_pwd, "我知道了");
                 lv_textarea_set_text(g_ta_role_pwd, ""); // 清空密码框
                 return;
             }
 
             // 调用接口更新权限
-            if (controller().updateUserRole(g_current_info_uid, (int)role_index)) {
+            if (dependencies().employees.updateRole(
+                    g_current_info_uid, static_cast<int>(role_index))) {
                 show_popup_msg("修改成功!", "权限修改成功!", nullptr, "我知道了");
                 load_user_info_screen(g_current_info_uid);// 修改成功，返回详情页
             } else {
@@ -1163,7 +1174,8 @@ static void edit_rols_event_cb(lv_event_t *e) {
 //修改员工权限界面
 void load_user_role_change_screen() {
 
-    int current_role = controller().getUserRoleById(g_current_info_uid);
+    const int current_role =
+        dependencies().employees.roleValueById(g_current_info_uid);
 
     if (scr_role) {
         lv_obj_delete(scr_role);
@@ -1173,14 +1185,14 @@ void load_user_role_change_screen() {
     // 1. 创建基础屏幕
     BaseScreenParts parts = create_base_screen("权限修改");
     scr_role = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::ROLE_AUTH, &scr_role);
+    dependencies().uiManager.registerScreen(ScreenType::ROLE_AUTH, &scr_role);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_role, [](lv_event_t * e) {
         scr_role = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 2. 创建表单容器
     lv_obj_t* form_cont = create_form_container(parts.content);
@@ -1191,7 +1203,7 @@ void load_user_role_change_screen() {
     lv_textarea_set_max_length(g_ta_role_pwd, 8);       // 密码限制最多8位
     lv_textarea_set_one_line(g_ta_role_pwd, true);      // 强制单行模式
     lv_obj_add_event_cb(g_ta_role_pwd, edit_rols_event_cb, LV_EVENT_ALL, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_ta_role_pwd);
+    dependencies().uiManager.addObjToGroup(g_ta_role_pwd);
 
     // 4. 权限选择下拉框
     // 组装下拉选项 (0: 普通用户, 1: 管理员)
@@ -1201,17 +1213,17 @@ void load_user_role_change_screen() {
     };
     g_dd_role = create_form_dropdown(form_cont, "员工权限", role_items, current_role);
     lv_obj_add_event_cb(g_dd_role, edit_rols_event_cb, LV_EVENT_ALL, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_dd_role);
+    dependencies().uiManager.addObjToGroup(g_dd_role);
 
     // 5. 确认修改按钮
     g_btn_role_confirm = create_form_btn(form_cont, "确认修改", edit_rols_event_cb, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_btn_role_confirm);
+    dependencies().uiManager.addObjToGroup(g_btn_role_confirm);
 
     // 6. 将默认焦点设置为密码输入框
     lv_group_focus_obj(g_ta_role_pwd);
 
     lv_screen_load(scr_role);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_role);
+    dependencies().uiManager.destroyAllScreensExcept(scr_role);
 }
 
 
@@ -1329,17 +1341,17 @@ void load_user_register_form() {
     }
 
     //获取下一个可用工号
-    int next_user_id = controller().generateNextUserId();
+    const int next_user_id = dependencies().employees.nextAvailableId();
     BaseScreenParts parts = create_base_screen("员工注册");
     scr_register = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::REGISTER, &scr_register);
+    dependencies().uiManager.registerScreen(ScreenType::REGISTER, &scr_register);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_register, [](lv_event_t * e) {
         scr_register = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     lv_obj_t* form_cont = create_form_container(parts.content);
 
@@ -1350,10 +1362,10 @@ void load_user_register_form() {
     //lv_textarea_set_text(ta_id, std::to_string(next_user_id).c_str());
     g_ta_new_name = create_form_input(form_cont, "姓名:", "请输入员工姓名", nullptr, false);
     lv_obj_add_event_cb(g_ta_new_name, register_user_event_cb, LV_EVENT_ALL, nullptr); // 使用统一回调，监听 ALL
-    UiManager::getInstance()->addObjToGroup(g_ta_new_name); // 加入焦点组
+    dependencies().uiManager.addObjToGroup(g_ta_new_name); // 加入焦点组
 
     // 从控制器获取原生数据
-    std::vector<DeptInfo> depts = controller().getDepartmentList();
+    const auto depts = departmentItems();
     std::vector<std::pair<int, std::string>> dept_items;
     g_dept_id_map.clear();//每次加载页面时，清空旧的映射数据
 
@@ -1367,16 +1379,16 @@ void load_user_register_form() {
 
     g_dd_new_dept = create_form_dropdown(form_cont, "部门:", dept_items, default_dept_id);
     lv_obj_add_event_cb(g_dd_new_dept, register_user_event_cb, LV_EVENT_ALL, nullptr); // 使用统一回调，监听 ALL
-    UiManager::getInstance()->addObjToGroup(g_dd_new_dept); // 加入焦点组
+    dependencies().uiManager.addObjToGroup(g_dd_new_dept); // 加入焦点组
 
     g_btn_confirm = create_form_btn(form_cont, "确认注册", register_user_event_cb, nullptr);
     lv_obj_add_event_cb(g_btn_confirm, register_user_event_cb, LV_EVENT_ALL, nullptr); // 使用统一回调，监听 ALL
-    UiManager::getInstance()->addObjToGroup(g_btn_confirm); // 加入焦点组
+    dependencies().uiManager.addObjToGroup(g_btn_confirm); // 加入焦点组
 
     lv_group_focus_obj(g_ta_new_name);
 
     lv_screen_load(scr_register);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_register);
+    dependencies().uiManager.destroyAllScreensExcept(scr_register);
 }
 
 // =========================================================
@@ -1414,10 +1426,11 @@ static void face_photograph_event_cb(lv_event_t *e) {
             // 区分保存逻辑
             if (g_is_updating_face) {
                 // 调用更新人脸接口
-                success = controller().updateUserFace(g_current_info_uid);
+                success = dependencies().updateEmployeeFace(g_current_info_uid);
             } else {
                 // 这里就是把第一步表单存下来的姓名(g_reg_name)和部门(g_reg_dept_id)传给底层接口！
-                success = controller().registerNewUser(g_reg_name, g_reg_dept_id);
+                success = dependencies().registerEmployeeFace(
+                    g_reg_name.c_str(), g_reg_dept_id);
             }
 
             if (success) {
@@ -1468,13 +1481,13 @@ void load_face_photograph_screen() {
     //根据动态获取标题
     BaseScreenParts parts = create_base_screen(g_is_updating_face ? "更新人脸" : "注册拍照");
     scr_camera = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::REGISTER_CAMERA, &scr_camera);
+    dependencies().uiManager.registerScreen(ScreenType::REGISTER_CAMERA, &scr_camera);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_camera, face_camera_screen_delete_cb,
                         LV_EVENT_DELETE, nullptr);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     // 准备摄像头数据显示
     static lv_image_dsc_t img_dsc;
@@ -1484,7 +1497,7 @@ void load_face_photograph_screen() {
     img_dsc.header.h = CAM_H;
     img_dsc.header.stride = CAM_W * 3;
     img_dsc.data_size = CAM_W * CAM_H * 3;
-    img_dsc.data = UiManager::getInstance()->getCameraDisplayBuffer(); // 获取共享内存
+    img_dsc.data = dependencies().uiManager.getCameraDisplayBuffer(); // 获取共享内存
 
     // 创建显示摄像头的图片控件
     img_face_reg = lv_image_create(parts.content);
@@ -1502,7 +1515,7 @@ void load_face_photograph_screen() {
     if (g_is_updating_face) {
         // 如果是更新，获取当前详情页员工的名字
         UserDisplayInfo user =
-            controller().getUserDisplayInfo(g_current_info_uid);
+            userDisplayInfo(g_current_info_uid);
         display_name = user.name;
     } else {
         // 如果是注册，使用第一步暂存的新名字
@@ -1520,7 +1533,7 @@ void load_face_photograph_screen() {
 
     // 焦点设置
     // 这一步必须做，否则接收不到键盘事件
-    lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+    lv_group_t* group = dependencies().uiManager.getKeypadGroup();
     lv_group_remove_all_objs(group);
     lv_group_add_obj(group, img_face_reg);
     lv_group_focus_obj(img_face_reg);
@@ -1529,7 +1542,7 @@ void load_face_photograph_screen() {
     g_face_preview_timer = lv_timer_create(face_preview_timer_cb, 33, nullptr);
 
     lv_screen_load(scr_camera);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_camera);
+    dependencies().uiManager.destroyAllScreensExcept(scr_camera);
 }
 
 
@@ -1563,7 +1576,7 @@ static void delete_user_event_cb(lv_event_t *e) {
 
             if (input_uid > 0) {
                 UserDisplayInfo user =
-                    controller().getUserDisplayInfo(input_uid);
+                    userDisplayInfo(input_uid);
 
                 if (user.id > 0) {
                     // 用户存在，自动把数据填入不可写的姓名和部门框
@@ -1612,7 +1625,7 @@ static void delete_user_event_cb(lv_event_t *e) {
             }
 
             // 执行删除逻辑
-            bool success = controller().deleteUser(input_uid);
+            const bool success = dependencies().employees.remove(input_uid);
             if (success) {
                 show_popup_msg("删除成功", "用户已成功删除！", nullptr);
                 load_user_menu_screen(); // 删除成功返回菜单
@@ -1632,7 +1645,7 @@ void load_user_delete_screen() {
 
     BaseScreenParts parts = create_base_screen("删除用户");
     scr_del = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::DELETE_USER, &scr_del);
+    dependencies().uiManager.registerScreen(ScreenType::DELETE_USER, &scr_del);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_del, [](lv_event_t * e) {
@@ -1646,7 +1659,7 @@ void load_user_delete_screen() {
     // 绑定全局 ESC 返回事件
     lv_obj_add_event_cb(scr_del, delete_user_event_cb, LV_EVENT_KEY, nullptr);
 
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 创建统一表单容器
     lv_obj_t* form_cont = create_form_container(parts.content);
@@ -1664,12 +1677,12 @@ void load_user_delete_screen() {
     lv_obj_add_event_cb(g_ta_del_uid, delete_user_event_cb, LV_EVENT_ALL, nullptr);
 
     // 3. 加入焦点组 (不加入只读框)
-    UiManager::getInstance()->addObjToGroup(g_ta_del_uid);
+    dependencies().uiManager.addObjToGroup(g_ta_del_uid);
 
     // 4. 创建删除按钮，并绑定事件与焦点
     g_btn_del_confirm = create_form_btn(form_cont, "确认删除", delete_user_event_cb, nullptr);
     lv_obj_add_event_cb(g_btn_del_confirm, delete_user_event_cb, LV_EVENT_KEY, nullptr); // 显式绑定按键以便支持UP键
-    UiManager::getInstance()->addObjToGroup(g_btn_del_confirm);
+    dependencies().uiManager.addObjToGroup(g_btn_del_confirm);
 
     // 应用高危专属样式
     // 1. 设置默认状态(未聚焦)下为暗红色，起到警示作用
@@ -1681,7 +1694,7 @@ void load_user_delete_screen() {
     lv_group_focus_obj(g_ta_del_uid);
 
     lv_screen_load(scr_del);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_del);
+    dependencies().uiManager.destroyAllScreensExcept(scr_del);
 }
 
 

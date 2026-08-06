@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file face_punch_worker.cpp
  * @brief 实现识别线程与 PunchService 之间的有界异步边界。
@@ -37,13 +38,13 @@ std::optional<services::PunchRequest> makePunchRequest(
             if (!cv::imencode(
                     ".jpg", snapshot, snapshotJpeg, encodeParameters) ||
                 snapshotJpeg.size() > kMaxPunchSnapshotBytes) {
-                std::cerr << "[Warn] Punch snapshot unavailable or exceeds 512 KiB; "
+                SA_LOG_ERROR_STREAM() << "[Warn] Punch snapshot unavailable or exceeds 512 KiB; "
                              "attendance will continue without image."
                           << std::endl;
                 snapshotJpeg.clear();
             }
         } catch (const cv::Exception& error) {
-            std::cerr << "[Warn] Punch snapshot encode failed: "
+            SA_LOG_ERROR_STREAM() << "[Warn] Punch snapshot encode failed: "
                       << error.what() << std::endl;
             snapshotJpeg.clear();
         }
@@ -101,7 +102,7 @@ bool FacePunchWorker::submit(
 }
 
 void FacePunchWorker::run(const std::atomic<bool>& stopRequested) {
-    std::cout << ">>> [Business] DB Writer thread started." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] DB Writer thread started." << std::endl;
     while (true) {
         auto pending = queue_.waitPop(stopRequested);
         if (!pending) {
@@ -110,31 +111,32 @@ void FacePunchWorker::run(const std::atomic<bool>& stopRequested) {
 
         try {
             if (punchService_ == nullptr) {
-                std::cerr << "[Error] PunchService is not configured." << std::endl;
+                SA_LOG_ERROR_STREAM() << "[Error] PunchService is not configured." << std::endl;
                 continue;
             }
 
+            const int userId = pending->request.userId;
             const auto result = punchService_->punch(
                 std::move(pending->request));
             if (result) {
-                std::cout << "[Async] Save OK -> User: " << pending->userName
+                SA_LOG_INFO_STREAM() << "[Async] Save OK -> User ID: " << userId
                           << " | Status: "
                           << static_cast<int>(result.value().status)
                           << " | Diff: " << result.value().minutesDifference
                           << "m" << std::endl;
             } else {
-                std::cerr << "[Async] Punch rejected -> User: "
-                          << pending->userName << " | Error: "
+                SA_LOG_ERROR_STREAM() << "[Async] Punch rejected -> User ID: "
+                          << userId << " | Error: "
                           << punchErrorName(result.error()) << std::endl;
             }
         } catch (const std::exception& error) {
-            std::cerr << "[Error] Punch Worker Exception: "
+            SA_LOG_ERROR_STREAM() << "[Error] Punch Worker Exception: "
                       << error.what() << std::endl;
         } catch (...) {
-            std::cerr << "[Error] Punch Worker Unknown Error!" << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Error] Punch Worker Unknown Error!" << std::endl;
         }
     }
-    std::cout << ">>> [Business] DB Writer thread stopped." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] DB Writer thread stopped." << std::endl;
 }
 
 void FacePunchWorker::wake() noexcept {

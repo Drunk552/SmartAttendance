@@ -4,6 +4,7 @@
  */
 
 #include "application_services.h"
+#include "services/report_service.h"
 
 #include <utility>
 
@@ -22,6 +23,7 @@ ApplicationServices::ApplicationServices(
       shiftService_(shiftManagementRepository_),
       attendanceQueryService_(attendanceQueryRepository_),
       maintenanceService_(maintenanceRepository_),
+      systemInfoService_(systemInfoRepository_),
       punchService_(scheduleRepository_,
                     attendanceRuleRepository_,
                     attendanceRepository_) {}
@@ -131,6 +133,19 @@ services::AttendanceQueryService& ApplicationServices::attendanceQueryService() 
 
 services::MaintenanceService& ApplicationServices::maintenanceService() noexcept {
     return maintenanceService_;
+}
+
+services::SystemInfoService& ApplicationServices::systemInfoService() noexcept {
+    return systemInfoService_;
+}
+
+storage::IFaceDataRepository& ApplicationServices::faceDataRepository() noexcept {
+    return faceDataRepository_;
+}
+
+storage::IEmployeeSettingsImportRepository&
+ApplicationServices::employeeSettingsImportRepository() noexcept {
+    return employeeSettingsImportRepository_;
 }
 
 biometric::face::IFaceRecognitionEngine&

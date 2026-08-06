@@ -1,0 +1,272 @@
+#include "infrastructure/logging/logger.h"
+/**
+ * @file application_entry.cpp
+ * @brief 生产程序装配入口
+ * @details 创建平台与 Application，并执行受控主循环。
+ * @version 1.3 (Fix Compilation Error)
+ */
+
+#include "application_entry.h"
+
+#include <iostream>
+#include <string>
+#include <unistd.h> // for usleep
+#include <cstdio>
+#include <signal.h>
+#include <cstdlib>// 确保包含 system 和 setenv
+#include <filesystem>
+#include <system_error>
+#include <utility>
+
+// 1. 引入第三方库头文件
+#include "lvgl.h"
+#include <opencv2/core.hpp>
+#include <sqlite3.h>
+
+// [修复 3] 使用 extern "C" 定义变量，以匹配 ui_app.h 中的声明
+// 这样 C 语言 (ui_app.c) 和 C++ (main.cpp) 才能看到同一个变量
+extern "C" {
+    volatile sig_atomic_t g_program_should_exit = 0;
+}
+
+// 2. 引入项目模块头文件
+#include "ui/ui_app.h"          // UI层
+#include "ui/ui_page_dependencies.h"
+#include "ui/ui_runtime.h"
+#include "business/face_demo.h" // 业务层
+#include "storage/database.h"   // 数据层连接管理（data_init/data_close）
+#include "app/application.h"
+#include "app/platform_factory.h"
+
+namespace {
+
+
+std::filesystem::path executableDirectory(const char* executablePath) {
+    std::error_code error;
+    const auto procExecutable = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error && !procExecutable.empty()) {
+        return procExecutable.parent_path();
+    }
+
+    error.clear();
+    const auto absolutePath = std::filesystem::absolute(executablePath, error);
+    if (!error) {
+        return absolutePath.parent_path();
+    }
+
+    return {};
+}
+
+const char* initErrorMessage(smart_attendance::app::ApplicationInitError error) {
+    using smart_attendance::app::ApplicationInitError;
+    switch (error) {
+    case ApplicationInitError::InvalidState:
+        return "应用生命周期状态无效";
+    case ApplicationInitError::InvalidDatabaseLifecycle:
+        return "数据库生命周期配置无效";
+    case ApplicationInitError::InvalidUiLifecycle:
+        return "UI 生命周期配置无效";
+    case ApplicationInitError::InvalidApplicationLoop:
+        return "应用主循环配置无效";
+    case ApplicationInitError::InvalidBusinessLifecycle:
+        return "业务生命周期配置无效";
+    case ApplicationInitError::InvalidPlatformDevices:
+        return "平台设备集合不完整";
+    case ApplicationInitError::RuntimeDirectoryUnavailable:
+        return "运行目录无法创建或访问";
+    case ApplicationInitError::DatabaseInitializationFailed:
+        return "数据库初始化失败";
+    case ApplicationInitError::UiInitializationFailed:
+        return "UI 初始化失败";
+    case ApplicationInitError::None:
+        return "无错误";
+    }
+    return "未知初始化错误";
+}
+
+const char* runErrorMessage(smart_attendance::app::ApplicationRunError error) {
+    using smart_attendance::app::ApplicationRunError;
+    switch (error) {
+    case ApplicationRunError::InvalidState:
+        return "应用主循环状态无效";
+    case ApplicationRunError::LoopFailed:
+        return "应用主循环执行失败";
+    case ApplicationRunError::None:
+        return "无错误";
+    }
+    return "未知主循环错误";
+}
+
+void initializeUi() {
+    SA_LOG_INFO_STREAM() << ">>> 初始化 UI 层..." << std::endl;
+    ui_init();
+    SA_LOG_INFO_STREAM() << "[OK] UI 层初始化完成" << std::endl;
+}
+
+bool shouldStopApplication() {
+    return g_program_should_exit != 0;
+}
+
+void runUiIteration() {
+    uint32_t timeTillNext = lv_timer_handler();
+    ui_process_background_results();
+    ui_process_system_status();
+    if (timeTillNext < 5) {
+        timeTillNext = 5;
+    }
+    if (timeTillNext > 30) {
+        timeTillNext = 30;
+    }
+
+    usleep(timeTillNext * 1000);
+    lv_tick_inc(timeTillNext);
+}
+
+} // namespace
+
+// ==========================================
+// 测试函数定义区域
+// ==========================================
+
+
+// 捕获 Ctrl+C 信号，防止终端关不掉
+void signal_handler(int signum) {
+    (void)signum;
+    g_program_should_exit = 1;
+}
+
+/**
+ * @brief Epic 1 测试: 框架依赖自检
+ */
+void test_epic1_framework() {
+    SA_LOG_INFO_STREAM() << "------------------------------------------" << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Test] Epic 1: 框架依赖自检" << std::endl;
+    SA_LOG_INFO_STREAM() << "[Check] OpenCV Version: " << CV_VERSION << std::endl;
+    SA_LOG_INFO_STREAM() << "[Check] SQLite3 Version: " << sqlite3_libversion() << std::endl;
+    SA_LOG_INFO_STREAM() << "[Check] LVGL Version: "
+              << lv_version_major() << "."
+              << lv_version_minor() << "."
+              << lv_version_patch() << std::endl;
+    SA_LOG_INFO_STREAM() << "[OK] Epic 1 依赖检查完成" << std::endl;
+}
+
+// ==========================================
+//  强制禁用系统休眠函数
+// ==========================================
+void disable_system_screensaver() {
+    SA_LOG_INFO_STREAM() << ">>> [System] 正在强制禁用屏幕保护和自动休眠..." << std::endl;
+
+    // 1. 设置 SDL 环境变量：明确告诉 SDL 不要调用屏保
+    // 0 = Disable screensaver
+    setenv("SDL_VIDEO_ALLOW_SCREENSAVER", "0", 1);
+
+    // 2. Linux 控制台命令：禁止黑屏 (Console Blanking)
+    // 使用 system() 调用比外部脚本更可靠，因为它随程序启动执行
+    int ret = 0;
+
+    // 方法 A: setterm (通用)
+    // -blank 0: 禁用黑屏
+    // -powerdown 0: 禁用电源关闭
+    ret = system("setterm -blank 0 -powerdown 0 -powersave off > /dev/null 2>&1");
+
+    // 方法 B: 直接向终端发送转义序列 (强制唤醒)
+    // \033[9;0] 是 Linux 控制台的“设置休眠时间为0”指令
+    ret = system("echo -e '\\033[9;0]' > /dev/tty0 2> /dev/null");
+
+    // 方法 C: Framebuffer 直接控制 (如果存在)
+    if (access("/sys/class/graphics/fb0/blank", F_OK) == 0) {
+        ret = system("echo 0 > /sys/class/graphics/fb0/blank");
+    }
+
+    (void)ret; // 忽略返回值警告
+}
+
+// ==========================================
+// 主程序入口
+// ==========================================
+int smart_attendance::app::runApplication(int argc, char* argv[]) {
+    (void)argc;
+
+    // 信号处理器只设置原子标志，资源释放由 Application 主线程完成。
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    //  程序启动第一件事：禁用休眠
+    disable_system_screensaver();
+
+    SA_LOG_INFO_STREAM() << "==========================================" << std::endl;
+    SA_LOG_INFO_STREAM() << "   智能考勤系统 v1.2 - Phase 02" << std::endl;
+    SA_LOG_INFO_STREAM() << "==========================================" << std::endl;
+
+    // 1. 基础环境检查
+    test_epic1_framework();
+
+    // 2. Application 统一准备运行目录，并依次初始化数据层和 UI 层。
+    const auto runtimeDirectory = executableDirectory(argv[0]) / "runtime";
+    smart_attendance::app::PlatformConfig platformConfig;
+    platformConfig.simulatedStorageRoot = runtimeDirectory / "output";
+    auto platformResult =
+        smart_attendance::app::createPlatformDevices(platformConfig);
+    if (!platformResult) {
+        SA_LOG_ERROR_STREAM() << "[Fatal] PC 平台设备创建失败，程序退出。" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    auto platformDevices = std::move(platformResult).value();
+    smart_attendance::app::Application application(
+        {data_init, data_close},
+        {initializeUi, ui_shutdown},
+        {shouldStopApplication, runUiIteration},
+        {business_init, business_shutdown},
+        {},
+        {},
+        {},
+        {},
+        {uiRunMonitorTask, uiWakeMonitorTask},
+        {uiRunFrameDeliveryTask, nullptr},
+        {business_run_capture_task, business_wake_capture_task},
+        {business_run_database_writer_task,
+         business_wake_database_writer_task},
+        std::move(platformDevices),
+        runtimeDirectory);
+    if (!application.configureRuntimeBindings()) {
+        SA_LOG_ERROR_STREAM() << "[Fatal] 应用运行依赖装配失败，程序退出。" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    SA_LOG_INFO_STREAM() << ">>> 初始化数据层..." << std::endl;
+    const auto initResult = application.initialize();
+    if (initResult != smart_attendance::app::ApplicationInitError::None) {
+        SA_LOG_ERROR_STREAM() << "[Fatal] " << initErrorMessage(initResult) << "，程序退出。" << std::endl;
+        return EXIT_FAILURE;
+    }
+    SA_LOG_INFO_STREAM() << "[OK] 运行时文件目录: "
+              << application.runtimeDirectory().string() << std::endl;
+    // 3. 后初始化业务层 (再启动线程，确保发出的第一个请求都有消费者)
+    SA_LOG_INFO_STREAM() << ">>> 初始化业务层..." << std::endl;
+    if (!application.markRunning()) {
+        SA_LOG_ERROR_STREAM() << "[Fatal] 业务层初始化失败或应用生命周期状态异常。" << std::endl;
+        application.requestStop();
+        application.stop();
+        return EXIT_FAILURE;
+    }
+
+    // 4. 进入主循环
+    SA_LOG_INFO_STREAM() << ">>> 系统主循环启动" << std::endl;
+    const auto runResult = application.run();
+    if (runResult == smart_attendance::app::ApplicationRunError::None) {
+        SA_LOG_INFO_STREAM() << ">>> 系统安全退出 (Main Loop Ended)" << std::endl;
+    } else {
+        SA_LOG_ERROR_STREAM() << "[Error] " << runErrorMessage(runResult) << "。" << std::endl;
+    }
+
+    const bool stopRequested = application.requestStop();
+    const bool stopped = stopRequested && application.stop();
+    if (!stopped) {
+        SA_LOG_ERROR_STREAM() << "[Error] 后台任务或数据库关闭失败。" << std::endl;
+        return EXIT_FAILURE;
+    }
+    return runResult == smart_attendance::app::ApplicationRunError::None
+        ? EXIT_SUCCESS
+        : EXIT_FAILURE;
+}

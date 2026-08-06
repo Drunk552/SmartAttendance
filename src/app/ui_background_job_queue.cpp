@@ -19,6 +19,21 @@ UiBackgroundJobQueue::UiBackgroundJobQueue(
       employeeSettingsExporter_(employeeSettingsExporter),
       employeeSettingsImporter_(employeeSettingsImporter) {}
 
+void UiBackgroundJobQueue::configureExporters(
+    UserReportExporter userReportExporter,
+    CustomReportExporter customReportExporter,
+    EmployeeSettingsExporter employeeSettingsExporter,
+    EmployeeSettingsImporter employeeSettingsImporter) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (outstandingCount_ != 0 || !accepting_) {
+        return;
+    }
+    userReportExporter_ = std::move(userReportExporter);
+    customReportExporter_ = std::move(customReportExporter);
+    employeeSettingsExporter_ = std::move(employeeSettingsExporter);
+    employeeSettingsImporter_ = std::move(employeeSettingsImporter);
+}
+
 UiBackgroundJobSubmitError UiBackgroundJobQueue::submitUserReport(
     UiBackgroundJobOwner owner,
     int userId,

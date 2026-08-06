@@ -2,7 +2,7 @@
 #include "../../managers/ui_manager.h"
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
-#include "../../ui_controller.h"
+#include "../../ui_page_dependencies.h"
 #include "../../../app/ui_background_job_queue.h"
 #include "../menu/ui_scr_menu.h"
 
@@ -15,14 +15,15 @@
 namespace ui {
 namespace att_stats {
 
-static UiController* controller_ = nullptr;
+static smart_attendance::ui::AttendanceStatisticsPageDependencies* dependencies_ = nullptr;
 
-void configureController(UiController& controller) noexcept {
-    controller_ = &controller;
+void configureDependencies(
+    smart_attendance::ui::AttendanceStatisticsPageDependencies& dependencies) noexcept {
+    dependencies_ = &dependencies;
 }
 
-static UiController& controller() {
-    return *controller_;
+static smart_attendance::ui::AttendanceStatisticsPageDependencies& dependencies() {
+    return *dependencies_;
 }
 
 // ================= [内部状态: 屏幕指针] =================
@@ -76,7 +77,10 @@ static bool is_valid_date_format(const std::string& date) {
 
 // 辅助函数：获取当前系统日期，格式为 YYYY-MM-DD
 static std::string get_current_date_str() {
-    time_t now = controller().getCurrentUnixTime();
+    const auto nowResult = dependencies().rtc.now();
+    const time_t now = nowResult
+        ? static_cast<time_t>(nowResult.value().unixSeconds)
+        : 0;
     struct tm tstruct;
     char buf[20];
     tstruct = *localtime(&now);
@@ -220,7 +224,7 @@ static void stats_menu_btn_cb(lv_event_t *e) {
         }
 
         // --- 方向键导航 ---
-        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+        lv_group_t* group = dependencies().uiManager.getKeypadGroup();
         if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             lv_group_focus_next(group);// 向下/向右导航
         }
@@ -309,7 +313,7 @@ void load_att_stats_menu_screen() {
 
     BaseScreenParts parts = create_base_screen("考勤统计");
     scr_stats = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::ATT_STATS, &scr_stats);
+    dependencies().uiManager.registerScreen(ScreenType::ATT_STATS, &scr_stats);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_stats, [](lv_event_t * e) {
@@ -317,7 +321,7 @@ void load_att_stats_menu_screen() {
         sub_screen_cont = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
@@ -343,7 +347,7 @@ void load_att_stats_menu_screen() {
     uint32_t child_cnt = lv_obj_get_child_cnt(list);
     for(uint32_t i=0; i < child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个
     if(child_cnt > 0) {
@@ -351,7 +355,7 @@ void load_att_stats_menu_screen() {
     }
 
     lv_screen_load(scr_stats);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_stats);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_stats);// 加载后销毁其他屏幕，保持资源清晰
 
 }
 
@@ -476,7 +480,7 @@ void load_download_all_screen() {
     // 1. 创建基础屏幕
     BaseScreenParts parts = create_base_screen("下载全员考勤报表");
     scr_download_all = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::ALL_ATT_STATS, &scr_download_all);
+    dependencies().uiManager.registerScreen(ScreenType::ALL_ATT_STATS, &scr_download_all);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_download_all, [](lv_event_t * e) {
@@ -488,7 +492,7 @@ void load_download_all_screen() {
 
     // 绑定全局 ESC 返回事件
     lv_obj_add_event_cb(scr_download_all, download_all_event_cb, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     // 创建统一表单容器
     lv_obj_t* form_cont = create_form_container(parts.content);
@@ -497,26 +501,26 @@ void load_download_all_screen() {
     g_ta_dl_all_start = create_form_input(form_cont, "开始时间:", "如: 2026-01-01", "", false);
     lv_textarea_set_accepted_chars(g_ta_dl_all_start, "0123456789-"); // 只允许输入数字和横杠
     lv_obj_add_event_cb(g_ta_dl_all_start, download_all_event_cb, LV_EVENT_ALL, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_ta_dl_all_start);
+    dependencies().uiManager.addObjToGroup(g_ta_dl_all_start);
 
     // 2. 结束时间输入框
     g_ta_dl_all_end = create_form_input(form_cont, "结束时间:", "如: 2026-01-31", "", false);
     lv_textarea_set_accepted_chars(g_ta_dl_all_end, "0123456789-"); // 只允许输入数字和横杠
     lv_obj_add_event_cb(g_ta_dl_all_end, download_all_event_cb, LV_EVENT_ALL, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_ta_dl_all_end);
+    dependencies().uiManager.addObjToGroup(g_ta_dl_all_end);
 
     // 3. 确认下载按钮
     // create_form_btn 会自动帮你绑定 LV_EVENT_CLICKED
     g_btn_dl_all_confirm = create_form_btn(form_cont, "确认下载", download_all_event_cb, nullptr);
     // 补充绑定 LV_EVENT_KEY 以处理键盘的 UP/DOWN 焦点跳转
     lv_obj_add_event_cb(g_btn_dl_all_confirm, download_all_event_cb, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_btn_dl_all_confirm);
+    dependencies().uiManager.addObjToGroup(g_btn_dl_all_confirm);
 
     // 默认聚焦在开始时间
     lv_group_focus_obj(g_ta_dl_all_start);
 
     lv_screen_load(scr_download_all);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_download_all);
+    dependencies().uiManager.destroyAllScreensExcept(scr_download_all);
 }
 
 // =========================================================
@@ -611,7 +615,7 @@ static void download_personal_event_cb(lv_event_t *e) {
 
             int uid = std::stoi(uid_txt); // 将工号转为整型
 
-            if (!controller().checkUserExists(uid)) {
+            if (!dependencies().employees.existsById(uid)) {
                 show_popup_msg("导出个人考勤报表失败", "工号错误!\n 该工号不存在,请检查工号! ", nullptr, "我知道了");
                 lv_group_focus_obj(g_ta_dl_psn_uid); // 焦点移回工号输入框，方便用户重输
                 return;
@@ -651,7 +655,7 @@ void load_download_personal_screen() {
     // 1. 创建基础屏幕
     BaseScreenParts parts = create_base_screen("下载个人考勤报表");
     scr_download_personal = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::PERSONAGE_ATT_STATS, &scr_download_personal);
+    dependencies().uiManager.registerScreen(ScreenType::PERSONAGE_ATT_STATS, &scr_download_personal);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_download_personal, [](lv_event_t * e) {
@@ -664,7 +668,7 @@ void load_download_personal_screen() {
 
     // 绑定全局 ESC 返回事件
     lv_obj_add_event_cb(scr_download_personal, download_personal_event_cb, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->resetKeypadGroup();
+    dependencies().uiManager.resetKeypadGroup();
 
     lv_obj_t* form_cont = create_form_container(parts.content);//
 
@@ -672,30 +676,30 @@ void load_download_personal_screen() {
     g_ta_dl_psn_uid = create_form_input(form_cont, "员工工号:", "请输入工号", "", false);
     lv_textarea_set_accepted_chars(g_ta_dl_psn_uid, "0123456789"); // 严格限制只能输入数字
     lv_obj_add_event_cb(g_ta_dl_psn_uid, download_personal_event_cb, LV_EVENT_ALL, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_ta_dl_psn_uid);
+    dependencies().uiManager.addObjToGroup(g_ta_dl_psn_uid);
 
     // 2. 开始时间输入框
     g_ta_dl_psn_start = create_form_input(form_cont, "开始时间:", "如: 2026-01-01", "", false);
     lv_textarea_set_accepted_chars(g_ta_dl_psn_start, "0123456789-"); // 严格限制数字和横杠
     lv_obj_add_event_cb(g_ta_dl_psn_start, download_personal_event_cb, LV_EVENT_ALL, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_ta_dl_psn_start);
+    dependencies().uiManager.addObjToGroup(g_ta_dl_psn_start);
 
     // 3. 结束时间输入框
     g_ta_dl_psn_end = create_form_input(form_cont, "结束时间:", "如: 2026-01-31", "", false);
     lv_textarea_set_accepted_chars(g_ta_dl_psn_end, "0123456789-"); // 严格限制数字和横杠
     lv_obj_add_event_cb(g_ta_dl_psn_end, download_personal_event_cb, LV_EVENT_ALL, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_ta_dl_psn_end);
+    dependencies().uiManager.addObjToGroup(g_ta_dl_psn_end);
 
     // 4. 确认下载按钮
     g_btn_dl_psn_confirm = create_form_btn(form_cont, "确认下载", download_personal_event_cb, nullptr);
     lv_obj_add_event_cb(g_btn_dl_psn_confirm, download_personal_event_cb, LV_EVENT_KEY, nullptr);
-    UiManager::getInstance()->addObjToGroup(g_btn_dl_psn_confirm);
+    dependencies().uiManager.addObjToGroup(g_btn_dl_psn_confirm);
 
     // 默认聚焦在工号输入框
     lv_group_focus_obj(g_ta_dl_psn_uid);
 
     lv_screen_load(scr_download_personal);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_download_personal);
+    dependencies().uiManager.destroyAllScreensExcept(scr_download_personal);
 }
 
 

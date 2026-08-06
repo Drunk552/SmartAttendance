@@ -208,6 +208,21 @@ UiSystemStatusMailbox& TaskManager::uiSystemStatus() noexcept {
     return uiSystemStatusMailbox_;
 }
 
+void TaskManager::configureReportExporters(
+    UserReportExporter userReportExporter,
+    CustomReportExporter customReportExporter,
+    EmployeeSettingsExporter employeeSettingsExporter,
+    EmployeeSettingsImporter employeeSettingsImporter) noexcept {
+    if (state_ != TaskManagerState::Created) {
+        return;
+    }
+    uiBackgroundJobQueue_.configureExporters(
+        std::move(userReportExporter),
+        std::move(customReportExporter),
+        std::move(employeeSettingsExporter),
+        std::move(employeeSettingsImporter));
+}
+
 void TaskManager::stopAndJoinNoexcept() noexcept {
     (void)requestStop();
     if (state_ == TaskManagerState::StopRequested) {

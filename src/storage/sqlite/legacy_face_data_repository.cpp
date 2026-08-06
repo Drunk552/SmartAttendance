@@ -8,15 +8,15 @@ int LegacyFaceDataRepository::cleanupOldAttendanceImages(int daysOld) {
     return db_cleanup_old_attendance_images(daysOld);
 }
 
-std::vector<UserData> LegacyFaceDataRepository::listUsersLight() {
+std::vector<FaceUserData> LegacyFaceDataRepository::listUsersLight() {
     return db_get_all_users_light();
 }
 
-std::vector<UserData> LegacyFaceDataRepository::listUsers() {
+std::vector<FaceUserData> LegacyFaceDataRepository::listUsers() {
     return db_get_all_users();
 }
 
-int LegacyFaceDataRepository::addUser(const UserData& user,
+int LegacyFaceDataRepository::addUser(const FaceUserData& user,
                                       const cv::Mat& faceImage) {
     return db_add_user(user, faceImage);
 }
@@ -26,7 +26,7 @@ bool LegacyFaceDataRepository::updateUserFace(int userId,
     return db_update_user_face(userId, faceImage);
 }
 
-std::vector<AttendanceRecord> LegacyFaceDataRepository::records(
+std::vector<FaceAttendanceRecord> LegacyFaceDataRepository::records(
     long long startTimestamp, long long endTimestamp) {
     return db_get_records(startTimestamp, endTimestamp);
 }

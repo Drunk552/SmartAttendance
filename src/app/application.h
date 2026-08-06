@@ -14,6 +14,9 @@
 #include "ui/presenters/shift_presenter.h"
 #include "ui/presenters/attendance_query_presenter.h"
 #include "ui/presenters/maintenance_presenter.h"
+#include "ui/presenters/system_info_presenter.h"
+#include "ui/ui_page_dependencies.h"
+#include "ui/managers/ui_manager.h"
 
 #include <filesystem>
 
@@ -168,18 +171,24 @@ public:
     ui::AttendanceQueryPresenter& attendanceQueryPresenter() noexcept;
     ui::MaintenancePresenter& maintenancePresenter() noexcept;
 
+    /** @brief 将组合根持有的对象绑定到旧 C/UI 运行入口。 */
+    bool configureRuntimeBindings() noexcept;
+
 private:
     bool shutdownUiNoexcept() noexcept;
 
     UiLifecycle uiLifecycle_;
     ApplicationLoop applicationLoop_;
     ApplicationServices services_;
+    UiManager uiManager_;
     ui::EmployeeLookupPresenter employeeLookupPresenter_;
     ui::SettingsPresenter settingsPresenter_;
     ui::DepartmentPresenter departmentPresenter_;
     ui::ShiftPresenter shiftPresenter_;
     ui::AttendanceQueryPresenter attendanceQueryPresenter_;
     ui::MaintenancePresenter maintenancePresenter_;
+    ui::SystemInfoPresenter systemInfoPresenter_;
+    ui::UiPageDependencies uiPageDependencies_;
     TaskManager taskManager_;
     std::filesystem::path runtimeDirectory_;
     ApplicationState state_{ApplicationState::Created};

@@ -3,8 +3,11 @@
 
 #include <lvgl.h>
 
-class UiController;
-namespace ui::sys_info { void configureController(UiController& controller) noexcept; }
+namespace smart_attendance::ui { struct SystemInfoPageDependencies; }
+namespace ui::sys_info {
+void configureDependencies(
+    smart_attendance::ui::SystemInfoPageDependencies& dependencies) noexcept;
+}
 
 namespace ui {
 namespace sys_info {

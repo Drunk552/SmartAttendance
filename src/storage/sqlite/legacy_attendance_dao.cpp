@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file
  * @brief 承接旧考勤记录 SQLite DAO。
@@ -49,7 +50,7 @@ bool db_log_attendance_at(int user_id,
                 path_str = p.string();
             }
         } catch (...) {
-            std::cerr << "[Data] Save Image Failed." << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Save Image Failed." << std::endl;
         }
     }
 
@@ -59,7 +60,7 @@ bool db_log_attendance_at(int user_id,
         std::unique_lock<std::shared_mutex> lock(g_db_mutex);// 开始排他锁
 
         if (!g_stmt_log_attendance) {
-            std::cerr << "[Data] Error: log_attendance statement is not precompiled!" << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Error: log_attendance statement is not precompiled!" << std::endl;
             return false;
         }
 
@@ -81,10 +82,10 @@ bool db_log_attendance_at(int user_id,
     } // 离开大括号，排他锁瞬间释放！
 
     if(ok) {
-        std::cout << "[Data] Attendance Logged -> User: " << user_id
+        SA_LOG_INFO_STREAM() << "[Data] Attendance Logged -> User: " << user_id
                   << " Time: " << timestamp << " Status: " << static_cast<int>(status) << std::endl;
     } else {
-        std::cerr << "[Data] Attendance Logged Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Attendance Logged Failed: " << sqlite3_errmsg(db) << std::endl;
     }
 
     return ok;
@@ -127,7 +128,7 @@ int db_cleanup_old_attendance_images(int days_old) {
 
     ScopedSqliteStmt select_stmt;
     if (sqlite3_prepare_v2(db, select_sql, -1, select_stmt.ptr(), nullptr) != SQLITE_OK) {
-        std::cerr << "[DB Error] 清理查询失败: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[DB Error] 清理查询失败: " << sqlite3_errmsg(db) << std::endl;
         return 0;
     }
     sqlite3_bind_int64(select_stmt.get(), 1, threshold);
@@ -156,7 +157,7 @@ int db_cleanup_old_attendance_images(int days_old) {
                 deleted_count++;
             }
         } catch (const fs::filesystem_error& e) {
-            std::cerr << "[Warning] 删除过时图片失败: " << e.what() << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Warning] 删除过时图片失败: " << e.what() << std::endl;
         }
     }
 
@@ -297,7 +298,7 @@ std::vector<AttendanceRecord> db_get_records_by_user(int user_id, long long star
 
     ScopedSqliteStmt stmt;
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Get Records By User Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Get Records By User Failed: " << sqlite3_errmsg(db) << std::endl;
         return records;
     }
 
@@ -374,7 +375,7 @@ std::vector<AttendanceRecord> db_get_all_records_by_time(long long start_ts, lon
 
     ScopedSqliteStmt stmt;
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Get All Records Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Get All Records Failed: " << sqlite3_errmsg(db) << std::endl;
         return records;
     }
 

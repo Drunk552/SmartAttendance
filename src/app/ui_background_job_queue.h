@@ -92,6 +92,12 @@ public:
         std::uint64_t& requestId);
 
     bool tryPopResult(UiBackgroundJobResult& result);
+    /** @brief 仅在 Worker 启动前由组合根补充生产环境导出实现。 */
+    void configureExporters(
+        UserReportExporter userReportExporter,
+        CustomReportExporter customReportExporter,
+        EmployeeSettingsExporter employeeSettingsExporter,
+        EmployeeSettingsImporter employeeSettingsImporter) noexcept;
     void run(const std::atomic<bool>& stopRequested);
     void requestStop() noexcept;
     bool isValid() const noexcept;

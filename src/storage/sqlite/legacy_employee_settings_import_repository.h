@@ -17,7 +17,8 @@ public:
         const std::string& thirdStart,
         const std::string& thirdEnd) override;
     bool importUsers(
-        int year, int month, const std::vector<UserData>& users) override;
+        int year, int month,
+        const std::vector<EmployeeSettingsImportUser>& users) override;
 };
 
 } // namespace smart_attendance::storage::sqlite

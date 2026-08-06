@@ -8,6 +8,7 @@
 #define DB_STORAGE_H
 
 #include "storage/database.h"
+#include "core/model/legacy_database_models.h"
 
 #include <opencv2/core.hpp>
 #include <cstddef>
@@ -17,283 +18,30 @@
 #include <optional>
 #include <map>     //引入 map 头文件
 
-// ================= 数据结构定义(Data Structures) =================
-
-/**
- * @brief 部门信息结构体
- * @details 对应数据库 `departments` 表
- */
-struct DeptInfo {
-    /// @brief 部门ID (数据库自增主键)
-    int id;
-
-    /// @brief 部门名称 (e.g. "研发部")
-    std::string name;
-
-    /// @brief 所属公司ID
-    int company_id;
-
-    /// @brief 公司名称（查询时关联获取）
-    std::string company_name;
-
-    /// @brief 默认构造函数
-    DeptInfo() : id(0), company_id(0) {}
-};
-
-/**
- * @brief 班次信息结构体（支持业务文档的3个时段）
- * @details 对应数据库 `shifts` 表，完全匹配业务文档中的班次设置格式
- *
- * 时间字段处理规则：
- * - 空字符串或"--:--"：表示该时段无考勤要求
- * - "HH:MM"格式：有效考勤时间
- * - 业务层负责具体的时间验证和逻辑处理
- */
-struct ShiftInfo {
-    /// @brief 班次ID (数据库自增主键，1-10对应业务文档中的班次号)
-    int id;
-    
-    /// @brief 班次名称 (e.g. "早班")
-    std::string name;
-
-    /// @brief 时段一：主要工作时段（对应业务文档"时段一"）
-    std::string s1_start;       // 上班时间，如"08:00"
-    std::string s1_end;         // 下班时间，如"12:00"
-
-    /// @brief 时段二：下午工作时段（对应业务文档"时段二"）
-    std::string s2_start;       // 上班时间，如"14:00"
-    std::string s2_end;         // 下班时间，如"18:00"
-
-    /// @brief 时段三：加班时段（对应业务文档"加班"时段）
-    std::string s3_start;       // 加班上班时间，如"19:00"
-    std::string s3_end;         // 加班下班时间，如"21:00"
-    
-    /// @brief 是否跨天 (0: 当天, 1: 次日)
-    int cross_day;
-};
-
-/**
- * @brief 部门排班条目
- * @details 用于单个部门单天的排班记录
- * 对应业务文档规则："填写的数字代表班次号(1-10)，留空或0代表节假日"
- */
-struct DeptScheduleEntry {
-    int dept_id;                // 部门ID
-    int day_of_week;            // 星期几：0=周日，1=周一，...，6=周六
-    int shift_id;               // 班次ID，0表示节假日
-};
-
-/**
- * @brief 部门完整排班视图
- * @details 用于UI显示，包含部门信息和一周排班
- */
-struct DeptScheduleView {
-    int dept_id;
-    std::string dept_name;
-    int shifts[7];              // 7天的班次安排，索引对应星期几
-};
-
-/**
- * @brief 系统考勤规则配置
- * @details 对应数据库 `attendance_rules` 表
- */
-struct RuleConfig {
-    std::string company_name;
-    int late_threshold;       // 允许迟到分钟数 (默认 15)
-    int early_leave_threshold;// 允许早退分钟数 (默认 0)
-    int device_id;            // 机器号 (1-255)
-    int volume;               // 音量 (0-100)
-    int screensaver_time;     // 屏保等待时间(分)
-    int max_admins;           // 管理员人数限制
-    // --- 门禁参数  ---
-    int relay_delay;          // 继电器延时(秒)
-    int wiegand_fmt;          // 韦根格式 (26/34)
-
-    int duplicate_punch_limit; // 防重复打卡时间(分钟) 
-    std::string language;      // 语言设置 (如 "zh-CN", "en-US")
-    std::string date_format;   // 日期格式 (如 "YYYY-MM-DD")
-    int return_home_delay;     // 返回主界面超时时间(秒)
-    int warning_record_count;  // 记录警告数阈值
-
-    // 【流程图节点K】周六/周日是否上班的规则开关
-    // 对应流程图中：无论通过个人、部门还是默认班次路径，
-    // 进入考勤计算前都必须经过此节点判断
-    // 0 = 不上班（该天视为休息，返回无排班）
-    // 1 = 上班（正常走考勤计算）
-    int sat_work; // 星期六是否上班 (默认 0: 不上班)
-    int sun_work; // 星期日是否上班 (默认 0: 不上班)
-};
-
-/**
- * @brief 定时响铃配置结构体 
- */
-struct BellSchedule {
-    int id;             // 序号 (1-16)
-    std::string time;   // 响铃时间 "HH:MM"
-    int duration;       // 响铃时长 (秒)
-    int days_mask;      // 周期掩码 (位操作): bit0=周日, bit1=周一 ... bit6=周六
-                        // 例如: 01111110 (0x7E) 代表周一到周五
-    bool enabled;       // 是否启用
-};
-
-/**
- * @brief 用户完整信息结构体
- * @details 对应数据库 `users` 表，包含身份、权限及生物特征
- */
-struct UserData {
-    /// @brief 工号/用户ID (数据库自增主键)
-    int id;                 
-
-    /// @brief 姓名 (支持中英文)
-    std::string name;       
-
-    /// @brief 登录密码 (用于输入验证)
-    std::string password;   
-
-    /// @brief IC/ID卡号 (用于刷卡验证)
-    std::string card_id;    
-
-    /// @brief  权限等级
-    /// @note 0: 普通员工 (仅考勤), 1: 管理员 (可进入系统菜单)
-    int role;               
-
-    /// @brief  所属部门 ID (关联 DeptInfo.id)
-    int dept_id;            
-
-    ///绑定的默认班次ID
-    int default_shift_id; 
-
-    // 用来存放 Excel 读出来的当月个人排班，<几号, 班次ID>
-    std::map<int, int> monthly_schedule;
-
-    // 部门名称 (用于UI显示和报表，数据库不直接存，靠联表查询获取)
-    std::string dept_name;
-
-    /// @brief 人脸特征数据 (二进制流)
-    /// @details 对应数据库中的 BLOB 字段，存储编码后的 JPG 图片数据
-    std::vector<uchar> face_feature; 
-
-    /// @brief 注册员工的人脸图片路径
-    std::string avatar_path;
-    
-    /// @brief 指纹特征数据 (二进制流)
-    std::vector<uint8_t> fingerprint_feature;
-
-    /// @brief 职位信息 (用于报表显示)
-    std::string position;
-
-    UserData() : id(0), role(0), dept_id(0), default_shift_id(0) {}
-
-};
-
-/**
- * @brief 单个用户查询的底层结果状态。
- * @details 供 Repository 过渡适配器区分“未找到”和数据库读取失败；
- *          旧调用方可继续使用 db_get_user_info() 的 optional 语义。
- */
-enum class DbUserLookupStatus {
-    Found,
-    NotFound,
-    ReadError
-};
-
-struct DbUserLookupResult {
-    DbUserLookupStatus status;
-    std::optional<UserData> user;
-};
-
-enum class DbUserPageStatus {
-    Success,
-    InvalidArgument,
-    ReadError
-};
-
-constexpr std::size_t kMaxDbUserBasicPageSize = 64;
-
-struct DbUserPageResult {
-    DbUserPageStatus status;
-    std::vector<UserData> users;
-    bool has_more;
-};
-
-enum class DbTextLookupStatus {
-    Found,
-    NotFound,
-    ReadError
-};
-
-struct DbTextLookupResult {
-    DbTextLookupStatus status;
-    std::optional<std::string> value;
-};
-
-/**
- * @brief 考勤记录结构体 (视图模型)
- * @details 包含打卡时的详细信息，已关联查询出姓名和部门名
- */
-struct AttendanceRecord {
-    /// @brief 记录流水号
-    int id;
-    
-    /// @brief 关联的用户ID
-    int user_id;
-    
-    /// @brief 用户姓名 (关联查询结果)
-    std::string user_name;  
-    
-    /// @brief 部门名称 (关联查询结果)
-    std::string dept_name;  
-    
-    /// @brief 打卡时间戳 (秒级)
-    long long timestamp;
-    
-    /// @brief 考勤状态 
-    /// @note 0:正常, 1:迟到, 2:早退, 3:旷工
-    int status;             
-    
-    /// @brief 现场抓拍图片的文件路径
-    std::string image_path;
-
-    /// @brief 迟到分钟数 (用于报表计算)
-    int minutes_late;
-
-    /// @brief 早退分钟数 (用于报表计算)
-    int minutes_early;
-};
-
-enum class DbAttendanceQueryStatus { Success, InvalidArgument, ReadError };
-constexpr std::size_t kMaxDbAttendanceQuerySize = 512;
-struct DbAttendanceQueryResult {
-    DbAttendanceQueryStatus status;
-    std::vector<AttendanceRecord> records;
-    bool has_more;
-};
-
-// 用于查询系统信息的结构体
-struct SystemStats {
-    int total_employees;    // 员工注册数 (总人数)
-    int total_admins;       // 管理员注册数
-    int total_faces;        // 人脸注册数
-    int total_fingerprints; // 指纹注册数
-    int total_cards;        // 卡号注册数
-};
-
-/**
- * @brief 公司信息结构体
- */
-struct CompanyInfo {
-    int id;                     // 公司ID
-    std::string name;           // 公司名称
-    std::string code;           // 公司代码/简称
-    std::string address;        // 公司地址
-    std::string contact_phone;  // 联系电话
-    std::string contact_email;  // 联系邮箱
-    std::string created_at;     // 创建时间
-    std::string updated_at;     // 更新时间
-    
-    CompanyInfo() : id(0) {}
-};
-
+// Legacy DAO aliases. New code must depend on core models or Repository
+// contracts instead of including this compatibility header.
+using DeptInfo = smart_attendance::core::LegacyDeptInfo;
+using ShiftInfo = smart_attendance::core::LegacyShiftInfo;
+using DeptScheduleEntry = smart_attendance::core::LegacyDeptScheduleEntry;
+using DeptScheduleView = smart_attendance::core::LegacyDeptScheduleView;
+using RuleConfig = smart_attendance::core::LegacyRuleConfig;
+using BellSchedule = smart_attendance::core::LegacyBellSchedule;
+using UserData = smart_attendance::core::LegacyUserData;
+using DbUserLookupStatus = smart_attendance::core::LegacyDbUserLookupStatus;
+using DbUserLookupResult = smart_attendance::core::LegacyDbUserLookupResult;
+using DbUserPageStatus = smart_attendance::core::LegacyDbUserPageStatus;
+constexpr std::size_t kMaxDbUserBasicPageSize =
+    smart_attendance::core::kMaxLegacyDbUserBasicPageSize;
+using DbUserPageResult = smart_attendance::core::LegacyDbUserPageResult;
+using DbTextLookupStatus = smart_attendance::core::LegacyDbTextLookupStatus;
+using DbTextLookupResult = smart_attendance::core::LegacyDbTextLookupResult;
+using AttendanceRecord = smart_attendance::core::LegacyAttendanceRecord;
+using DbAttendanceQueryStatus = smart_attendance::core::LegacyDbAttendanceQueryStatus;
+constexpr std::size_t kMaxDbAttendanceQuerySize =
+    smart_attendance::core::kMaxLegacyDbAttendanceQuerySize;
+using DbAttendanceQueryResult = smart_attendance::core::LegacyDbAttendanceQueryResult;
+using SystemStats = smart_attendance::core::LegacySystemStats;
+using CompanyInfo = smart_attendance::core::LegacyCompanyInfo;
 
 // ================= 1. 部门管理接口 (Department DAO) =================
 

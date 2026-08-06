@@ -10,10 +10,14 @@ class UiSystemStatusMailbox;
 namespace smart_attendance::hal {
 class IDisplay;
 class IKeypad;
+class IRtc;
+class IStorageDevice;
 }
 
-class UiController;
-void ui_configure_controller(UiController& controller) noexcept;
+namespace smart_attendance::ui { struct UiPageDependencies; }
+class UiManager;
+void ui_configure_page_dependencies(
+    smart_attendance::ui::UiPageDependencies& dependencies) noexcept;
 
 void ui_configure_background_jobs(
     smart_attendance::app::UiBackgroundJobQueue& backgroundJobs) noexcept;
@@ -21,7 +25,12 @@ void ui_configure_system_status(
     smart_attendance::app::UiSystemStatusMailbox& systemStatus) noexcept;
 void ui_configure_platform(
     smart_attendance::hal::IDisplay& display,
-    smart_attendance::hal::IKeypad& keypad) noexcept;
+    smart_attendance::hal::IKeypad& keypad,
+    UiManager& uiManager) noexcept;
+void uiConfigureDeviceServices(
+    smart_attendance::hal::IRtc& rtc,
+    smart_attendance::hal::IStorageDevice& storage) noexcept;
+void uiResetDeviceServices() noexcept;
 void ui_process_background_results();
 void ui_process_system_status();
 

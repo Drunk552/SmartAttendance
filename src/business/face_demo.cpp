@@ -1,9 +1,11 @@
+#include "infrastructure/logging/logger.h"
 #include "face_demo.h"
 
 #include "biometric/face/face_preprocessor.h"
 #include "biometric/face/face_recognition_engine.h"
 #include "business/face_capture_worker.h"
 #include "business/face_punch_worker.h"
+#include "config/resource_limits.h"
 #include "storage/repository/face_data_repository.h"
 #include "hal/camera.h"
 #include "hal/rtc.h"
@@ -26,7 +28,9 @@
 #include <vector>
 
 using namespace cv;
-using std::cout; using std::endl;
+using std::endl;
+using UserData = smart_attendance::storage::FaceUserData;
+using AttendanceRecord = smart_attendance::storage::FaceAttendanceRecord;
 
 // ==================== 全局静态变量 ======================
 
@@ -37,9 +41,8 @@ static int current_id = 0;// 当前选中的用户ID（用于采集样本）
 static std::atomic<bool> show_recognition{true};// 控制是否显示识别结果
 static std::mutex g_names_mutex;// 保护 names 变量的互斥锁
 
-constexpr std::size_t kPunchQueueCapacity = 10;
 static smart_attendance::business::FacePunchWorker g_punch_worker{
-    kPunchQueueCapacity};
+    smart_attendance::config::kPunchRequestQueueCapacity};
 static smart_attendance::biometric::face::IFaceRecognitionEngine*
     g_recognition_engine = nullptr;
 static smart_attendance::hal::ICamera* g_camera = nullptr;
@@ -145,7 +148,7 @@ void business_run_database_writer_task(
 }
 
 void business_wake_database_writer_task() {
-    std::cout << ">>> [Business] Stopping DB Writer thread..." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] Stopping DB Writer thread..." << std::endl;
     g_punch_worker.wake();
 }
 
@@ -173,7 +176,7 @@ bool business_init() {
     if (!g_punch_worker.isConfigured() || g_recognition_engine == nullptr ||
         g_camera == nullptr || g_rtc == nullptr ||
         g_face_data_repository == nullptr) {
-        std::cerr << "[Business] Face engine, camera, RTC and PunchService must be configured "
+        SA_LOG_ERROR_STREAM() << "[Business] Face engine, camera, RTC and PunchService must be configured "
                      "before initialization."
                   << std::endl;
         return false;
@@ -183,11 +186,11 @@ bool business_init() {
     std::string cascade_path = find_cascade();
     if (cascade_path.empty() ||
         !g_recognition_engine->initializeDetector(cascade_path)) {
-        std::cerr << "找不到/加载失败: haarcascade_frontalface_default.xml\n";
+        SA_LOG_ERROR_STREAM() << "找不到/加载失败: haarcascade_frontalface_default.xml\n";
         return false;
     }
 
-    std::cout << ">>> [Business] 摄像头初始化已移交至后台线程，主界面立即启动。" << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] 摄像头初始化已移交至后台线程，主界面立即启动。" << std::endl;
 
     g_capture_worker =
         std::make_unique<smart_attendance::business::FaceCaptureWorker>(
@@ -195,21 +198,21 @@ bool business_init() {
             *g_camera,
             *g_rtc,
             makeCaptureCallbacks());
-    
+
     // 系统启动时，静默清理 30 天前的旧打卡抓拍图，释放磁盘空间
-    std::cout << ">>> [Business] 正在检查磁盘空间与过期打卡抓拍图..." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] 正在检查磁盘空间与过期打卡抓拍图..." << std::endl;
     int cleaned_images =
         g_face_data_repository->cleanupOldAttendanceImages(30); // 30天
     if (cleaned_images > 0) {
-        std::cout << ">>> [Business] 自动清理完毕！共删除 " << cleaned_images << " 张过期图片。" << std::endl;
+        SA_LOG_INFO_STREAM() << ">>> [Business] 自动清理完毕！共删除 " << cleaned_images << " 张过期图片。" << std::endl;
     } else {
-        std::cout << ">>> [Business] 磁盘状态良好，暂无过期打卡图片需清理。" << std::endl;
+        SA_LOG_INFO_STREAM() << ">>> [Business] 磁盘状态良好，暂无过期打卡图片需清理。" << std::endl;
     }
 
     // 准备全局变量
     face_samples.clear();
     labels.clear();
-    names.clear(); 
+    names.clear();
     names.push_back("Unknown"); // ID=0 预留
 
     bool model_loaded = false;
@@ -217,8 +220,8 @@ bool business_init() {
     // A. 尝试加载本地模型文件
     std::ifstream f(MODEL_FILE);
     if (f.good()) {
-        f.close(); 
-        std::cout << ">>> [Business] 发现本地模型 " << MODEL_FILE
+        f.close();
+        SA_LOG_INFO_STREAM() << ">>> [Business] 发现本地模型 " << MODEL_FILE
                   << "，正在快速加载..." << std::endl;
         if (g_recognition_engine->loadModel(MODEL_FILE)) {
             std::vector<UserData> users_info =
@@ -231,9 +234,9 @@ bool business_init() {
             }
 
             model_loaded = true;
-            std::cout << ">>> [Business] 模型加载成功！无需重新训练。" << std::endl;
+            SA_LOG_INFO_STREAM() << ">>> [Business] 模型加载成功！无需重新训练。" << std::endl;
         } else {
-            std::cerr << "[Business] 模型文件可能已损坏，将回退到全量训练。"
+            SA_LOG_ERROR_STREAM() << "[Business] 模型文件可能已损坏，将回退到全量训练。"
                       << std::endl;
             model_loaded = false;
         }
@@ -241,14 +244,14 @@ bool business_init() {
 
     // B. 如果模型加载失败，执行全量训练并保存
     if (!model_loaded) {
-        std::cout << ">>> [Business] 开始执行全量训练 (读取本地头像文件)..." << std::endl;
-        
+        SA_LOG_INFO_STREAM() << ">>> [Business] 开始执行全量训练 (读取本地头像文件)..." << std::endl;
+
         std::vector<UserData> users = g_face_data_repository->listUsers();
-        
+
         if (!users.empty()) {
             for (const auto& u : users) {
                 cv::Mat sample;
-                
+
                 // 判断路径是否为空，并用 imread 读取本地图片
                 if (!u.avatar_path.empty()) {
                     sample = cv::imread(u.avatar_path, cv::IMREAD_GRAYSCALE);
@@ -258,7 +261,7 @@ bool business_init() {
                 if (!sample.empty()) {
                     face_samples.push_back(sample);
                     labels.push_back(u.id);
-                    
+
                     // 维护名字映射
                     if (names.size() <= u.id) {
                         names.resize(u.id + 1, "Unknown");
@@ -266,32 +269,32 @@ bool business_init() {
                     names[u.id] = u.name;
                 } else {
                     // 打印警告，避免某个人没头像导致整个训练卡死
-                    std::cerr << "[Warn] 无法加载用户头像，已跳过。用户ID: " << u.id 
+                    SA_LOG_ERROR_STREAM() << "[Warn] 无法加载用户头像，已跳过。用户ID: " << u.id
                               << " 路径: " << (u.avatar_path.empty() ? "空" : u.avatar_path) << std::endl;
                 }
             }
-            
+
             // 开始训练
             if (!face_samples.empty()) {
                 if (!g_recognition_engine->train(face_samples, labels)) {
-                    std::cerr << ">>> [Business] 全量训练失败。" << std::endl;
+                    SA_LOG_ERROR_STREAM() << ">>> [Business] 全量训练失败。" << std::endl;
                     return false;
                 }
-                std::cout << ">>> [Business] 训练完成。" << std::endl;
+                SA_LOG_INFO_STREAM() << ">>> [Business] 训练完成。" << std::endl;
 
                 if (!g_recognition_engine->saveModel(MODEL_FILE)) {
-                    std::cerr << ">>> [Error] 新模型保存失败: "
+                    SA_LOG_ERROR_STREAM() << ">>> [Error] 新模型保存失败: "
                               << MODEL_FILE << std::endl;
                     return false;
                 } else {
-                    std::cout << ">>> [Business] 新模型已保存至: "
+                    SA_LOG_INFO_STREAM() << ">>> [Business] 新模型已保存至: "
                               << MODEL_FILE << std::endl;
                 }
             } else {
-                std::cout << ">>> [Business] 未找到有效的本地头像文件，无法完成训练。" << std::endl;
+                SA_LOG_WARN_STREAM() << ">>> [Business] 未找到有效的本地头像文件，无法完成训练。" << std::endl;
             }
         } else {
-             std::cout << ">>> [Business] 数据库无用户，跳过训练。" << std::endl;
+             SA_LOG_INFO_STREAM() << ">>> [Business] 数据库无用户，跳过训练。" << std::endl;
         }
     }
 
@@ -300,12 +303,12 @@ bool business_init() {
 
 void business_enter_home_screen() {
     show_recognition = true;
-    std::cout << "[Business] 进入主页，开启人脸识别打卡" << std::endl;
+    SA_LOG_INFO_STREAM() << "[Business] 进入主页，开启人脸识别打卡" << std::endl;
 }
 
 void business_leave_home_screen() {
     show_recognition = false;
-    std::cout << "[Business] 离开主页，关闭人脸识别打卡" << std::endl;
+    SA_LOG_INFO_STREAM() << "[Business] 离开主页，关闭人脸识别打卡" << std::endl;
 }
 
 void business_configure_punch_service(
@@ -332,7 +335,7 @@ void business_configure_face_data_repository(
 }
 
 void business_shutdown() {
-    std::cout << ">>> [Business] 正在释放识别模型和业务缓存..." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] 正在释放识别模型和业务缓存..." << std::endl;
 
     // 采集 Worker 已经 join；再次 close 可覆盖初始化失败留下的部分句柄。
     if (g_capture_worker) {
@@ -371,7 +374,7 @@ void business_shutdown() {
     g_recognition_engine = nullptr;
     g_camera = nullptr;
     g_rtc = nullptr;
-    std::cout << ">>> [Business] 识别模型和业务缓存已释放。" << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] 识别模型和业务缓存已释放。" << std::endl;
 }
 
 /**
@@ -385,7 +388,7 @@ cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
     smart_attendance::biometric::face::FacePreprocessor preprocessor;
     auto result = preprocessor.toGrayscale(inputImage);
     if (!result) {
-        std::cerr << "[Business] 不支持的图像通道数: " << inputImage.channels() << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Business] 不支持的图像通道数: " << inputImage.channels() << std::endl;
         return cv::Mat();
     }
     return std::move(result).value();
@@ -402,26 +405,26 @@ cv::Mat convertToGrayscale(const cv::Mat& inputImage) {
 void business_set_current_id(int id) {
     if (id >= 0 && id < names.size()) {
         current_id = id;
-        cout << "[Business] 当前用户切换为: " << names[current_id] << endl;
+        SA_LOG_INFO_STREAM() << "[Business] 当前用户 ID 切换为: " << current_id << endl;
     } else {
-        std::cerr << "[Business] ID 超出范围" << endl;
+        SA_LOG_ERROR_STREAM() << "[Business] ID 超出范围" << endl;
     }
-}  
+}
 
 /**
  * @brief 基于当前内存样本训练识别模型
  * @note 如果样本少于 2 个则不进行训练；训练状态由人脸引擎维护。
  */
 void business_start_training() {
-    if (face_samples.size() < 2) { 
-        cout << "[Business] 样本过少 (<2)，无法训练。\n"; 
+    if (face_samples.size() < 2) {
+        SA_LOG_WARN_STREAM() << "[Business] 样本过少 (<2)，无法训练。\n";
     } else if (g_recognition_engine != nullptr &&
                g_recognition_engine->train(face_samples, labels)) {
-        cout << "[Business] 模型训练完成。\n";
+        SA_LOG_INFO_STREAM() << "[Business] 模型训练完成。\n";
     } else {
-        std::cerr << "[Business] 模型训练失败。\n";
+        SA_LOG_ERROR_STREAM() << "[Business] 模型训练失败。\n";
     }
-} 
+}
 
 /**
  * @brief 切换识别显示开关（开 / 关）
@@ -430,12 +433,12 @@ void business_start_training() {
 void business_toggle_recognition() {
     if (g_recognition_engine == nullptr ||
         !g_recognition_engine->isTrained()) {
-        cout << "[Business] 尚未训练，无法开启识别。\n";
+        SA_LOG_WARN_STREAM() << "[Business] 尚未训练，无法开启识别。\n";
         show_recognition.store(false);
     } else {
         const bool enabled = !show_recognition.load();
         show_recognition.store(enabled);
-        cout << "[Business] 识别功能: " << (enabled ? "开启" : "关闭") << endl;
+        SA_LOG_INFO_STREAM() << "[Business] 识别功能: " << (enabled ? "开启" : "关闭") << endl;
     }
 }
 
@@ -446,11 +449,11 @@ void business_toggle_recognition() {
 void business_set_recognition_enabled(bool enable) {
     if ((g_recognition_engine == nullptr ||
          !g_recognition_engine->isTrained()) && enable) {
-        cout << "[Business] 尚未训练，无法开启识别。\n";
+        SA_LOG_WARN_STREAM() << "[Business] 尚未训练，无法开启识别。\n";
         show_recognition.store(false);
     } else {
         show_recognition.store(enable);
-        cout << "[Business] 识别功能: " << (enable ? "开启" : "关闭") << endl;
+        SA_LOG_INFO_STREAM() << "[Business] 识别功能: " << (enable ? "开启" : "关闭") << endl;
     }
 }
 
@@ -489,7 +492,7 @@ cv::Mat business_get_frame() {
  */
 bool business_get_display_frame(void* buffer, int w, int h) {
     cv::Mat frame;
-    
+
     // 1. 快速取出最新的一帧 (加锁时间极短)
     {
         std::lock_guard<std::mutex> lock(g_display_mutex);
@@ -504,10 +507,10 @@ bool business_get_display_frame(void* buffer, int w, int h) {
     // ==========================================
     // 解决 240x260 拉伸问题的裁剪逻辑
     // ==========================================
-    
+
     // 目标是填满高度 (h>=260)，保持 4:3 比例
     // 计算等比缩放后的宽度： 260 / 480 * 640 ≈ 346
-    int scaled_w = (frame.cols * h) / frame.rows; 
+    int scaled_w = (frame.cols * h) / frame.rows;
     // 先等比缩放 (此时图像是 346x260，不会变形)
     cv::resize(frame, frame, cv::Size(scaled_w, h));
     // 计算需要裁剪掉的左右两边宽度
@@ -517,10 +520,10 @@ bool business_get_display_frame(void* buffer, int w, int h) {
     if (crop_x > 0) {
         // 确保裁剪区域不越界
         if (crop_x + w > scaled_w) crop_x = scaled_w - w;
-        
+
         cv::Rect roi(crop_x, 0, w, h);
         // 使用 clone() 确保内存连续，防止显示花屏
-        frame = frame(roi).clone(); 
+        frame = frame(roi).clone();
     } else {
         // 兜底逻辑：如果计算出的宽度不够（极少情况），则强制缩放
         cv::resize(frame, frame, cv::Size(w, h));
@@ -529,7 +532,7 @@ bool business_get_display_frame(void* buffer, int w, int h) {
     frame.copyTo(rgb);
     // 3. 填入 buffer
     memcpy(buffer, rgb.data, w * h * 3);
-    
+
     return true;
 }
 
@@ -542,7 +545,7 @@ int business_get_user_count(void) {
     // 每次进入列表页时，从数据库重新拉取一次数据
     g_user_cache = g_face_data_repository->listUsers();
     return (int)g_user_cache.size();
-} 
+}
 
 /**
  * @brief 获取指定索引用户的信息（从缓存）
@@ -555,18 +558,18 @@ int business_get_user_count(void) {
 bool business_get_user_at(int index, int *id_out, char *name_buf, int len) {
     // 越界检查
     if (index < 0 || index >= (int)g_user_cache.size()) return false;
-    
+
     const UserData& u = g_user_cache[index];
-    
+
     if (id_out) *id_out = u.id;
-    
+
     if (name_buf && len > 0) {
         // 安全拷贝字符串
         strncpy(name_buf, u.name.c_str(), len - 1);
         name_buf[len - 1] = '\0'; // 确保结尾符
     }
     return true;
-} 
+}
 
 /**
  * @brief 使用当前帧注册新用户（将原图作为人脸数据保存）
@@ -581,11 +584,11 @@ bool business_register_user(const char* name, int dept_id) {
 
     // 1. 检查是否有画面
     if (current_frame.empty()) {
-        std::cerr << "[Business] Error: No camera frame for registration!\n";
+        SA_LOG_ERROR_STREAM() << "[Business] Error: No camera frame for registration!\n";
         return false;
     }
 
-    std::cout << "[Business] Registering user: " << name << "...\n";
+    SA_LOG_INFO_STREAM() << "[Business] Registering user face.\n";
 
     // 2. 构造用户数据
     UserData u;
@@ -593,15 +596,15 @@ bool business_register_user(const char* name, int dept_id) {
     u.role = 0;      // 默认为普通员工
     u.dept_id = dept_id;   // 默认无部门 (或设为1)
     u.default_shift_id = 0; // 暂时默认
-    u.password = ""; 
+    u.password = "";
     u.card_id = "";
 
     // 3. 调用数据层接口 (自动处理图片编码和存储)
     int new_id = g_face_data_repository->addUser(u, current_frame);
-    
+
     if (new_id > 0) {
-        std::cout << "[Business] Registration Success! ID: " << new_id << "\n";
-        
+        SA_LOG_INFO_STREAM() << "[Business] Registration Success! ID: " << new_id << "\n";
+
         // 注册后更新模型并保存到 XML
         // A. 图像预处理：LBPH 需要灰度图
         cv::Mat gray_frame;
@@ -626,39 +629,39 @@ bool business_register_user(const char* name, int dept_id) {
 
         // 如果是系统第一个用户，必须用 train 初始化；否则用 update 追加
         if (g_recognition_engine == nullptr) {
-            std::cerr << ">>> [Error] 人脸识别引擎未配置。" << std::endl;
+            SA_LOG_ERROR_STREAM() << ">>> [Error] 人脸识别引擎未配置。" << std::endl;
             return false;
         }
         if (!g_recognition_engine->isTrained()) {
             if (!g_recognition_engine->train(new_imgs, new_labels)) {
-                std::cerr << ">>> [Error] 模型初始化训练失败。" << std::endl;
+                SA_LOG_ERROR_STREAM() << ">>> [Error] 模型初始化训练失败。" << std::endl;
                 return false;
             }
-            std::cout << ">>> [Business] 模型初始化训练完成。" << std::endl;
+            SA_LOG_INFO_STREAM() << ">>> [Business] 模型初始化训练完成。" << std::endl;
         } else {
             if (!g_recognition_engine->update(new_imgs, new_labels)) {
-                std::cerr << ">>> [Error] 模型增量更新失败。" << std::endl;
+                SA_LOG_ERROR_STREAM() << ">>> [Error] 模型增量更新失败。" << std::endl;
                 return false;
             }
-            std::cout << ">>> [Business] 模型增量更新完成。" << std::endl;
+            SA_LOG_INFO_STREAM() << ">>> [Business] 模型增量更新完成。" << std::endl;
         }
 
         // D. 立即保存到磁盘 (Model Persistence)
         // 这样下次启动时，business_init 就能直接读取这个 xml 文件
         if (g_recognition_engine->saveModel(MODEL_FILE)) {
-            std::cout << ">>> [Business] 模型已成功保存至: " << MODEL_FILE << std::endl;
+            SA_LOG_INFO_STREAM() << ">>> [Business] 模型已成功保存至: " << MODEL_FILE << std::endl;
         } else {
-            std::cerr << ">>> [Error] 模型文件保存失败。" << std::endl;
+            SA_LOG_ERROR_STREAM() << ">>> [Error] 模型文件保存失败。" << std::endl;
         }
 
         // 刷新缓存，确保列表页能看到新用户
-        business_get_user_count(); 
+        business_get_user_count();
         return true;
     } else {
-        std::cerr << "[Business] DB Add Failed!\n";
+        SA_LOG_ERROR_STREAM() << "[Business] DB Add Failed!\n";
         return false;
     }
-} 
+}
 
 /**
  * @brief 使用当前帧更新老用户的人脸
@@ -671,17 +674,17 @@ bool business_update_user_face(int user_id) {
 
     // 2. 检查是否有画面
     if (current_frame.empty()) {
-        std::cerr << "[Business] Error: No camera frame for updating face!\n";
+        SA_LOG_ERROR_STREAM() << "[Business] Error: No camera frame for updating face!\n";
         return false;
     }
 
-    std::cout << "[Business] Updating face for user ID: " << user_id << "...\n";
+    SA_LOG_INFO_STREAM() << "[Business] Updating face for user ID: " << user_id << "...\n";
 
     // 3. 调用数据层接口更新数据库 (调用我们上一轮加的函数)
-    // 注意：确保该文件包含了 db_storage.h 并且能识别 db_update_user_face
+    // 人脸更新通过注入的 Repository 执行，业务层不接触旧 DAO 声明。
     if (g_face_data_repository->updateUserFace(user_id, current_frame)) {
-        std::cout << "[Business] DB Face Update Success! ID: " << user_id << "\n";
-        
+        SA_LOG_INFO_STREAM() << "[Business] DB Face Update Success! ID: " << user_id << "\n";
+
         // ========================================================
         // 核心：更新人脸识别模型 (LBPH 支持给同一个 ID 增量追加人脸)
         // ========================================================
@@ -697,31 +700,31 @@ bool business_update_user_face(int user_id) {
 
         // 增量更新模型特征
         if (g_recognition_engine == nullptr) {
-            std::cerr << ">>> [Error] 人脸识别引擎未配置。" << std::endl;
+            SA_LOG_ERROR_STREAM() << ">>> [Error] 人脸识别引擎未配置。" << std::endl;
             return false;
         }
         if (!g_recognition_engine->isTrained()) {
             if (!g_recognition_engine->train(new_imgs, new_labels)) {
-                std::cerr << ">>> [Error] 模型初始化训练失败。" << std::endl;
+                SA_LOG_ERROR_STREAM() << ">>> [Error] 模型初始化训练失败。" << std::endl;
                 return false;
             }
         } else {
             if (!g_recognition_engine->update(new_imgs, new_labels)) {
-                std::cerr << ">>> [Error] 模型增量更新失败。" << std::endl;
+                SA_LOG_ERROR_STREAM() << ">>> [Error] 模型增量更新失败。" << std::endl;
                 return false;
             }
         }
 
         // 保存模型到磁盘
         if (g_recognition_engine->saveModel(MODEL_FILE)) {
-            std::cout << ">>> [Business] 模型增量更新完成，已保存至: " << MODEL_FILE << std::endl;
+            SA_LOG_INFO_STREAM() << ">>> [Business] 模型增量更新完成，已保存至: " << MODEL_FILE << std::endl;
         } else {
-            std::cerr << ">>> [Error] 模型文件保存失败。" << std::endl;
+            SA_LOG_ERROR_STREAM() << ">>> [Error] 模型文件保存失败。" << std::endl;
         }
 
         return true;
     } else {
-        std::cerr << "[Business] DB Face Update Failed!\n";
+        SA_LOG_ERROR_STREAM() << "[Business] DB Face Update Failed!\n";
         return false;
     }
 }
@@ -740,16 +743,16 @@ int business_get_record_count(void) {
     // 注意：db_get_records 已经在 db_storage.cpp 中按时间倒序排列了
     long long start = 0;
     long long end = 4102444800; // 2100年
-    
+
     g_record_cache = g_face_data_repository->records(start, end);
-    
+
     // 如果记录太多，只取前 50 条显示，防止列表过长卡顿
     if (g_record_cache.size() > 50) {
         g_record_cache.resize(50);
     }
-    
+
     return (int)g_record_cache.size();
-} 
+}
 
 /**
  * @brief 获取指定索引的格式化考勤记录文本
@@ -761,28 +764,28 @@ int business_get_record_count(void) {
  */
 bool business_get_record_at(int index, char *buf, int len) {
     if (index < 0 || index >= (int)g_record_cache.size()) return false;
-    
+
     const AttendanceRecord& r = g_record_cache[index];
-    
+
     // 1. 转换时间戳为 HH:MM 格式
     time_t raw = (time_t)r.timestamp;
     struct tm *info = localtime(&raw);
     char time_str[16];
     strftime(time_str, sizeof(time_str), "%m-%d %H:%M", info);
-    
+
     // 2. 转换状态码
     const char* status_str = "OK";
     if (r.status == 1) status_str = "Late";
     else if (r.status == 2) status_str = "LeftEarly";
     else if (r.status == 3) status_str = "OT"; // Overtime
-    
+
     // 3. 格式化输出: "12-17 09:00 Alice [OK]"
     if (buf && len > 0) {
         snprintf(buf, len, "%s %s [%s]", time_str, r.user_name.c_str(), status_str);
     }
-    
+
     return true;
-} 
+}
 
 /**
 * @brief 设置人脸预处理配置 (供 UI 调用)
@@ -797,29 +800,29 @@ void business_set_preprocess_config(const PreprocessConfig* config) {
         std::lock_guard<std::mutex> lock(g_preprocess_mutex);
         preprocess_config = *config;
     }
-    std::cout << "[Business] 预处理配置已更新。" << std::endl;
-    std::cout << "  裁剪边界: " << (config->enable_crop ? "启用" : "禁用") << std::endl;
-    std::cout << "  尺寸归一化: " << (config->enable_resize_eq ? "启用" : "禁用") << std::endl;   
-    std::cout << "  直方图均衡化方法: ";
+    SA_LOG_INFO_STREAM() << "[Business] 预处理配置已更新。" << std::endl;
+    SA_LOG_INFO_STREAM() << "  裁剪边界: " << (config->enable_crop ? "启用" : "禁用") << std::endl;
+    SA_LOG_INFO_STREAM() << "  尺寸归一化: " << (config->enable_resize_eq ? "启用" : "禁用") << std::endl;
+    SA_LOG_INFO_STREAM() << "  直方图均衡化方法: ";
 
     if (config->hist_eq_method == HIST_EQ_NONE) {
-        std::cout << "禁用" << std::endl;
-    } 
-
-    else if (config->hist_eq_method == HIST_EQ_GLOBAL) {
-        std::cout << "全局均衡化" << std::endl;
-    } 
-
-    else if (config->hist_eq_method == HIST_EQ_CLAHE) {
-        std::cout << "CLAHE" << std::endl;
-    } 
-    
-    else {
-        std::cout << "未知(" << config->hist_eq_method << ")" << std::endl;
+        SA_LOG_INFO_STREAM() << "禁用" << std::endl;
     }
 
-    std::cout << "  ROI增强: " << (config->enable_roi_enhance ? "启用" : "禁用") << std::endl;// 输出ROI增强状态
-    std::cout << "  目标尺寸: " << config->resize_size.width << "x" << config->resize_size.height << std::endl;  // 输出目标尺寸
+    else if (config->hist_eq_method == HIST_EQ_GLOBAL) {
+        SA_LOG_INFO_STREAM() << "全局均衡化" << std::endl;
+    }
+
+    else if (config->hist_eq_method == HIST_EQ_CLAHE) {
+        SA_LOG_INFO_STREAM() << "CLAHE" << std::endl;
+    }
+
+    else {
+        SA_LOG_INFO_STREAM() << "未知(" << config->hist_eq_method << ")" << std::endl;
+    }
+
+    SA_LOG_INFO_STREAM() << "  ROI增强: " << (config->enable_roi_enhance ? "启用" : "禁用") << std::endl;// 输出ROI增强状态
+    SA_LOG_INFO_STREAM() << "  目标尺寸: " << config->resize_size.width << "x" << config->resize_size.height << std::endl;  // 输出目标尺寸
 }
 
 /**
@@ -843,19 +846,19 @@ void business_set_histogram_equalization(bool enable, int method) {
         preprocess_config.enable_resize_eq = enable;
         preprocess_config.hist_eq_method = method;
     }
-    
-    std::cout << "[Business] 直方图均衡化: " << (enable ? "启用" : "禁用");
+
+    SA_LOG_INFO_STREAM() << "[Business] 直方图均衡化: " << (enable ? "启用" : "禁用");
     if (enable) {
-        std::cout << "，方法: ";
+        SA_LOG_INFO_STREAM() << "，方法: ";
         if (method == HIST_EQ_GLOBAL) {
-            std::cout << "全局均衡化";
+            SA_LOG_INFO_STREAM() << "全局均衡化";
         } else if (method == HIST_EQ_CLAHE) {
-            std::cout << "CLAHE";
+            SA_LOG_INFO_STREAM() << "CLAHE";
         } else {
-            std::cout << "未知(" << method << ")";
+            SA_LOG_INFO_STREAM() << "未知(" << method << ")";
         }
     }
-    std::cout << std::endl;
+    SA_LOG_INFO_STREAM() << std::endl;
 }
 
 /**
@@ -874,8 +877,8 @@ void business_set_clahe_parameters(float clip_limit,int grid_width,int grid_heig
         preprocess_config.clahe_clip_limit = boundedClipLimit;
         preprocess_config.clahe_tile_grid_size = boundedGridSize;
     }
-    
-    std::cout << "[Business] CLAHE 参数已更新。剪切限制: "
+
+    SA_LOG_INFO_STREAM() << "[Business] CLAHE 参数已更新。剪切限制: "
               << boundedClipLimit << ", 网格大小: "
               << boundedGridSize.width << "x" << boundedGridSize.height
               << std::endl;
@@ -896,7 +899,7 @@ void business_set_roi_enhance(bool enable, float contrast, float brightness){
         preprocess_config.roi_brightness = brightness;
     }
 
-    std::cout << "[Business] ROI增强: " << (enable ? "启用" : "禁用")
+    SA_LOG_INFO_STREAM() << "[Business] ROI增强: " << (enable ? "启用" : "禁用")
               << ", 对比度: " << contrast
               << ", 亮度: " << brightness << std::endl;
 }
@@ -906,6 +909,6 @@ void business_set_roi_enhance(bool enable, float contrast, float brightness){
  * @note PunchService 每次打卡都会读取当前规则，因此不再维护业务层规则缓存。
  */
 void business_reload_config() {
-    std::cout << ">>> [Business] 打卡规则由 PunchService 按请求读取，无需刷新缓存。"
+    SA_LOG_INFO_STREAM() << ">>> [Business] 打卡规则由 PunchService 按请求读取，无需刷新缓存。"
               << std::endl;
 }

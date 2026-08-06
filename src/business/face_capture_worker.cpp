@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file face_capture_worker.cpp
  * @brief 实现平台无关的摄像头采集循环并调用独立人脸算法模块。
@@ -33,7 +34,7 @@ FaceCaptureWorker::FaceCaptureWorker(
 
 void FaceCaptureWorker::run(
     const std::atomic<bool>& stopRequested) {
-    std::cout << ">>> [Business] Background capture thread started." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] Background capture thread started." << std::endl;
 
     int frameCounter = 0;
     cv::Rect lastFaceRegion;
@@ -47,7 +48,7 @@ void FaceCaptureWorker::run(
         try {
             if (!camera_.isOpen()) {
                 if (++retryCount % 10 == 0) {
-                    std::cout << "[Stream] 尝试重连 SDP..." << std::endl;
+                    SA_LOG_INFO_STREAM() << "[Stream] 尝试重连 SDP..." << std::endl;
                     camera_.close();
                     if (camera_.open()) {
                         consecutiveFailures = 0;
@@ -61,7 +62,7 @@ void FaceCaptureWorker::run(
             if (!capturedFrame || !capturedFrame.value().isValid()) {
                 ++consecutiveFailures;
                 if (consecutiveFailures > 60) {
-                    std::cerr << "[Stream] 严重错误：流已中断，强制重启连接！"
+                    SA_LOG_ERROR_STREAM() << "[Stream] 严重错误：流已中断，强制重启连接！"
                               << std::endl;
                     camera_.close();
                     consecutiveFailures = 0;
@@ -174,20 +175,20 @@ void FaceCaptureWorker::run(
 
             std::this_thread::sleep_for(std::chrono::milliseconds(15));
         } catch (const cv::Exception& error) {
-            std::cerr << "[Error] OpenCV Exception in capture loop: "
+            SA_LOG_ERROR_STREAM() << "[Error] OpenCV Exception in capture loop: "
                       << error.what() << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         } catch (const std::exception& error) {
-            std::cerr << "[Error] Std Exception in capture loop: "
+            SA_LOG_ERROR_STREAM() << "[Error] Std Exception in capture loop: "
                       << error.what() << std::endl;
         } catch (...) {
-            std::cerr << "[Error] Unknown crash in capture loop!" << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Error] Unknown crash in capture loop!" << std::endl;
         }
     }
 
-    std::cout << ">>> [Business] Stopping capture thread..." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] Stopping capture thread..." << std::endl;
     close();
-    std::cout << ">>> [Business] Capture thread stopped." << std::endl;
+    SA_LOG_INFO_STREAM() << ">>> [Business] Capture thread stopped." << std::endl;
 }
 
 void FaceCaptureWorker::close() noexcept {

@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file
  * @brief 承接旧部门、班次和考勤规则 SQLite DAO。
@@ -127,7 +128,7 @@ bool db_update_department(int dept_id, const std::string& new_name) {
     sqlite3_stmt* stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Update Dept Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Update Dept Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -138,7 +139,7 @@ bool db_update_department(int dept_id, const std::string& new_name) {
     sqlite3_finalize(stmt);
 
     if (ok) {
-        std::cout << "[Data] Department " << dept_id << " updated to: " << new_name << std::endl;
+        SA_LOG_INFO_STREAM() << "[Data] Department " << dept_id << " updated to: " << new_name << std::endl;
     }
 
     return ok;
@@ -160,7 +161,7 @@ bool db_update_shift(int shift_id, const std::string& s1_start, const std::strin
 
     ScopedSqliteStmt stmt;
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Update Shift Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Update Shift Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -176,7 +177,7 @@ bool db_update_shift(int shift_id, const std::string& s1_start, const std::strin
     sqlite3_bind_int(stmt.get(),  9, cross_day);
 
     if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-        std::cerr << "[Data] Execute Update Shift Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Execute Update Shift Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -237,7 +238,7 @@ std::optional<ShiftInfo> db_get_shift_info(int shift_id) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Get Shift Info Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Get Shift Info Failed: " << sqlite3_errmsg(db) << std::endl;
         return std::nullopt;
     }
 
@@ -384,7 +385,7 @@ bool db_delete_shift(int shift_id) {
 
     // 1. 准备语句
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Delete Shift Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Delete Shift Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -395,7 +396,7 @@ bool db_delete_shift(int shift_id) {
     bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
 
     if (!ok) {
-        std::cerr << "[Data] Delete Shift Execution Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Delete Shift Execution Failed: " << sqlite3_errmsg(db) << std::endl;
     }
 
     return ok;
@@ -417,7 +418,7 @@ bool db_update_global_rules(const RuleConfig& config) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Update Rules Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Update Rules Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -445,7 +446,7 @@ bool db_update_global_rules(const RuleConfig& config) {
     bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
 
     if(ok) {
-        std::cout << "[Data] System Config Updated." << std::endl;
+        SA_LOG_INFO_STREAM() << "[Data] System Config Updated." << std::endl;
     }
     return ok;
 }

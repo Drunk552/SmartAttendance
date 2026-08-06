@@ -2,7 +2,7 @@
 #include "../../managers/ui_manager.h"
 #include "../../common/ui_style.h"
 #include "../../common/ui_widgets.h"
-#include "../../ui_controller.h"
+#include "../../ui_page_dependencies.h"
 #include "../menu/ui_scr_menu.h"
 
 #include <string>
@@ -12,14 +12,15 @@
 namespace ui {
 namespace sys_info {
 
-static UiController* controller_ = nullptr;
+static smart_attendance::ui::SystemInfoPageDependencies* dependencies_ = nullptr;
 
-void configureController(UiController& controller) noexcept {
-    controller_ = &controller;
+void configureDependencies(
+    smart_attendance::ui::SystemInfoPageDependencies& dependencies) noexcept {
+    dependencies_ = &dependencies;
 }
 
-static UiController& controller() {
-    return *controller_;
+static smart_attendance::ui::SystemInfoPageDependencies& dependencies() {
+    return *dependencies_;
 }
 
 
@@ -66,7 +67,7 @@ static void sys_info_menu_event_cb(lv_event_t *e) {
         }
 
         // --- 方向键导航 ---
-        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+        lv_group_t* group = dependencies().uiManager.getKeypadGroup();
         if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             lv_group_focus_next(group);// 向下/向右导航
         }
@@ -102,14 +103,14 @@ void load_sys_info_menu_screen() {
 
     BaseScreenParts parts = create_base_screen("系统信息");
     scr_sys = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::SYS_INFO, &scr_sys);
+    dependencies().uiManager.registerScreen(ScreenType::SYS_INFO, &scr_sys);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_sys, [](lv_event_t * e) {
         scr_sys = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
@@ -120,7 +121,7 @@ void load_sys_info_menu_screen() {
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
@@ -128,7 +129,7 @@ void load_sys_info_menu_screen() {
     }
 
     lv_screen_load(scr_sys);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_sys);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_sys);// 加载后销毁其他屏幕，保持资源清晰
 }
 
 
@@ -157,7 +158,7 @@ static void storage_info_event_cb(lv_event_t *e) {
         }
 
         // --- 方向键导航 ---
-        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+        lv_group_t* group = dependencies().uiManager.getKeypadGroup();
         if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             lv_group_focus_next(group);// 向下/向右导航
         }
@@ -177,45 +178,46 @@ void load_storage_info_screen() {
 
     BaseScreenParts parts = create_base_screen("存储信息");
     scr_storage_info = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::STORAGE_INFO, &scr_storage_info);
+    dependencies().uiManager.registerScreen(ScreenType::STORAGE_INFO, &scr_storage_info);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_storage_info, [](lv_event_t * e) {
         scr_storage_info = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
     //获取存储信息数
-    SystemStats stats = controller().getSystemStatistics();
+    smart_attendance::core::SystemStats stats;
+    (void)dependencies().systemInfo.statistics(stats);
 
     char buf[64];
     // 1. 员工注册数
-    snprintf(buf, sizeof(buf), "%d", stats.total_employees);//员工注册数
+    snprintf(buf, sizeof(buf), "%d", stats.totalEmployees);//员工注册数
     create_sys_list_btn(list, "1. ", "员工注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)0);
 
     // 2. 管理员注册数
-    snprintf(buf, sizeof(buf), "%d", stats.total_admins);//管理员注册数
+    snprintf(buf, sizeof(buf), "%d", stats.totalAdmins);//管理员注册数
     create_sys_list_btn(list, "2. ", "管理员注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)1);
 
     // 3. 人脸注册数
-    snprintf(buf, sizeof(buf), "%d", stats.total_faces);//人脸注册数
+    snprintf(buf, sizeof(buf), "%d", stats.totalFaces);//人脸注册数
     create_sys_list_btn(list, "3. ", "人脸注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)2);
 
     // 4. 指纹注册数
-    snprintf(buf, sizeof(buf), "%d", stats.total_fingerprints);//指纹注册数
+    snprintf(buf, sizeof(buf), "%d", stats.totalFingerprints);//指纹注册数
     create_sys_list_btn(list, "4. ", "指纹注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)3);
 
     // 5. 卡号注册数
-    snprintf(buf, sizeof(buf), "%d", stats.total_cards);//卡号注册数
+    snprintf(buf, sizeof(buf), "%d", stats.totalCards);//卡号注册数
     create_sys_list_btn(list, "5. ", "卡号注册数：", buf, storage_info_event_cb, (const char*)(intptr_t)4);
 
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
@@ -223,7 +225,7 @@ void load_storage_info_screen() {
     }
 
     lv_screen_load(scr_storage_info);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_storage_info);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_storage_info);// 加载后销毁其他屏幕，保持资源清晰
 
 }
 
@@ -253,7 +255,7 @@ static void facility_info_event_cb(lv_event_t *e) {
         }
 
         // --- 方向键导航 ---
-        lv_group_t* group = UiManager::getInstance()->getKeypadGroup();
+        lv_group_t* group = dependencies().uiManager.getKeypadGroup();
         if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT) {
             lv_group_focus_next(group);// 向下/向右导航
         }
@@ -274,14 +276,14 @@ void load_facility_info_screen() {
 
     BaseScreenParts parts = create_base_screen("设备信息");
     scr_facility_info = parts.screen;
-    UiManager::getInstance()->registerScreen(ScreenType::FACILITY_INFO, &scr_facility_info);
+    dependencies().uiManager.registerScreen(ScreenType::FACILITY_INFO, &scr_facility_info);
 
     // 绑定销毁回调
     lv_obj_add_event_cb(scr_facility_info, [](lv_event_t * e) {
         scr_facility_info = nullptr;
     }, LV_EVENT_DELETE, NULL);
 
-    UiManager::getInstance()->resetKeypadGroup();// 重置输入组，准备添加新控件
+    dependencies().uiManager.resetKeypadGroup();// 重置输入组，准备添加新控件
 
     lv_obj_t* list = create_list_container(parts.content);// 创建统一列表容器
 
@@ -293,7 +295,7 @@ void load_facility_info_screen() {
     uint32_t child_cnt = lv_obj_get_child_cnt(list);// 遍历容器子对象(按钮)加入组
     for(uint32_t i=0; i<child_cnt; i++) {
         lv_obj_t* btn = lv_obj_get_child(list, i);
-        UiManager::getInstance()->addObjToGroup(btn);// 加入按键组
+        dependencies().uiManager.addObjToGroup(btn);// 加入按键组
     }
     // 聚焦第一个按钮
     if(child_cnt > 0) {
@@ -301,7 +303,7 @@ void load_facility_info_screen() {
     }
 
     lv_screen_load(scr_facility_info);
-    UiManager::getInstance()->destroyAllScreensExcept(scr_facility_info);// 加载后销毁其他屏幕，保持资源清晰
+    dependencies().uiManager.destroyAllScreensExcept(scr_facility_info);// 加载后销毁其他屏幕，保持资源清晰
 
 }
 

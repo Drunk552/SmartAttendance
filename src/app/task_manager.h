@@ -101,6 +101,11 @@ public:
     TaskManagerState state() const noexcept;
     UiBackgroundJobQueue& uiBackgroundJobs() noexcept;
     UiSystemStatusMailbox& uiSystemStatus() noexcept;
+    void configureReportExporters(
+        UserReportExporter userReportExporter,
+        CustomReportExporter customReportExporter,
+        EmployeeSettingsExporter employeeSettingsExporter,
+        EmployeeSettingsImporter employeeSettingsImporter) noexcept;
 
 private:
     void stopAndJoinNoexcept() noexcept;

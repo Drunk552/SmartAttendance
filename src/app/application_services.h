@@ -15,12 +15,21 @@
 #include "services/shift_service.h"
 #include "services/attendance_query_service.h"
 #include "services/maintenance_service.h"
+#include "services/system_info_service.h"
 #include "storage/sqlite/legacy_employee_repository.h"
 #include "storage/sqlite/legacy_config_repository.h"
 #include "storage/sqlite/legacy_department_repository.h"
 #include "storage/sqlite/legacy_punch_repositories.h"
 #include "storage/sqlite/legacy_shift_repository.h"
 #include "storage/sqlite/legacy_maintenance_repository.h"
+#include "storage/sqlite/legacy_report_data_source.h"
+#include "storage/sqlite/legacy_face_data_repository.h"
+#include "storage/sqlite/legacy_employee_settings_import_repository.h"
+#include "storage/sqlite/legacy_system_info_repository.h"
+
+#include <memory>
+
+namespace smart_attendance::services { class ReportService; }
 
 namespace smart_attendance::app {
 
@@ -94,6 +103,12 @@ public:
     services::ShiftService& shiftService() noexcept;
     services::AttendanceQueryService& attendanceQueryService() noexcept;
     services::MaintenanceService& maintenanceService() noexcept;
+    bool initializeReportService() noexcept;
+    services::ReportService& reportService() noexcept;
+    services::SystemInfoService& systemInfoService() noexcept;
+    storage::IFaceDataRepository& faceDataRepository() noexcept;
+    storage::IEmployeeSettingsImportRepository&
+    employeeSettingsImportRepository() noexcept;
 
     /** @brief 返回由组合根持有的 OpenCV 人脸算法引擎，不转移所有权。 */
     biometric::face::IFaceRecognitionEngine& faceRecognitionEngine() noexcept;
@@ -126,6 +141,13 @@ private:
     services::AttendanceQueryService attendanceQueryService_;
     storage::sqlite::LegacyMaintenanceRepository maintenanceRepository_;
     services::MaintenanceService maintenanceService_;
+    storage::sqlite::LegacyReportDataSource reportDataSource_;
+    storage::sqlite::LegacyEmployeeSettingsImportRepository
+        employeeSettingsImportRepository_;
+    std::unique_ptr<services::ReportService> reportService_;
+    storage::sqlite::LegacySystemInfoRepository systemInfoRepository_;
+    services::SystemInfoService systemInfoService_;
+    storage::sqlite::LegacyFaceDataRepository faceDataRepository_;
     storage::sqlite::LegacyScheduleRepository scheduleRepository_;
     storage::sqlite::LegacyAttendanceRuleRepository attendanceRuleRepository_;
     storage::sqlite::LegacyAttendanceRepository attendanceRepository_;

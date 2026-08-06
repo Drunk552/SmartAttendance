@@ -30,6 +30,12 @@ enum AttendanceStatus {
 
 class ReportGenerator {
 public:
+using AttendanceRecord = smart_attendance::services::ReportAttendanceRecord;
+using UserData = smart_attendance::services::ReportUser;
+using DeptInfo = smart_attendance::services::ReportDepartment;
+using ShiftInfo = smart_attendance::services::ReportShift;
+using RuleConfig = smart_attendance::services::ReportRules;
+
 // 内部辅助结构：每日考勤汇总
 struct DailySummary {
     std::string date;

@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file
  * @brief 承接旧员工 SQLite DAO。
@@ -41,7 +42,7 @@ int db_add_user(const UserData& user, const cv::Mat& face_image) {
                 path_str = p.string();
             }
         } catch (...) {
-            std::cerr << "[Data] Save Avatar Image Failed." << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Save Avatar Image Failed." << std::endl;
         }
     }
 
@@ -91,7 +92,7 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
     // 2. 开启事务 (BEGIN TRANSACTION)，极大地加速批量插入
     char* zErrMsg = 0;
     if (sqlite3_exec(db, "BEGIN TRANSACTION;", 0, 0, &zErrMsg) != SQLITE_OK) {
-        std::cerr << "[Data] Begin Transaction Failed: " << zErrMsg << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Begin Transaction Failed: " << zErrMsg << std::endl;
         sqlite3_free(zErrMsg);
         return false;
     }
@@ -105,7 +106,7 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
 
     ScopedSqliteStmt stmt;
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Batch Add Users Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Batch Add Users Failed: " << sqlite3_errmsg(db) << std::endl;
         sqlite3_exec(db, "ROLLBACK;", 0, 0, 0); // 发生错误，回滚
         return false;
     }
@@ -159,7 +160,7 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
 
         // 执行单条语句
         if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-            std::cerr << "[Data] Batch Insert Error on User ID " << user.id
+            SA_LOG_ERROR_STREAM() << "[Data] Batch Insert Error on User ID " << user.id
                       << ": " << sqlite3_errmsg(db) << std::endl;
             success = false;
             break; // 出现错误，跳出循环
@@ -173,10 +174,10 @@ bool db_batch_add_users(const std::vector<UserData>& users_list) {
     // 5. 根据执行结果提交或回滚
     if (success) {
         sqlite3_exec(db, "COMMIT;", 0, 0, 0); // 正式写入磁盘
-        std::cout << "[Data] Successfully batch synced " << users_list.size() << " users." << std::endl;
+        SA_LOG_INFO_STREAM() << "[Data] Successfully batch synced " << users_list.size() << " users." << std::endl;
     } else {
         sqlite3_exec(db, "ROLLBACK;", 0, 0, 0); // 放弃之前的所有更改
-        std::cerr << "[Data] Batch sync failed, all changes rolled back." << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Batch sync failed, all changes rolled back." << std::endl;
     }
 
     return success;
@@ -190,7 +191,7 @@ bool db_batch_update_user_schedules(int year, int month, const std::vector<UserD
     char* zErrMsg = 0;
     // 开启事务，加速写入
     if (sqlite3_exec(db, "BEGIN TRANSACTION;", 0, 0, &zErrMsg) != SQLITE_OK) {
-        printf("[Data Error] Begin Transaction Failed (Schedules): %s\n", zErrMsg ? zErrMsg : "Unknown");
+        SA_LOG_ERROR("[Data Error] Begin Transaction Failed (Schedules): %s\n", zErrMsg ? zErrMsg : "Unknown");
         if (zErrMsg) sqlite3_free(zErrMsg);
         return false;
     }
@@ -199,7 +200,7 @@ bool db_batch_update_user_schedules(int year, int month, const std::vector<UserD
     const char* sql = "INSERT OR REPLACE INTO user_schedule (user_id, date_str, shift_id) VALUES (?, ?, ?);";
     ScopedSqliteStmt stmt;
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        printf("[Data Error] Prepare Schedule Update Failed: %s\n", sqlite3_errmsg(db));
+        SA_LOG_ERROR("[Data Error] Prepare Schedule Update Failed: %s\n", sqlite3_errmsg(db));
         sqlite3_exec(db, "ROLLBACK;", 0, 0, 0);
         return false;
     }
@@ -224,7 +225,7 @@ bool db_batch_update_user_schedules(int year, int month, const std::vector<UserD
 
             // 执行单条插入
             if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-                printf("[Data Error] Insert Schedule Error (User:%d, Date:%s): %s\n",
+                SA_LOG_ERROR("[Data Error] Insert Schedule Error (User:%d, Date:%s): %s\n",
                        user.id, date_buf, sqlite3_errmsg(db));
                 success = false;
                 break;
@@ -238,7 +239,7 @@ bool db_batch_update_user_schedules(int year, int month, const std::vector<UserD
     // 提交或回滚
     if (success) {
         sqlite3_exec(db, "COMMIT;", 0, 0, 0);
-        printf("[Data] Successfully batch synced schedules for %zu users.\n", users_list.size());
+        SA_LOG_INFO("[Data] Successfully batch synced schedules for %zu users.\n", users_list.size());
     } else {
         sqlite3_exec(db, "ROLLBACK;", 0, 0, 0);
     }
@@ -262,12 +263,12 @@ DbUserLookupResult db_find_user_info(int user_id) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Get User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Get User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
         return {DbUserLookupStatus::ReadError, std::nullopt};
     }
 
     if (sqlite3_bind_int(stmt.get(), 1, user_id) != SQLITE_OK) {
-        std::cerr << "[Data] Bind User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Bind User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
         return {DbUserLookupStatus::ReadError, std::nullopt};
     }
 
@@ -327,7 +328,7 @@ DbUserLookupResult db_find_user_info(int user_id) {
         return {DbUserLookupStatus::NotFound, std::nullopt};
     }
 
-    std::cerr << "[Data] Read User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
+    SA_LOG_ERROR_STREAM() << "[Data] Read User Info SQL Error: " << sqlite3_errmsg(db) << std::endl;
     return {DbUserLookupStatus::ReadError, std::nullopt};
 }
 
@@ -366,7 +367,7 @@ std::vector<UserData> db_get_all_users() {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
-        printf("[DB] Prepare error: %s\n", sqlite3_errmsg(db));
+        SA_LOG_INFO("[DB] Prepare error: %s\n", sqlite3_errmsg(db));
         return users;
     }
 
@@ -483,7 +484,7 @@ bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Update User Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Update User Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -499,7 +500,7 @@ bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int
 
     bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
 
-    if (ok) std::cout << "[Data] User " << user_id << " info updated." << std::endl;
+    if (ok) SA_LOG_INFO_STREAM() << "[Data] User " << user_id << " info updated." << std::endl;
     return ok;
 }
 
@@ -507,7 +508,7 @@ bool db_update_user_basic(int user_id, const std::string& name, int dept_id, int
 bool db_update_user_face(int user_id, const cv::Mat& face_image) {
 
     if (face_image.empty()) {
-        std::cerr << "[DB] Error: Cannot update face with empty image." << std::endl;
+        SA_LOG_ERROR_STREAM() << "[DB] Error: Cannot update face with empty image." << std::endl;
         return false;
     }
 
@@ -519,9 +520,9 @@ bool db_update_user_face(int user_id, const cv::Mat& face_image) {
         if (!old_path.empty() && fs::exists(old_path)) {
             try {
                 fs::remove(old_path); // 删除旧文件
-                std::cout << "[DB] Deleted old avatar: " << old_path << std::endl;
+                SA_LOG_INFO_STREAM() << "[DB] Deleted old avatar file." << std::endl;
             } catch (const fs::filesystem_error& e) {
-                std::cerr << "[DB] Warning: Failed to delete old avatar: " << e.what() << std::endl;
+                SA_LOG_ERROR_STREAM() << "[DB] Warning: Failed to delete old avatar: " << e.what() << std::endl;
             }
         }
     }
@@ -541,11 +542,11 @@ bool db_update_user_face(int user_id, const cv::Mat& face_image) {
 
     try {
         if (!cv::imwrite(path_str, face_image)) {
-            std::cerr << "[DB] Error: Failed to save new face image to disk." << std::endl;
+            SA_LOG_ERROR_STREAM() << "[DB] Error: Failed to save new face image to disk." << std::endl;
             return false;
         }
     } catch (...) {
-        std::cerr << "[DB] Error: Exception occurred while saving image." << std::endl;
+        SA_LOG_ERROR_STREAM() << "[DB] Error: Exception occurred while saving image." << std::endl;
         return false;
     }
 
@@ -554,7 +555,7 @@ bool db_update_user_face(int user_id, const cv::Mat& face_image) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[DB] SQL Error: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[DB] SQL Error: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -564,7 +565,7 @@ bool db_update_user_face(int user_id, const cv::Mat& face_image) {
     bool success = (sqlite3_step(stmt.get()) == SQLITE_DONE);
 
     if (success) {
-        std::cout << "[DB] Update Face Avatar Path Success: " << path_str << std::endl;
+        SA_LOG_INFO_STREAM() << "[DB] Updated face avatar path." << std::endl;
     }
 
     return success;
@@ -590,7 +591,7 @@ bool db_update_user_password(int user_id, const std::string& new_raw_password) {
 
     bool ok = (sqlite3_step(stmt.get()) == SQLITE_DONE);
 
-    if (ok) std::cout << "[Data] User " << user_id << " password updated." << std::endl;
+    if (ok) SA_LOG_INFO_STREAM() << "[Data] User " << user_id << " password updated." << std::endl;
     return ok;
 }
 
@@ -604,7 +605,7 @@ bool db_update_user_fingerprint(int user_id, const std::vector<uint8_t>& fingerp
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Update Fingerprint Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Update Fingerprint Failed: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -627,13 +628,13 @@ bool db_update_user_fingerprint(int user_id, const std::vector<uint8_t>& fingerp
     if (ok) {
         // 检查是否有行被真正修改（防止传入了不存在的 user_id）
         if (sqlite3_changes(db) > 0) {
-            std::cout << "[Data] Fingerprint updated successfully for user_id: " << user_id << std::endl;
+            SA_LOG_INFO_STREAM() << "[Data] Fingerprint updated successfully for user_id: " << user_id << std::endl;
         } else {
-            std::cerr << "[Data] Warning: Fingerprint update affected 0 rows (user_id " << user_id << " might not exist)." << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Warning: Fingerprint update affected 0 rows (user_id " << user_id << " might not exist)." << std::endl;
             ok = false;
         }
     } else {
-        std::cerr << "[Data] Failed to update fingerprint for user_id: " << user_id
+        SA_LOG_ERROR_STREAM() << "[Data] Failed to update fingerprint for user_id: " << user_id
                   << " Error: " << sqlite3_errmsg(db) << std::endl;
     }
 
@@ -662,11 +663,11 @@ std::vector<UserData> db_get_all_users_light() {
             users.push_back(u);
         }
     } else {
-        std::cerr << "[Data] Light Load Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Light Load Failed: " << sqlite3_errmsg(db) << std::endl;
     }
 
     // 打印日志方便调试启动速度
-    std::cout << "[Data] Light-loaded " << users.size() << " users (ID/Name only)." << std::endl;
+    SA_LOG_INFO_STREAM() << "[Data] Light-loaded " << users.size() << " users (ID/Name only)." << std::endl;
     return users;
 }
 
@@ -691,14 +692,14 @@ DbUserPageResult db_find_user_basics_page(std::size_t offset, std::size_t limit)
         "ORDER BY u.id LIMIT ? OFFSET ?;";
     ScopedSqliteStmt stmt;
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), nullptr) != SQLITE_OK) {
-        std::cerr << "[Data] User Page SQL Error: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] User Page SQL Error: " << sqlite3_errmsg(db) << std::endl;
         return {DbUserPageStatus::ReadError, {}, false};
     }
 
     const auto fetchCount = static_cast<SqliteInteger>(limit + 1);
     if (sqlite3_bind_int64(stmt.get(), 1, fetchCount) != SQLITE_OK ||
         sqlite3_bind_int64(stmt.get(), 2, static_cast<SqliteInteger>(offset)) != SQLITE_OK) {
-        std::cerr << "[Data] Bind User Page SQL Error: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Bind User Page SQL Error: " << sqlite3_errmsg(db) << std::endl;
         return {DbUserPageStatus::ReadError, {}, false};
     }
 
@@ -721,7 +722,7 @@ DbUserPageResult db_find_user_basics_page(std::size_t offset, std::size_t limit)
         }
 
         if (stepResult != SQLITE_DONE) {
-            std::cerr << "[Data] Read User Page SQL Error: "
+            SA_LOG_ERROR_STREAM() << "[Data] Read User Page SQL Error: "
                       << sqlite3_errmsg(db) << std::endl;
             return {DbUserPageStatus::ReadError, {}, false};
         }
@@ -746,7 +747,7 @@ std::vector<UserData> db_get_users_by_dept(int dept_id) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare Get Users By Dept Failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare Get Users By Dept Failed: " << sqlite3_errmsg(db) << std::endl;
         return users;
     }
 

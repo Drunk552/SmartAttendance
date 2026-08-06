@@ -1,13 +1,18 @@
 #ifndef UI_MANAGER_H
 #define UI_MANAGER_H
 
-#include <lvgl.h>
 #include <array>
 #include <vector>
 #include <atomic>
 #include <functional>
 #include <mutex>
-#include "../common/ui_style.h"
+
+struct _lv_obj_t;
+using lv_obj_t = _lv_obj_t;
+struct _lv_group_t;
+using lv_group_t = _lv_group_t;
+struct _lv_timer_t;
+using lv_timer_t = _lv_timer_t;
 
 // 定义屏幕类型枚举，用于管理
 enum class ScreenType {
@@ -78,7 +83,11 @@ enum class ScreenType {
 
 class UiManager {
 public:
-    static UiManager* getInstance();
+    UiManager() = default;
+    ~UiManager() = default;
+
+    UiManager(const UiManager&) = delete;
+    UiManager& operator=(const UiManager&) = delete;
 
     // 初始化
     void init();
@@ -129,18 +138,13 @@ public:
     void freeScreenResources(lv_obj_t** screen_ptr);
 
 private:
-    UiManager();
-    ~UiManager() = default;
-
-    // 禁用拷贝
-    UiManager(const UiManager&) = delete;
-    UiManager& operator=(const UiManager&) = delete;
-
+    static constexpr std::size_t kCameraWidth = 240U;
+    static constexpr std::size_t kCameraHeight = 260U;
     // 全局输入组
     lv_group_t* g_keypad_group = nullptr;
 
     // 摄像头显示缓冲区
-    std::array<uint8_t, CAM_W * CAM_H * 3> cam_buf_display;
+    std::array<uint8_t, kCameraWidth * kCameraHeight * 3U> cam_buf_display;
     
     // 帧同步原子标志
     std::atomic<bool> s_ui_frame_pending{false};

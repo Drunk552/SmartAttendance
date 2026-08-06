@@ -1,3 +1,4 @@
+#include "infrastructure/logging/logger.h"
 /**
  * @file
  * @brief 承接旧排班 SQLite DAO。
@@ -236,7 +237,7 @@ int db_import_dept_schedules(const std::vector<DeptScheduleEntry>& schedules) {
         // 验证班次ID范围：1-10
         if (entry.shift_id < ScheduleConstants::MIN_SHIFT_ID ||
             entry.shift_id > ScheduleConstants::MAX_SHIFT_ID) {
-            std::cerr << "[Data] Invalid shift_id: " << entry.shift_id
+            SA_LOG_ERROR_STREAM() << "[Data] Invalid shift_id: " << entry.shift_id
                       << " for dept_id: " << entry.dept_id
                       << ", day: " << entry.day_of_week << std::endl;
             continue;
@@ -247,7 +248,7 @@ int db_import_dept_schedules(const std::vector<DeptScheduleEntry>& schedules) {
         ScopedSqliteStmt stmt;
 
         if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-            std::cerr << "[Data] Prepare import schedule failed: " << sqlite3_errmsg(db) << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Prepare import schedule failed: " << sqlite3_errmsg(db) << std::endl;
             continue;
         }
 
@@ -258,7 +259,7 @@ int db_import_dept_schedules(const std::vector<DeptScheduleEntry>& schedules) {
         if (sqlite3_step(stmt.get()) == SQLITE_DONE) {
             success_count++;
         } else {
-            std::cerr << "[Data] Execute import schedule failed: " << sqlite3_errmsg(db) << std::endl;
+            SA_LOG_ERROR_STREAM() << "[Data] Execute import schedule failed: " << sqlite3_errmsg(db) << std::endl;
         }
     }
 
@@ -269,7 +270,7 @@ int db_import_dept_schedules(const std::vector<DeptScheduleEntry>& schedules) {
         return 0;
     }
 
-    std::cout << "[Data] Imported " << success_count << " department schedule entries." << std::endl;
+    SA_LOG_INFO_STREAM() << "[Data] Imported " << success_count << " department schedule entries." << std::endl;
     return success_count;
 }
 
@@ -303,7 +304,7 @@ DeptScheduleView db_get_dept_schedule_view(int dept_id) {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare get dept schedule failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare get dept schedule failed: " << sqlite3_errmsg(db) << std::endl;
         return view;
     }
 
@@ -330,7 +331,7 @@ std::vector<ShiftInfo> db_get_all_shifts_limited() {
     ScopedSqliteStmt stmt;
 
     if (sqlite3_prepare_v2(db, sql, -1, stmt.ptr(), 0) != SQLITE_OK) {
-        std::cerr << "[Data] Prepare get all shifts limited failed: " << sqlite3_errmsg(db) << std::endl;
+        SA_LOG_ERROR_STREAM() << "[Data] Prepare get all shifts limited failed: " << sqlite3_errmsg(db) << std::endl;
         return shifts;
     }
 
